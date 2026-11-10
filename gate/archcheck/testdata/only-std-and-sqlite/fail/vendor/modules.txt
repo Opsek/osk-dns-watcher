@@ -1,0 +1,6 @@
+# example.com/extra v1.0.0
+## explicit
+example.com/extra
+# github.com/mattn/go-sqlite3 v1.14.53
+## explicit; go 1.21
+github.com/mattn/go-sqlite3

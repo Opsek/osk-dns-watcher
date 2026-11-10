@@ -1,0 +1,209 @@
+#!/bin/sh
+# Runs the quality gate: the phases build, static, tests, selftest, lab and
+# clean, in order, stopping at the first failure. Each check prints "ok <name>" or
+# "FAIL <name>: <reason>"; the exit code is 0 only if every check passed.
+# "gate/bin/gate build" runs the build phase only.
+#
+# It writes out/gate.log, one line "<phase> ok" for each phase that passed and
+# one line "fuzz ok <folder> <FuzzName>" for each fuzz run that passed, and
+# out/tests.json, the events of every test that ran, as go test -json writes
+# them.
+#
+# Settings: LAB_ID (default 0) selects the lab and labels the containers of
+# the gate. HOST_LAB_A and HOST_LAB_B (default 8 and 9) are the two labs that
+# lab/accept/host.sh starts. Gates in two checkouts can run at once when no
+# lab number is in both. FUZZTIME (default 20s) is the length of each fuzz
+# run. DOCKER (default docker) and BUILD_FLAGS (default empty) may hold
+# several words each, so they stay unquoted.
+# shellcheck disable=SC2086
+set -u
+
+DOCKER=${DOCKER:-docker}
+BUILD_FLAGS=${BUILD_FLAGS:-}
+LAB_ID=${LAB_ID:-0}
+export DOCKER BUILD_FLAGS LAB_ID
+
+cd "$(dirname "$0")/../.." || exit 2
+repo=$(pwd)
+# The tag follows the content of gate/Dockerfile, so checkouts with different
+# build containers do not replace each other's image.
+sum=$(cksum <gate/Dockerfile) || exit 2
+image=osk-gate:${sum%% *}
+# The images that hold only a binary are named after the checkout, so that
+# two checkouts do not run or remove each other's.
+checkout=$(printf '%s' "$repo" | cksum) || exit 2
+checkout=${checkout%% *}
+
+usage() {
+	echo 'usage: gate/bin/gate [build]' >&2
+	exit 2
+}
+
+ok() { echo "ok $1"; }
+fail() {
+	echo "FAIL $1: $2"
+	exit 1
+}
+passed() {
+	ok "$1"
+	echo "$1 ok" >>out/gate.log
+}
+
+# box runs a command in the build container with no network. Code under test
+# runs there, so the repository is read-only.
+box() {
+	$DOCKER run --rm --network none --label "osk.gate=$LAB_ID" \
+		-v osk-gate-gocache:/gocache -e GOCACHE=/gocache \
+		-v "$repo":/src:ro -w /src "$@"
+}
+
+image_build() {
+	log=$($DOCKER buildx build $BUILD_FLAGS --platform linux/arm64,linux/amd64 \
+		-t "$image" --load gate 2>&1) ||
+		{ echo "$log"; fail image "the build of gate/Dockerfile failed"; }
+	ok image
+}
+
+build_phase() {
+	for arch in arm64 amd64; do
+		box --platform "linux/$arch" -v "$repo/out":/src/out "$image" build/static.sh "$arch" ||
+			fail "build-$arch" "build/static.sh $arch failed"
+		ok "build-$arch"
+		scratch_run "$arch"
+	done
+	passed build
+}
+
+# scratch_run runs "osk version" in an image that holds only the binary. A
+# binary that is not static cannot start there, because it has no loader.
+scratch_run() {
+	tag=osk-gate-scratch:$checkout-$1
+	printf 'FROM scratch\nCOPY osk-linux-%s /osk\n' "$1" |
+		$DOCKER buildx build $BUILD_FLAGS --platform "linux/$1" --label osk.gate.image=1 \
+			-t "$tag" --load -f - out >/dev/null 2>&1 &&
+		$DOCKER run --rm --network none --platform "linux/$1" --label "osk.gate=$LAB_ID" "$tag" /osk version
+	status=$?
+	$DOCKER rmi "$tag" >/dev/null 2>&1
+	[ "$status" -eq 0 ] || fail "scratch-$1" "osk version does not run in an empty image"
+	ok "scratch-$1"
+}
+
+static_phase() {
+	box "$image" gate/phase/static.sh || fail static "gate/phase/static.sh failed (lines above)"
+	passed static
+}
+
+# Each fuzz run is a container of its own, so that the line "fuzz ok" follows
+# from its exit code and not from what the code under test prints.
+tests_phase() {
+	box "$image" gate/phase/tests.sh >>out/tests.json ||
+		fail tests "gate/phase/tests.sh failed (lines above, events in out/tests.json)"
+	fuzz=$(box "$image" gate/phase/fuzz.sh) || fail fuzz "gate/phase/fuzz.sh could not list the fuzz tests"
+	set -- $fuzz
+	while [ $# -ge 2 ]; do
+		box -e FUZZTIME "$image" gate/phase/fuzz.sh "$1" "$2" >>out/tests.json ||
+			fail "fuzz $1 $2" "the fuzz run failed (lines above, events in out/tests.json)"
+		echo "fuzz ok $1 $2" >>out/gate.log
+		shift 2
+	done
+	passed tests
+}
+
+selftest_phase() {
+	box "$image" gate/selftest/run.sh || fail selftest "gate/selftest/run.sh failed (lines above)"
+	passed selftest
+}
+
+# binary <import path>: the file of the lab test binary of a package.
+binary() {
+	echo "out/labtest/$(echo "$1" | tr / _)"
+}
+
+# The lab tests are built before the lab starts. No container may write to
+# the repository, so each test binary and the output of its run reach out/
+# through standard output.
+lab_phase() {
+	labtests=$(box "$image" gate/phase/labtests.sh) ||
+		fail lab-build "gate/phase/labtests.sh could not list the lab tests"
+	set -- $labtests
+	while [ $# -ge 2 ]; do
+		box "$image" gate/phase/labtests.sh "$1" >"$(binary "$2")" ||
+			fail "lab-build $2" "gate/phase/labtests.sh $1 failed (lines above)"
+		chmod +x "$(binary "$2")"
+		shift 2
+	done
+	lab_up=1
+	lab/bin/lab up || fail lab-up "lab/bin/lab up failed"
+	ok lab-up
+	lab/bin/lab run /src/lab/accept/run.sh || fail lab-accept "lab/accept/run.sh failed (lines above)"
+	ok lab-accept
+	set -- $labtests
+	while [ $# -ge 2 ]; do
+		lab_test "$1" "$2"
+		shift 2
+	done
+	[ -f lab/accept/host.sh ] || fail lab-host "lab/accept/host.sh is missing"
+	lab/accept/host.sh || fail lab-host "lab/accept/host.sh failed (lines above)"
+	ok lab-host
+	lab/bin/lab down || fail lab-down "lab/bin/lab down failed"
+	lab_up=
+	ok lab-down
+	passed lab
+}
+
+# lab_test <folder> <import path> resets the lab and runs the lab tests of
+# one package in the runner, from the folder of the package.
+lab_test() {
+	bin=$(binary "$2")
+	lab/bin/lab reset || fail lab-reset "lab/bin/lab reset failed before the tests of $2"
+	lab/bin/lab run sh -c 'cd "/src/$1" && exec "/src/$2" -test.v=test2json -test.paniconexit0 2>&1' \
+		sh "$1" "$bin" >"$bin.out"
+	status=$?
+	box -i "$image" go tool test2json -t -p "$2" <"$bin.out" >>out/tests.json ||
+		fail "lab-test $2" "go tool test2json could not read the test output"
+	[ "$status" -eq 0 ] || { cat "$bin.out"; fail "lab-test $2" "the lab tests failed (output above)"; }
+	ok "lab-test $2"
+}
+
+# The build cache volume is meant to stay, whatever its labels.
+clean_phase() {
+	left=$(for label in "osk.gate=$LAB_ID" "osk.lab=$LAB_ID"; do
+		$DOCKER container ls -a --filter "label=$label" --format '{{.Names}}'
+		$DOCKER network ls --filter "label=$label" --format '{{.Name}}'
+		$DOCKER volume ls --filter "label=$label" --format '{{.Name}}'
+	done | grep -vx osk-gate-gocache)
+	[ -z "$left" ] || fail clean "left behind: $(echo $left)"
+	passed clean
+}
+
+lab_up=
+cleanup() {
+	[ -z "$lab_up" ] || lab/bin/lab down >/dev/null 2>&1
+	rmdir out/lock
+}
+
+case $# in
+0) ;;
+1) [ "$1" = build ] || usage ;;
+*) usage ;;
+esac
+mkdir -p out || exit 2
+# Two gates in one folder would mix their results in out/ and their use of the
+# build cache.
+mkdir out/lock 2>/dev/null ||
+	fail lock "out/lock exists: another gate runs here, or one was killed (then remove out/lock)"
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+rm -rf out/labtest && mkdir out/labtest || exit 2
+: >out/gate.log
+: >out/tests.json
+$DOCKER volume create osk-gate-gocache >/dev/null || fail cache "cannot create the volume osk-gate-gocache"
+
+image_build
+build_phase
+[ $# -eq 0 ] || exit 0
+static_phase
+tests_phase
+selftest_phase
+lab_phase
+clean_phase

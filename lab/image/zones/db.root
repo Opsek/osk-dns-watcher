@@ -1,0 +1,7 @@
+; Root zone on root. @N@ is the LAB_ID.
+$TTL 300
+.                  SOA    root-ns. hostmaster.root-ns. 1 3600 600 604800 300
+.                  NS     root-ns.
+root-ns.           A      10.53.@N@.2
+test.              NS     ns.test.
+ns.test.           A      10.53.@N@.3

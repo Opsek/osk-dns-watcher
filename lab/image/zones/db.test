@@ -1,0 +1,15 @@
+; Zone test. on tld, the parent of every test domain. @N@ is the LAB_ID.
+$TTL 300
+test.              SOA    ns.test. hostmaster.test. 1 3600 600 604800 300
+test.              NS     ns.test.
+ns.test.           A      10.53.@N@.3
+corp.test.         NS     ns1.corp.test.
+corp.test.         NS     ns2.corp.test.
+ns1.corp.test.     A      10.53.@N@.11
+ns2.corp.test.     A      10.53.@N@.12
+dnshost.test.      NS     ns1.dnshost.test.
+dnshost.test.      NS     ns2.dnshost.test.
+ns1.dnshost.test.  A      10.53.@N@.11
+ns2.dnshost.test.  A      10.53.@N@.12
+shop.test.         NS     ns1.dnshost.test.
+shop.test.         NS     ns2.dnshost.test.

@@ -1,0 +1,6 @@
+; Zone shop.test. on ns1 and ns2. @N@ is the LAB_ID.
+$TTL 300
+shop.test.         SOA    ns1.dnshost.test. hostmaster.shop.test. 1 3600 600 604800 300
+shop.test.         NS     ns1.dnshost.test.
+shop.test.         NS     ns2.dnshost.test.
+shop.test.         A      10.53.@N@.84

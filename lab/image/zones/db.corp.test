@@ -1,0 +1,16 @@
+; Zone corp.test. on ns1 and ns2. @N@ is the LAB_ID.
+$TTL 300
+corp.test.         SOA    ns1.corp.test. hostmaster.corp.test. 1 3600 600 604800 300
+corp.test.         NS     ns1.corp.test.
+corp.test.         NS     ns2.corp.test.
+ns1.corp.test.     A      10.53.@N@.11
+ns2.corp.test.     A      10.53.@N@.12
+corp.test.         A      10.53.@N@.80
+corp.test.         AAAA   fd53:0:0:@N@::80
+corp.test.         MX     10 mail.corp.test.
+corp.test.         TXT    "v=spf1 mx -all"
+corp.test.         CAA    0 issue "ca.test"
+www.corp.test.     A      10.53.@N@.81
+mail.corp.test.    A      10.53.@N@.82
+cdn.corp.test.     CNAME  edge.dnshost.test.
+_dmarc.corp.test.  TXT    "v=DMARC1; p=reject"

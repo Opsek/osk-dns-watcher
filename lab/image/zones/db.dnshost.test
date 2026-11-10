@@ -1,0 +1,8 @@
+; Zone dnshost.test. on ns1 and ns2. @N@ is the LAB_ID.
+$TTL 300
+dnshost.test.      SOA    ns1.dnshost.test. hostmaster.dnshost.test. 1 3600 600 604800 300
+dnshost.test.      NS     ns1.dnshost.test.
+dnshost.test.      NS     ns2.dnshost.test.
+ns1.dnshost.test.  A      10.53.@N@.11
+ns2.dnshost.test.  A      10.53.@N@.12
+edge.dnshost.test. A      10.53.@N@.83

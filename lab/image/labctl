@@ -1,0 +1,369 @@
+#!/bin/sh
+# labctl changes the DNS lab. It runs in the runner.
+# Exit codes: 0 done, 1 the lab refused the change, 2 wrong use.
+set -u
+
+net=10.53.${LAB_ID:?LAB_ID is not set}
+ctl=/lab/ctl.key
+dynamic='update-policy { grant ctl-key zonesub ANY; };'
+
+usage() {
+	cat >&2 <<'EOF'
+usage: labctl set <server> <name> <ttl> <type> <rdata>...
+       labctl del <server> <name> <type>
+       labctl serial ns1|ns2 <zone>
+       labctl delegate <zone> <ns-name>...
+       labctl glue <ns-name> [<address>...]
+       labctl ds <zone> <ds-rdata>... | none
+       labctl undelegate <zone>
+       labctl load-zone <server>|root|tld <zone> <file>
+       labctl drop-zone <server>|root|tld <zone>
+       labctl lie <name> <type> <rdata>... | clear
+       labctl hooks list | clear | fail <status> <count>
+       labctl hooks reply <status> <count> [--header '<Name>: <value>']...
+                          [--delay <seconds>] [--body <text>]
+       labctl reset | status        (used by lab/bin/lab)
+<server> is ns1, ns2 or both. Each <rdata> is one record in zone file
+format, for example '10 mail.corp.test.' or '"v=spf1 -all"'.
+EOF
+	exit 2
+}
+
+refused() {
+	echo "labctl: $*" >&2
+	exit 1
+}
+
+addr() {
+	case $1 in
+	root) echo "$net.2" ;;
+	tld) echo "$net.3" ;;
+	ns1) echo "$net.11" ;;
+	ns2) echo "$net.12" ;;
+	resolver) echo "$net.20" ;;
+	liar) echo "$net.21" ;;
+	esac
+}
+
+pick() {
+	case $1 in
+	ns1 | ns2) list=$1 ;;
+	both) list="ns1 ns2" ;;
+	*) usage ;;
+	esac
+}
+
+ndc() {
+	s=$1
+	shift
+	rndc -s "$(addr "$s")" -k $ctl "$@"
+}
+
+ucontrol() {
+	s=$1
+	shift
+	unbound-control -c /etc/osklab/unbound.conf -s "$(addr "$s")@8953" "$@"
+}
+
+answers() {
+	if [ "$1" = receiver ]; then
+		curl -fs -o /dev/null --max-time 2 "http://$net.30:8080/requests"
+	else
+		dig +norec +time=1 +tries=1 @"$(addr "$1")" . SOA > /dev/null 2>&1
+	fi
+}
+
+# soa prints the SOA of the zone that holds <name> with the serial plus 1. Each
+# change sends it, so the serial moves by exactly 1 even when the data does not.
+soa() {
+	zone=$(dig +norec +noall +answer +authority @"$(addr "$1")" "$2" SOA |
+		awk '$4 == "SOA" { print $1; exit }')
+	[ -n "$zone" ] && dig +norec +noall +answer @"$(addr "$1")" "$zone" SOA |
+		awk '$4 == "SOA" { $7 = $7 + 1; print; exit }'
+}
+
+change() {
+	next=$(soa "$1" "$2")
+	[ -n "$next" ] || refused "$1 serves no zone for $2"
+	{
+		echo "server $(addr "$1")"
+		echo "zone ${next%% *}"
+		cat
+		echo "update add $next"
+		echo send
+	} | nsupdate -k $ctl || refused "$1 refused the change"
+}
+
+parent() {
+	{
+		echo "server $(addr tld)"
+		echo "zone test."
+		cat
+		echo send
+	} | nsupdate -k $ctl || refused "tld refused the change"
+}
+
+loaded() {
+	i=0
+	while [ $i -lt 50 ]; do
+		out=$(dig +norec +time=1 +tries=1 @"$(addr "$1")" "$2" SOA)
+		case $out in *"status: NOERROR"*"flags: qr aa"*) return 0 ;; esac
+		sleep 0.1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+add() {
+	f=$(mktemp "/lab/$1/zone.XXXXXX") && cat > "$f" && chmod 644 "$f" || return 1
+	ndc "$1" delzone -clean "$2" > /dev/null 2>&1
+	ndc "$1" addzone "$2" "{ type primary; file \"$f\"; $3 };" > /dev/null && loaded "$1" "$2" && return 0
+	ndc "$1" delzone -clean "$2" > /dev/null 2>&1
+	rm -f "$f"
+	return 1
+}
+
+# rndc addzone keeps the zones that it added in _default.nzf.
+zones() {
+	sed -n 's/^zone "\([^"]*\)".*/\1/p' "/lab/$1/_default.nzf" 2> /dev/null
+}
+
+base() {
+	s=$1
+	shift
+	for z in $(zones "$s"); do
+		ndc "$s" delzone -clean "$z" > /dev/null || refused "$s did not remove $z"
+	done
+	for z; do
+		file=/etc/osklab/zones/db.${z%.}
+		config=$dynamic
+		[ "$z" = . ] && file=/etc/osklab/zones/db.root config=
+		sed "s/@N@/$LAB_ID/g" "$file" | add "$s" "$z" "$config" || refused "$s did not load $z"
+	done
+}
+
+wait_up() {
+	i=0
+	until [ -e /run/lab-trusted ] && status > /dev/null; do
+		[ $i -lt 100 ] || refused "the lab does not answer"
+		sleep 0.2
+		i=$((i + 1))
+	done
+}
+
+status() {
+	rc=0
+	for h in root tld ns1 ns2 resolver liar receiver; do
+		if answers $h; then
+			echo "$h answers"
+		else
+			echo "$h does not answer"
+			rc=1
+		fi
+	done
+	echo "runner answers"
+	return $rc
+}
+
+# A reload also empties the cache, so no old answer outlives a change.
+reload() {
+	ucontrol "$1" reload > /dev/null || refused "$1 did not reload"
+	i=0
+	until answers "$1"; do
+		[ $i -lt 50 ] || refused "$1 does not answer after reload"
+		sleep 0.1
+		i=$((i + 1))
+	done
+}
+
+hooks() {
+	curl -fsS --max-time 5 "$@" || refused "the receiver refused"
+}
+
+reply() {
+	[ $# -ge 2 ] || usage
+	case $1:$2 in *[!0-9:]* | :* | *:) usage ;; esac
+	code=$1 count=$2 headers= delay=0 body=
+	shift 2
+	while [ $# -ge 2 ]; do
+		case $1 in
+		--header)
+			case $2 in ?*:*) ;; *) usage ;; esac
+			headers="$headers$2
+"
+			;;
+		--delay)
+			case $2 in '' | *[!0-9.]*) usage ;; esac
+			delay=$2
+			;;
+		--body) body=$2 ;;
+		*) usage ;;
+		esac
+		shift 2
+	done
+	[ $# -eq 0 ] || usage
+	hooks --data-urlencode "status=$code" --data-urlencode "count=$count" \
+		--data-urlencode "delay=$delay" --data-urlencode "headers=$headers" \
+		--data-urlencode "body=$body" "http://$net.30:8080/reply"
+}
+
+lie() {
+	n=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+	n=${n%.}.
+	t=$(echo "$2" | tr '[:lower:]' '[:upper:]')
+	shift 2
+	cp /lab/lies.conf /lab/lies.old
+	{
+		awk -v z="local-zone: \"$n\" " -v d="local-data: '$n 300 IN $t " \
+			'index($0, z) != 1 && index($0, d) != 1' /lab/lies.old
+		echo "local-zone: \"$n\" typetransparent"
+		for r; do
+			echo "local-data: '$n 300 IN $t $r'"
+		done
+	} > /lab/lies.conf
+	if ! unbound-checkconf /etc/osklab/liar.conf > /dev/null 2>&1; then
+		mv /lab/lies.old /lab/lies.conf
+		refused "liar cannot serve $n $t $*"
+	fi
+}
+
+[ $# -ge 1 ] || usage
+case $1 in
+set)
+	[ $# -ge 6 ] || usage
+	pick "$2"
+	name=$3 ttl=$4 type=$5
+	shift 5
+	for s in $list; do
+		{
+			echo "update delete $name $type"
+			for r; do
+				echo "update add $name $ttl $type $r"
+			done
+		} | change "$s" "$name" || exit 1
+	done
+	;;
+del)
+	[ $# -eq 4 ] || usage
+	pick "$2"
+	for s in $list; do
+		echo "update delete $3 $4" | change "$s" "$3" || exit 1
+	done
+	;;
+serial)
+	[ $# -eq 3 ] || usage
+	case $2 in ns1 | ns2) ;; *) usage ;; esac
+	serial=$(dig +norec +short @"$(addr "$2")" "$3" SOA | awk '{ print $3 }')
+	[ -n "$serial" ] || refused "$2 does not serve $3"
+	echo "$serial"
+	;;
+delegate)
+	[ $# -ge 3 ] || usage
+	zone=$2
+	shift 2
+	{
+		echo "update delete $zone NS"
+		for n; do
+			echo "update add $zone 300 NS $n"
+		done
+	} | parent
+	;;
+glue)
+	[ $# -ge 2 ] || usage
+	name=$2
+	shift 2
+	{
+		echo "update delete $name A"
+		echo "update delete $name AAAA"
+		for a; do
+			case $a in *:*) type=AAAA ;; *) type=A ;; esac
+			echo "update add $name 300 $type $a"
+		done
+	} | parent
+	;;
+ds)
+	[ $# -ge 3 ] || usage
+	zone=$2
+	shift 2
+	{
+		echo "update delete $zone DS"
+		if [ "$*" != none ]; then
+			for d; do
+				echo "update add $zone 300 DS $d"
+			done
+		fi
+	} | parent
+	;;
+undelegate)
+	# Glue below the cut keeps the name alive, so delete every name at or below it.
+	[ $# -eq 2 ] || usage
+	zone=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+	zone=${zone%.}.
+	names=$(dig +noall +answer -k /lab/xfr.key @"$(addr tld)" test. AXFR |
+		awk -v z="$zone" '{ n = tolower($1) } n == z || substr(n, length(n) - length(z)) == "." z { print n }' |
+		sort -u)
+	[ -n "$names" ] || refused "test. has no delegation $zone"
+	for n in $names; do
+		echo "update delete $n"
+	done | parent
+	;;
+load-zone)
+	[ $# -eq 4 ] || usage
+	case $2 in root | tld) list=$2 ;; *) pick "$2" ;; esac
+	[ -r "$4" ] || refused "cannot read $4"
+	# Check first with the same loose rules as named.conf, so that a file BIND
+	# cannot load leaves the zone on the server as it was.
+	out=$(named-checkzone -i none -k ignore -m ignore -M ignore -n ignore -r ignore \
+		-S ignore -T ignore -W ignore "$3" "$4" 2>&1) || refused "$out"
+	for s in $list; do
+		add "$s" "$3" "" < "$4" || refused "$s did not load $3 from $4"
+	done
+	;;
+drop-zone)
+	[ $# -eq 3 ] || usage
+	case $2 in root | tld) list=$2 ;; *) pick "$2" ;; esac
+	for s in $list; do
+		ndc "$s" delzone -clean "$3" > /dev/null || refused "$s did not remove $3"
+	done
+	;;
+lie)
+	if [ $# -eq 2 ] && [ "$2" = clear ]; then
+		printf 'server:\n' > /lab/lies.conf
+	else
+		[ $# -ge 4 ] || usage
+		shift
+		lie "$@"
+	fi
+	reload liar
+	;;
+hooks)
+	case $#:${2:-} in
+	2:list) hooks "http://$net.30:8080/requests" ;;
+	2:clear) hooks -X POST "http://$net.30:8080/clear" ;;
+	4:fail) reply "$3" "$4" ;;
+	*:reply)
+		shift 2
+		reply "$@"
+		;;
+	*) usage ;;
+	esac
+	;;
+reset)
+	[ $# -eq 1 ] || usage
+	wait_up
+	base root .
+	base tld test.
+	base ns1 corp.test. dnshost.test. shop.test.
+	base ns2 corp.test. dnshost.test. shop.test.
+	printf 'server:\n' > /lab/lies.conf
+	reload resolver
+	reload liar
+	hooks -X POST "http://$net.30:8080/clear"
+	reply 200 0
+	;;
+status)
+	[ $# -eq 1 ] || usage
+	status
+	;;
+*) usage ;;
+esac

@@ -79,6 +79,33 @@ func TestRules(t *testing.T) {
 			"gate/imports.txt:7 names osk/internal/deliver/..., which matches no package",
 			"gate/imports.txt:8 names osk/internal/missing, which matches no package",
 		}},
+		{"no-dns-update/pass", nil},
+		// Every package that dials sorts before internal/dnswire, and every
+		// use of net before every use of crypto/tls, so the order of the
+		// faults is the same whichever of these the rule walks first.
+		{"no-dns-update/fail", []string{
+			"internal/d/d.go:4 imports log/syslog", // a blank import
+			"internal/d/d.go:5 imports net/smtp",
+			"internal/d/d.go:6 imports net/textproto", // through an alias
+			"cmd/osk/main.go:10 uses net.DialTimeout",
+			"internal/a/a.go:7 uses net.Dial",
+			"internal/a/a.go:11 uses net.Dialer",
+			"internal/a/alias.go:7 uses net.Dialer",
+			"internal/b/b.go:7 uses net.DialUDP", // after a dot import
+			"internal/c/alias.go:7 uses crypto/tls.Dialer",
+			"internal/c/c.go:7 uses crypto/tls.Dial",
+			"internal/dnswire/a.go:3 imports net outside internal/dnswire/transport.go",
+			"internal/dnswire/b.go:3 imports net outside internal/dnswire/transport.go",
+			"internal/dnswire/transport.go:17 uses WriteTo outside writeQuery",
+			"internal/dnswire/transport.go:20 uses Write outside writeQuery",
+			"internal/dnswire/transport.go:20 uses Writer outside writeQuery", // every name that starts with Write
+			"internal/dnswire/transport.go:25 uses Write outside writeQuery",
+			"internal/dnswire/transport.go:30 uses Writer outside writeQuery",
+			"internal/dnswire/transport.go:31 uses WriteAll outside writeQuery",
+			"internal/dnswire/transport.go:34 uses Writer outside writeQuery",
+			"internal/dnswire/transport.go:35 uses Write outside writeQuery",
+			"internal/dnswire/transport.go:41 uses Write outside writeQuery", // a method value
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.tree, func(t *testing.T) {
@@ -112,19 +139,22 @@ func TestRun(t *testing.T) {
 		out  string
 	}{
 		{"testdata/import-rules/pass", 0,
-			"ok plain-layout\nok only-std-and-sqlite\nok no-listener\nok no-exec\nok no-unsafe\nok import-rules\n"},
+			"ok plain-layout\nok only-std-and-sqlite\nok no-listener\nok no-exec\nok no-unsafe\nok import-rules\n" +
+				"ok no-dns-update\n"},
 		{"testdata/no-unsafe/fail", 1,
 			"ok plain-layout\n" +
 				"FAIL only-std-and-sqlite: internal/c/c.go:4 imports C\n" +
 				"ok no-listener\nok no-exec\n" +
 				"FAIL no-unsafe: internal/a/a.go:3 imports unsafe; internal/b/b.go:3 imports unsafe; " +
 				"internal/c/c.go:4 imports C\n" +
-				"FAIL import-rules: gate/imports.txt cannot be read\n"},
+				"FAIL import-rules: gate/imports.txt cannot be read\n" +
+				"ok no-dns-update\n"},
 		// A wrong root must not pass.
 		{"testdata/missing", 1,
 			"FAIL plain-layout: " + unread + "\nFAIL only-std-and-sqlite: " + unread +
 				"\nFAIL no-listener: " + unread + "\nFAIL no-exec: " + unread + "\nFAIL no-unsafe: " + unread +
-				"\nFAIL import-rules: " + unread + "; gate/imports.txt cannot be read\n"},
+				"\nFAIL import-rules: " + unread + "; gate/imports.txt cannot be read" +
+				"\nFAIL no-dns-update: " + unread + "\n"},
 	}
 	for _, c := range cases {
 		out, code := run([]string{"--root", c.root})

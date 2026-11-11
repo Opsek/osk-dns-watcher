@@ -725,6 +725,159 @@ import (
 EOF
 }
 
+# DNS sockets: only internal/dnswire opens them, only its transport.go holds
+# them, and only writeQuery writes to them.
+
+# dialer <file>: a package that opens a DNS socket itself.
+dialer() {
+	put "$1" <<'EOF'
+package zzfault
+
+import "net"
+
+func Fault() error {
+	c, err := net.Dial("udp", "192.0.2.53:53")
+	if err != nil {
+		return err
+	}
+	return c.Close()
+}
+EOF
+}
+
+dialer_alias_import() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import n "net"
+
+func Fault() (n.Conn, error) {
+	d := n.Dialer{}
+	return d.Dial("udp", "192.0.2.53:53")
+}
+EOF
+}
+
+dialudp_dot_import() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import . "net"
+
+func Fault() error {
+	c, err := DialUDP("udp", nil, &UDPAddr{Port: 53})
+	if err != nil {
+		return err
+	}
+	return c.Close()
+}
+EOF
+}
+
+tls_dial() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import "crypto/tls"
+
+func Fault() error {
+	c, err := tls.Dial("tcp", "192.0.2.1:853", nil)
+	if err != nil {
+		return err
+	}
+	return c.Close()
+}
+EOF
+}
+
+dial_in_main() {
+	put cmd/osk/zzfault.go <<'EOF'
+package main
+
+import (
+	"net"
+	"time"
+)
+
+func zzFault() error {
+	c, err := net.DialTimeout("udp", "192.0.2.53:53", time.Second)
+	if err != nil {
+		return err
+	}
+	return c.Close()
+}
+EOF
+}
+
+dnswire_net_import() {
+	put internal/dnswire/zzfault.go <<'EOF'
+package dnswire
+
+import "net"
+
+var zzFault = net.IPv4len
+EOF
+}
+
+dnswire_netip_import() {
+	put internal/dnswire/zzfault.go <<'EOF'
+package dnswire
+
+import "net/netip"
+
+var zzFault = netip.IPv6Loopback()
+EOF
+}
+
+transport_write() {
+	[ -f internal/dnswire/transport.go ] && cat >> internal/dnswire/transport.go <<'EOF'
+
+func zzFault(c net.Conn, b []byte) error {
+	_, err := c.Write(b)
+	return err
+}
+EOF
+}
+
+transport_method_value() {
+	[ -f internal/dnswire/transport.go ] && cat >> internal/dnswire/transport.go <<'EOF'
+
+func zzFault(c net.Conn) func([]byte) (int, error) {
+	send := c.Write
+	return send
+}
+EOF
+}
+
+# own_dialer <file> <path>: a file that imports a package that dials for a
+# protocol of its own, such as net/smtp.
+own_dialer() {
+	put "$1" <<EOF
+package $(basename "$(dirname "$1")")
+
+import _ "$2"
+EOF
+}
+
+test_file_dials() {
+	put internal/store/zzfault_test.go <<'EOF'
+package store
+
+import (
+	"net"
+	"testing"
+)
+
+func TestZzFault(t *testing.T) {
+	c, err := net.Dial("udp", "127.0.0.1:53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+}
+EOF
+}
+
 # ---- Faults for the phase scripts ----
 # Each one is valid Go that only its own tool rejects. The lab files sit in a
 # package with ordinary files, so the untagged runs still find the package.
@@ -1066,6 +1219,22 @@ check import-rules-direct           rule_direct                archcheck import-
 check import-rules-transitive       rule_transitive            archcheck import-rules internal/zzfault/b/b.go
 check import-rules-only             rule_only                  archcheck import-rules internal/zzfault/b/b.go
 check import-rules-unknown-package  rule_unknown_package       archcheck import-rules gate/imports.txt:3
+
+D=internal/dnswire
+check dns-net-dial                  "dialer $Z"                archcheck no-dns-update "$Z:6 uses net.Dial"
+check dns-net-dialer-alias-import   dialer_alias_import        archcheck no-dns-update "$Z:6 uses net.Dialer"
+check dns-dialudp-dot-import        dialudp_dot_import         archcheck no-dns-update "$Z:6 uses net.DialUDP"
+check dns-tls-dial                  tls_dial                   archcheck no-dns-update "$Z:6 uses crypto/tls.Dial"
+check dns-dial-in-main              dial_in_main               archcheck no-dns-update "cmd/osk/zzfault.go:9 uses net.DialTimeout"
+check dns-dial-in-dnswire-subfolder "dialer $D/zzfault/zzfault.go" archcheck no-dns-update "$D/zzfault/zzfault.go:6 uses net.Dial"
+check dns-net-import-in-dnswire     dnswire_net_import         archcheck no-dns-update "$D/zzfault.go:3 imports net outside $D/transport.go"
+check dns-write-outside-writequery  transport_write            archcheck no-dns-update "uses Write outside writeQuery"
+check dns-method-value-outside-writequery transport_method_value archcheck no-dns-update "uses Write outside writeQuery"
+check dns-smtp-import               "own_dialer $Z net/smtp"   archcheck no-dns-update "$Z:3 imports net/smtp"
+check dns-textproto-import          "own_dialer $Z net/textproto" archcheck no-dns-update "$Z:3 imports net/textproto"
+check dns-syslog-import-in-dnswire  "own_dialer $D/zzfault.go log/syslog" archcheck no-dns-update "$D/zzfault.go:3 imports log/syslog"
+check dns-test-file-dials           test_file_dials            archcheck pass
+check dns-netip-in-dnswire          dnswire_netip_import       archcheck pass
 
 check phase-clean-static            none                       static pass
 check format-plain                  format_plain               static gofmt internal/store/zzfault.go

@@ -29,6 +29,7 @@ var ruleList = []rule{
 	{"no-exec", noExec},
 	{"no-unsafe", noUnsafe},
 	{"import-rules", importRules},
+	{"no-dns-update", noDNSUpdate},
 }
 
 // check runs every rule on the code under root. What could not be read is a
@@ -212,6 +213,66 @@ func noExec(t tree) []string {
 
 func noUnsafe(t tree) []string {
 	return findImports(t.pkgs, "unsafe", "C")
+}
+
+const (
+	dnswireDir    = "internal/dnswire"
+	transportFile = dnswireDir + "/transport.go"
+	writeFunc     = "writeQuery"
+)
+
+// noDNSUpdate keeps the tool from sending any DNS message but a query: only
+// the DNS codec dials, only its transport.go imports net, and there only
+// writeQuery writes, which sends nothing but what Query.Pack makes. Packages
+// that dial for their own protocols are banned everywhere. The rule has no
+// type information: a write through fmt.Fprint or io.Copy, or through a
+// function of another file of the codec, escapes the last part.
+func noDNSUpdate(t tree) []string {
+	var outside []*pkg
+	var inside []goFile
+	for _, p := range t.pkgs {
+		if p.dir == dnswireDir {
+			inside = append(inside, p.files...)
+		} else {
+			outside = append(outside, p)
+		}
+	}
+	faults := findImports(t.pkgs, "log/syslog", "net/smtp", "net/textproto")
+	faults = append(faults, findUses(outside, map[string][]string{"net": {"Dial"}, "crypto/tls": {"Dial"}})...)
+	for _, f := range inside {
+		for _, imp := range f.ast.Imports {
+			if importPath(imp) == "net" && f.path != transportFile {
+				faults = append(faults, f.pos(imp.Pos())+" imports net outside "+transportFile)
+			}
+		}
+	}
+	for _, f := range inside {
+		if f.path == transportFile {
+			faults = append(faults, writesOutside(f)...)
+		}
+	}
+	return faults
+}
+
+// writesOutside reports each use of a name that starts with Write outside the
+// function writeQuery: a call, and also a method value such as c.Write, which
+// a later call can use.
+func writesOutside(f goFile) []string {
+	var faults []string
+	for _, d := range f.ast.Decls {
+		fn, isFunc := d.(*ast.FuncDecl)
+		if isFunc && fn.Recv == nil && fn.Name.Name == writeFunc {
+			continue
+		}
+		ast.Inspect(d, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if ok && strings.HasPrefix(id.Name, "Write") && !(isFunc && id == fn.Name) {
+				faults = append(faults, fmt.Sprintf("%s uses %s outside %s", f.pos(id.Pos()), id.Name, writeFunc))
+			}
+			return true
+		})
+	}
+	return faults
 }
 
 // findImports reports every import of one of the given paths, whatever name

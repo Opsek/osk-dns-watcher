@@ -1,8 +1,10 @@
 // Command archcheck checks the code of the tool osk, the packages under cmd/
 // and internal/, against the rules of its architecture: that it is built from
 // the same Go files everywhere, which modules it may use, that it never
-// listens, never starts a process, never uses unsafe or cgo, and the import
-// rules of gate/imports.txt.
+// listens, never starts a process, never uses unsafe or cgo, the import rules
+// of gate/imports.txt, and that it sends no DNS message but a query: only the
+// DNS codec in internal/dnswire opens connections, and only its function
+// writeQuery writes to them.
 //
 // Usage:
 //

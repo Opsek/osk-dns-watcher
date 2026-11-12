@@ -878,6 +878,64 @@ func TestZzFault(t *testing.T) {
 EOF
 }
 
+# The engine that asks DNS servers reaches the store neither directly nor
+# through a package it imports, and reaches the network only through the codec.
+
+observe_imports_store() {
+	put internal/observe/zzfault.go <<EOF
+package observe
+
+import _ "$MOD/internal/store"
+EOF
+}
+
+observe_reaches_store() {
+	put internal/zzfault/zzfault.go <<EOF || return 1
+package zzfault
+
+import _ "$MOD/internal/store"
+EOF
+	put internal/observe/obs/zzfault.go <<EOF
+package obs
+
+import _ "$MOD/internal/zzfault"
+EOF
+}
+
+observe_dials() {
+	put internal/observe/zzfault.go <<'EOF'
+package observe
+
+import "net"
+
+func zzFault() error {
+	c, err := net.Dial("udp", "192.0.2.53:53")
+	if err != nil {
+		return err
+	}
+	return c.Close()
+}
+EOF
+}
+
+observe_test_file_uses_store() {
+	put internal/observe/zzfault_test.go <<EOF
+package observe
+
+import (
+	"net"
+	"testing"
+
+	"$MOD/internal/store"
+)
+
+func TestZzFault(t *testing.T) {
+	_ = store.SQLiteVersion
+	_ = net.Dial
+}
+EOF
+}
+
 # ---- Faults for the phase scripts ----
 # Each one is valid Go that only its own tool rejects. The lab files sit in a
 # package with ordinary files, so the untagged runs still find the package.
@@ -1218,7 +1276,7 @@ check unsafe-cgo-import             cgo_import                 archcheck no-unsa
 check import-rules-direct           rule_direct                archcheck import-rules internal/zzfault/a/a.go
 check import-rules-transitive       rule_transitive            archcheck import-rules internal/zzfault/b/b.go
 check import-rules-only             rule_only                  archcheck import-rules internal/zzfault/b/b.go
-check import-rules-unknown-package  rule_unknown_package       archcheck import-rules gate/imports.txt:3
+check import-rules-unknown-package  rule_unknown_package       archcheck import-rules gate/imports.txt:4
 
 D=internal/dnswire
 check dns-net-dial                  "dialer $Z"                archcheck no-dns-update "$Z:6 uses net.Dial"
@@ -1235,6 +1293,13 @@ check dns-textproto-import          "own_dialer $Z net/textproto" archcheck no-d
 check dns-syslog-import-in-dnswire  "own_dialer $D/zzfault.go log/syslog" archcheck no-dns-update "$D/zzfault.go:3 imports log/syslog"
 check dns-test-file-dials           test_file_dials            archcheck pass
 check dns-netip-in-dnswire          dnswire_netip_import       archcheck pass
+
+O=internal/observe/zzfault.go
+check observe-imports-store         observe_imports_store      archcheck import-rules "$O:3 imports $MOD/internal/store ("
+check observe-reaches-store         observe_reaches_store      archcheck import-rules \
+	"internal/zzfault/zzfault.go:3 imports $MOD/internal/store, reached from $MOD/internal/observe/obs ("
+check observe-dials                 observe_dials              archcheck no-dns-update "$O:6 uses net.Dial"
+check observe-test-file-uses-store  observe_test_file_uses_store archcheck pass
 
 check phase-clean-static            none                       static pass
 check format-plain                  format_plain               static gofmt internal/store/zzfault.go

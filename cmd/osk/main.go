@@ -16,6 +16,7 @@ var version = "unknown"
 
 const usage = `usage: osk version
        osk query [--rd] [--do] [--cd] [--tcp] [--timeout <duration>] @<server> <name> [<type>]
+       osk check [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] <domain> [<name> <type>]...
 `
 
 func main() {
@@ -30,6 +31,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return printVersion(stdout, stderr)
 	case len(args) > 0 && args[0] == "query":
 		return query(args[1:], stdout, stderr)
+	case len(args) > 0 && args[0] == "check":
+		return check(args[1:], stdout, stderr)
 	}
 	return fail(stderr, 2, usage)
 }

@@ -1,0 +1,33 @@
+compact-nxname.answer holds one DNS answer as received, the octets of
+dnswire.Exchange's Response.Wire, kept as a sample of the compact "no such
+name" form of RFC 9824.
+
+Date:     11 Nov 2026, 12:49 UTC
+Server:   jill.ns.cloudflare.com. at 173.245.58.122, port 53, over UDP;
+          one of the two authoritative servers of ietf.org.
+Question: nx-0aec20f873f3.ietf.org. IN A, a random label that does not
+          exist; RD clear, DO set, EDNS(0) with UDP size 1232 and a client
+          cookie.
+
+The server signs online, so each answer carries new signatures; the
+answer saved here came 20 seconds after this one from dig, to the same
+question:
+
+$ dig +norec +dnssec +nosplit @173.245.58.122 nx-0aec20f873f3.ietf.org. A
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 41817
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 4, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags: do; udp: 1232
+;; QUESTION SECTION:
+;nx-0aec20f873f3.ietf.org.	IN	A
+
+;; AUTHORITY SECTION:
+ietf.org.		1800	IN	SOA	jill.ns.cloudflare.com. dns.cloudflare.com. 2419285039 10000 2400 604800 1800
+nx-0aec20f873f3.ietf.org. 1800	IN	NSEC	\000.nx-0aec20f873f3.ietf.org. RRSIG NSEC TYPE128
+nx-0aec20f873f3.ietf.org. 1800	IN	RRSIG	NSEC 13 3 1800 20261112134919 20261110114919 34505 ietf.org. arHNtXXEjAOOoqTTgKGPfvEjqttWdxJajFuJqCIXZx4rtgM/C5Ao/xHYkjJP2+HWTvtH8bPc+I+ySkuCPl4HfA==
+ietf.org.		1800	IN	RRSIG	SOA 13 2 1800 20261112134919 20261110114919 34505 ietf.org. 9hoHAFwZdIB+Ij0o9obcd3D80gYUrYr4G0o8EMf867qOADx/Umlyk4aOi6SzuBcx0Jxn5bIALAjqExxrJIehRw==
+
+;; SERVER: 173.245.58.122#53(173.245.58.122) (UDP)
+;; WHEN: Wed Nov 11 12:49:19 UTC 2026
+;; MSG SIZE  rcvd: 382

@@ -1,18 +1,22 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
@@ -23,11 +27,17 @@ const checkInterval = 60 * time.Second
 
 const receivedLayout = "2006-01-02T15:04:05.000Z"
 
-// check runs "osk check": the delegation, DS and serial checks of a domain
-// and a records check for each pair of name and type, all at once. It prints
-// what the walk from the root asked and every answer, each with its result.
+// maxExpectFile is the size of the largest file of expectations that
+// expect.Parse takes.
+const maxExpectFile = 4194304
+
+// check runs "osk check". Without --expect: the delegation, DS and serial
+// checks of a domain and a records check for each pair of name and type, all
+// at once; it prints what the walk from the root asked and every answer, each
+// with its result. With --expect: the checks of a file of expectations; it
+// prints what differs from the file.
 func check(args []string, stdout, stderr io.Writer) int {
-	cfg, keys, msg := parseCheck(args)
+	cfg, file, keys, msg := parseArgs(args, true)
 	if msg != "" {
 		return checkWrongUse(stderr, msg)
 	}
@@ -35,6 +45,9 @@ func check(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		// Only the flags fill the configuration.
 		return checkWrongUse(stderr, err.Error())
+	}
+	if file != nil {
+		return checkExpect(o, *file, stdout, stderr)
 	}
 	text, failed := formatObservations(runChecks(o, keys))
 	if code := output(stdout, stderr, text); code != 0 || !failed {
@@ -47,10 +60,18 @@ func checkWrongUse(stderr io.Writer, msg string) int {
 	return fail(stderr, 2, "osk check: "+msg+"\n"+usage)
 }
 
-// parseCheck reads the flags and the arguments. It returns a message when
-// they are wrong.
+// parseCheck reads the flags and the arguments of check without --expect,
+// which are also those of snapshot. It returns a message when they are wrong.
 func parseCheck(args []string) (observe.Config, []obs.Key, string) {
-	var cfg observe.Config
+	cfg, _, keys, msg := parseArgs(args, false)
+	return cfg, keys, msg
+}
+
+// parseArgs reads the flags and the arguments. withExpect allows --expect,
+// which only check takes. With --expect, file is set and no argument may
+// follow, because the file names the domain and the sets; without, the
+// arguments give the keys. It returns a message when they are wrong.
+func parseArgs(args []string, withExpect bool) (cfg observe.Config, file *string, keys []obs.Key, msg string) {
 	flags := flag.NewFlagSet("check", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Func("root-server", "a root server to start from, in place of the built-in ones", func(s string) error {
@@ -64,14 +85,28 @@ func parseCheck(args []string) (observe.Config, []obs.Key, string) {
 		return err
 	})
 	flags.DurationVar(&cfg.QueryTimeout, "timeout", 2*time.Second, "time for one query")
+	if withExpect {
+		flags.Func("expect", "a file of expectations to compare with", func(s string) error {
+			if file != nil {
+				return errors.New("given more than once")
+			}
+			file = &s
+			return nil
+		})
+	}
 	if err := flags.Parse(args); err != nil {
-		return cfg, nil, err.Error()
+		return cfg, nil, nil, err.Error()
 	}
-	if cfg.QueryTimeout <= 0 {
-		return cfg, nil, "the timeout must be positive"
+	switch {
+	case cfg.QueryTimeout <= 0:
+		return cfg, nil, nil, "the timeout must be positive"
+	case file != nil && flags.NArg() > 0:
+		return cfg, nil, nil, "--expect takes no domain and no pairs: the file gives them"
+	case file != nil:
+		return cfg, file, nil, ""
 	}
-	keys, msg := parseKeys(flags.Args())
-	return cfg, keys, msg
+	keys, msg = parseKeys(flags.Args())
+	return cfg, nil, keys, msg
 }
 
 // parseServer reads an IP address with an optional port. Host names are
@@ -126,8 +161,10 @@ func parseKeys(args []string) ([]obs.Key, string) {
 }
 
 // runChecks runs every check at once and returns the observations in the
-// order of keys. Run gives no error: parseKeys has validated every key and
-// kept each once.
+// order of keys. Run gives no error, because every caller gives valid keys,
+// each once: parseKeys validates each pair, snapshotKeys adds only the NS
+// set at the apex, and expect.Parse refuses every type that a records check
+// cannot ask, except DS, which expectKeys leaves out.
 func runChecks(o *observe.Observer, keys []obs.Key) []obs.Observation {
 	observations := make([]obs.Observation, len(keys))
 	var wg sync.WaitGroup
@@ -208,4 +245,121 @@ func formatAnswer(b *strings.Builder, role string, kind obs.Kind, a obs.Answer) 
 		b.WriteString(prefix + line + "\n")
 	}
 	return failed
+}
+
+// checkExpect runs the checks of the file of expectations at path and prints
+// each finding, each answer that could not be judged, and a count of both.
+func checkExpect(o *observe.Observer, path string, stdout, stderr io.Writer) int {
+	data, err := readExpect(path)
+	if err != nil {
+		return fail(stderr, 1, "osk: "+err.Error()+"\n")
+	}
+	// One run has no earlier valid file to fall back on.
+	f, err := expect.Keep(nil, data)
+	if err != nil {
+		return fail(stderr, 1, problemLines(path, err))
+	}
+	text, clean := formatFindings(f, runChecks(o, expectKeys(f)), time.Now())
+	if code := output(stdout, stderr, text); code != 0 || clean {
+		return code
+	}
+	return 1
+}
+
+// readExpect reads the file at path, up to one octet more than expect.Parse
+// takes, so that Parse can tell a file that is too large.
+func readExpect(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxExpectFile+1))
+	_ = file.Close() // the file was only read, so closing it can lose nothing
+	return data, err
+}
+
+// problemLines gives one line for each problem of the file at path.
+func problemLines(path string, err error) string {
+	var e *expect.Error
+	if !errors.As(err, &e) {
+		return "osk: " + path + ": " + err.Error() + "\n"
+	}
+	var b strings.Builder
+	for _, p := range e.Problems {
+		if p.Line == 0 {
+			fmt.Fprintf(&b, "osk: %s: %s\n", path, p.Text)
+		} else {
+			fmt.Fprintf(&b, "osk: %s:%d: %s\n", path, p.Line, p.Text)
+		}
+	}
+	return b.String()
+}
+
+// expectKeys gives the checks of a file: the delegation and DS checks of its
+// domain, then a records check for each expectation, in file order. The DS
+// check judges the DS line, the only place a file may hold DS.
+func expectKeys(f *expect.File) []obs.Key {
+	keys := []obs.Key{obs.DelegationKey(f.Domain), obs.DSKey(f.Domain)}
+	for _, e := range f.Expectations {
+		if e.Type != dnswire.TypeDS {
+			keys = append(keys, obs.RecordsKey(f.Domain, e.Name, e.Type))
+		}
+	}
+	return keys
+}
+
+// formatFindings gives for each observation the findings that decide makes of
+// it, then a line for each answer that is a failure, and at the end a count of
+// the checks and of both. clean reports that there are neither. No alert is
+// open in a single run, so every change opens one.
+func formatFindings(f *expect.File, observations []obs.Observation, now time.Time) (text string, clean bool) {
+	var b strings.Builder
+	findings, unknown := 0, 0
+	for _, o := range observations {
+		for _, c := range decide.Decide(decide.Input{Expect: f, Observation: o, Now: now}) {
+			formatFinding(&b, c.Finding)
+			findings++
+		}
+		for _, a := range o.Answers {
+			if isFailure(a.Result) {
+				formatAnswer(&b, "unknown", o.Key.Kind, lowerNames(a))
+				unknown++
+			}
+		}
+	}
+	fmt.Fprintf(&b, "checked %s %d sets: %d findings, %d unknown answers\n",
+		f.Domain.Lower().String(), len(observations), findings, unknown)
+	return b.String(), findings == 0 && unknown == 0
+}
+
+// formatFinding writes a finding with its proof. Value holds one line for
+// each Seen answer, which decide builds only from Name.String and
+// expect.SetText.
+func formatFinding(b *strings.Builder, f decide.Finding) {
+	k := f.Check
+	fmt.Fprintf(b, "finding %s %s %s %s %s\n", f.Severity, f.Rule, k.Kind, k.Name.Lower().String(), k.Type)
+	b.WriteString("  expected " + cmp.Or(f.Expected, "-") + "\n")
+	if f.Value == "" {
+		return
+	}
+	for _, line := range strings.Split(f.Value, "\n") {
+		b.WriteString("  seen " + line + "\n")
+	}
+}
+
+func isFailure(r obs.Result) bool {
+	return obs.Match(r,
+		func(obs.Records) bool { return false },
+		func(obs.NoData) bool { return false },
+		func(obs.NoName) bool { return false },
+		func(obs.Failure) bool { return true })
+}
+
+// lowerNames gives a copy of a with the names of its server and its question
+// in lower case, as every name of the findings is: case carries no meaning in
+// a name, and a server may send any.
+func lowerNames(a obs.Answer) obs.Answer {
+	a.Server.Name = a.Server.Name.Lower()
+	a.Question.Name = a.Question.Name.Lower()
+	return a
 }

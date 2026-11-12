@@ -30,6 +30,7 @@ var ruleList = []rule{
 	{"no-unsafe", noUnsafe},
 	{"import-rules", importRules},
 	{"no-dns-update", noDNSUpdate},
+	{"pure", pure},
 }
 
 // check runs every rule on the code under root. What could not be read is a
@@ -273,6 +274,42 @@ func writesOutside(f goFile) []string {
 		})
 	}
 	return faults
+}
+
+// pure keeps the judgement of the tool repeatable: the packages under
+// internal/decide and internal/expect read no clock, network, file, store or
+// randomness. Import rules cannot say this, because both packages reach net,
+// os and crypto/rand through internal/dnswire, and they need package time for
+// its types. So each direct import must be on a short list, and the names of
+// an allowed package that read the clock, the time zone of the machine (from
+// TZ and the disk), the network or standard input and output are banned. The
+// rule has no type information: a method value such as t.Local, or a function
+// handed in from outside, escapes it.
+func pure(t tree) []string {
+	dnswire := path.Join(t.module, dnswireDir)
+	allowed := []string{"bytes", "cmp", "errors", "fmt", "maps", "net/netip", "slices", "strconv", "strings",
+		"time", dnswire, path.Join(t.module, "internal/observe/obs")}
+	var scope []*pkg
+	for _, p := range t.pkgs {
+		if under(p.dir, "internal/decide") || under(p.dir, "internal/expect") {
+			scope = append(scope, p)
+			allowed = append(allowed, p.path)
+		}
+	}
+	var faults []string
+	for _, p := range scope {
+		for _, s := range p.imports {
+			if !slices.Contains(allowed, s.path) {
+				faults = append(faults, s.String())
+			}
+		}
+	}
+	return append(faults, findUses(scope, map[string][]string{
+		"time": {"Now", "Since", "Until", "Sleep", "After", "Tick", "NewTicker", "NewTimer",
+			"LoadLocation", "Local", "Parse"},
+		"fmt":   {"Print", "Scan"},
+		dnswire: {"Exchange", "Transfer"},
+	})...)
 }
 
 // findImports reports every import of one of the given paths, whatever name

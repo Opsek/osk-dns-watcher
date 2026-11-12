@@ -106,6 +106,19 @@ func TestRules(t *testing.T) {
 			"internal/dnswire/transport.go:35 uses Write outside writeQuery",
 			"internal/dnswire/transport.go:41 uses Write outside writeQuery", // a method value
 		}},
+		{"pure/pass", nil},
+		// Every import fault comes before every use fault, so the import of
+		// internal/expect comes before the uses of internal/decide.
+		{"pure/fail", []string{
+			"internal/decide/decide.go:5 imports os",
+			"internal/decide/decide.go:8 imports osk/internal/observe",
+			"internal/decide/sub/sub.go:3 imports math/rand", // imported by no package
+			"internal/expect/expect.go:4 imports net",
+			"internal/decide/clock.go:7 uses time.Since", // after a dot import
+			"internal/decide/decide.go:13 uses fmt.Println",
+			"internal/decide/decide.go:14 uses time.Now",
+			"internal/expect/expect.go:14 uses osk/internal/dnswire.Exchange", // through an alias
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.tree, func(t *testing.T) {
@@ -140,7 +153,7 @@ func TestRun(t *testing.T) {
 	}{
 		{"testdata/import-rules/pass", 0,
 			"ok plain-layout\nok only-std-and-sqlite\nok no-listener\nok no-exec\nok no-unsafe\nok import-rules\n" +
-				"ok no-dns-update\n"},
+				"ok no-dns-update\nok pure\n"},
 		{"testdata/no-unsafe/fail", 1,
 			"ok plain-layout\n" +
 				"FAIL only-std-and-sqlite: internal/c/c.go:4 imports C\n" +
@@ -148,13 +161,13 @@ func TestRun(t *testing.T) {
 				"FAIL no-unsafe: internal/a/a.go:3 imports unsafe; internal/b/b.go:3 imports unsafe; " +
 				"internal/c/c.go:4 imports C\n" +
 				"FAIL import-rules: gate/imports.txt cannot be read\n" +
-				"ok no-dns-update\n"},
+				"ok no-dns-update\nok pure\n"},
 		// A wrong root must not pass.
 		{"testdata/missing", 1,
 			"FAIL plain-layout: " + unread + "\nFAIL only-std-and-sqlite: " + unread +
 				"\nFAIL no-listener: " + unread + "\nFAIL no-exec: " + unread + "\nFAIL no-unsafe: " + unread +
 				"\nFAIL import-rules: " + unread + "; gate/imports.txt cannot be read" +
-				"\nFAIL no-dns-update: " + unread + "\n"},
+				"\nFAIL no-dns-update: " + unread + "\nFAIL pure: " + unread + "\n"},
 	}
 	for _, c := range cases {
 		out, code := run([]string{"--root", c.root})

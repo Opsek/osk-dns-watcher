@@ -936,6 +936,105 @@ func TestZzFault(t *testing.T) {
 EOF
 }
 
+# The packages that judge observations read no clock, network, file, store or
+# randomness: they import only from a short list, and use no name of it that
+# reads the clock, prints, or sends a query.
+
+pure_imports_os() {
+	put internal/decide/zzfault.go <<'EOF'
+package decide
+
+import "os"
+
+func zzFault() string {
+	return os.Getenv("HOME")
+}
+EOF
+}
+
+pure_imports_engine() {
+	put internal/decide/zzfault.go <<EOF
+package decide
+
+import _ "$MOD/internal/observe"
+EOF
+}
+
+# A package under internal/decide that nothing imports.
+pure_sub_package() {
+	put internal/decide/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import "math/rand"
+
+func Fault() int {
+	return rand.Int()
+}
+EOF
+}
+
+pure_reads_clock() {
+	put internal/decide/zzfault.go <<'EOF'
+package decide
+
+import "time"
+
+func zzFault() time.Time {
+	return time.Now()
+}
+EOF
+}
+
+pure_clock_dot_import() {
+	put internal/decide/zzfault.go <<'EOF'
+package decide
+
+import . "time"
+
+func zzFault(t Time) Duration {
+	return Since(t)
+}
+EOF
+}
+
+pure_sends_query() {
+	put internal/expect/zzfault.go <<EOF
+package expect
+
+import "$MOD/internal/dnswire"
+
+var zzFault = dnswire.Exchange
+EOF
+}
+
+pure_prints() {
+	put internal/decide/zzfault.go <<'EOF'
+package decide
+
+import "fmt"
+
+func zzFault() {
+	fmt.Println("zzfault")
+}
+EOF
+}
+
+pure_test_file() {
+	put internal/decide/zzfault_test.go <<'EOF'
+package decide
+
+import (
+	"os"
+	"testing"
+	"time"
+)
+
+func TestZzFault(t *testing.T) {
+	t.Log(os.Getenv("HOME"), time.Now())
+}
+EOF
+}
+
 # ---- Faults for the phase scripts ----
 # Each one is valid Go that only its own tool rejects. The lab files sit in a
 # package with ordinary files, so the untagged runs still find the package.
@@ -1300,6 +1399,17 @@ check observe-reaches-store         observe_reaches_store      archcheck import-
 	"internal/zzfault/zzfault.go:3 imports $MOD/internal/store, reached from $MOD/internal/observe/obs ("
 check observe-dials                 observe_dials              archcheck no-dns-update "$O:6 uses net.Dial"
 check observe-test-file-uses-store  observe_test_file_uses_store archcheck pass
+
+P=internal/decide/zzfault.go
+check pure-imports-os               pure_imports_os            archcheck pure "$P:3 imports os"
+check pure-imports-engine           pure_imports_engine        archcheck pure "$P:3 imports $MOD/internal/observe"
+check pure-sub-package              pure_sub_package           archcheck pure "internal/decide/zzfault/zzfault.go:3 imports math/rand"
+check pure-reads-clock              pure_reads_clock           archcheck pure "$P:6 uses time.Now"
+check pure-clock-dot-import         pure_clock_dot_import      archcheck pure "$P:6 uses time.Since"
+check pure-sends-query              pure_sends_query           archcheck pure \
+	"internal/expect/zzfault.go:5 uses $MOD/internal/dnswire.Exchange"
+check pure-prints                   pure_prints                archcheck pure "$P:6 uses fmt.Println"
+check pure-test-file                pure_test_file             archcheck pass
 
 check phase-clean-static            none                       static pass
 check format-plain                  format_plain               static gofmt internal/store/zzfault.go

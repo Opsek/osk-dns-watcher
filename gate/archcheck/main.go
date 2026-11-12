@@ -2,9 +2,10 @@
 // and internal/, against the rules of its architecture: that it is built from
 // the same Go files everywhere, which modules it may use, that it never
 // listens, never starts a process, never uses unsafe or cgo, the import rules
-// of gate/imports.txt, and that it sends no DNS message but a query: only the
-// DNS codec in internal/dnswire opens connections, and only its function
-// writeQuery writes to them.
+// of gate/imports.txt, that it sends no DNS message but a query (only the DNS
+// codec in internal/dnswire opens connections, and only its function
+// writeQuery writes to them), and that the packages under internal/decide and
+// internal/expect read no clock, network, file, store or randomness.
 //
 // Usage:
 //

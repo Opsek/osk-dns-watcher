@@ -98,16 +98,18 @@ func (s *Schedule) Replace(f *expect.File) {
 
 // dueTime is the time from which plan[i] may start again. A zone check that
 // started before the last move is due at the move, so that a changed record
-// is seen at once.
+// is seen at once; one that was already waiting for a free place keeps its
+// earlier time, so a move never sends it back in the queue.
 func (s *Schedule) dueTime(i int) time.Time {
 	start, ok := s.starts[s.keys[i]]
-	switch {
-	case !ok:
+	if !ok {
 		return time.Time{}
-	case s.plan[i].Zone && s.moved.After(start):
+	}
+	due := start.Add(s.plan[i].Interval)
+	if s.plan[i].Zone && s.moved.After(start) && s.moved.Before(due) {
 		return s.moved
 	}
-	return start.Add(s.plan[i].Interval)
+	return due
 }
 
 // Due marks as running, with start now, and returns the checks due at now,
@@ -115,6 +117,12 @@ func (s *Schedule) dueTime(i int) time.Time {
 // lets more than MaxRunning run, so a start, a change of the file or a move
 // of a large zone queues instead of bursting.
 func (s *Schedule) Due(now time.Time) []Check {
+	return s.Take(now, MaxRunning)
+}
+
+// Take is Due limited to at most n checks, so that one cap can bound the
+// checks of several schedules.
+func (s *Schedule) Take(now time.Time, n int) []Check {
 	var due []int
 	for i := range s.plan {
 		if !s.running[s.keys[i]] && !s.dueTime(i).After(now) {
@@ -122,7 +130,7 @@ func (s *Schedule) Due(now time.Time) []Check {
 		}
 	}
 	slices.SortStableFunc(due, func(a, b int) int { return s.dueTime(a).Compare(s.dueTime(b)) })
-	due = due[:min(len(due), MaxRunning-len(s.running))]
+	due = due[:max(0, min(len(due), n, MaxRunning-len(s.running)))]
 	var checks []Check
 	for _, i := range due {
 		s.running[s.keys[i]] = true
@@ -314,6 +322,18 @@ func (s *Schedule) report(now time.Time) ([]decide.Move, bool) {
 	moves := s.held
 	s.held, s.lastReport = nil, now
 	return moves, true
+}
+
+// Flush gives the moves that report holds back and forgets them, for a
+// stop: they live only in memory, so a stop that kept them would never tell
+// them.
+func (s *Schedule) Flush(now time.Time) []decide.Move {
+	moves := s.held
+	s.held = nil
+	if len(moves) > 0 {
+		s.lastReport = now
+	}
+	return moves
 }
 
 // ownNotice reports a change that tells the operator about the zone anyway,

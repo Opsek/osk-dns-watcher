@@ -1111,7 +1111,9 @@ func (m *schModel) dueAt(i int) time.Time {
 	switch {
 	case !ok:
 		return time.Time{}
-	case c.Zone && m.moved.After(st):
+	// A zone check that was already due before the move keeps the earlier
+	// time.
+	case c.Zone && m.moved.After(st) && m.moved.Before(st.Add(c.Interval)):
 		return m.moved
 	}
 	return st.Add(c.Interval)

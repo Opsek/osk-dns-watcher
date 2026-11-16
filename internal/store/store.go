@@ -1,7 +1,8 @@
-// Package store keeps the alerts of the tool, their events and the
-// deliveries of those events in one SQLite database in a state folder. One
-// process at a time may write a folder: Open takes the folder's lock and
-// holds it until Close. Other processes may still read the database.
+// Package store keeps the alerts of the tool, their events, the notices that
+// belong to no alert, and the deliveries of both in one SQLite database in a
+// state folder. One process at a time may write a folder: Open takes the
+// folder's lock and holds it until Close. Other processes read the database
+// through a Reader.
 package store
 
 import (
@@ -23,6 +24,7 @@ type Store struct {
 	held *sql.Tx
 }
 
+// schema is the whole schema of a new store.
 const schema = `
 CREATE TABLE alert (id INTEGER PRIMARY KEY, open INTEGER NOT NULL CHECK (open IN (0, 1)),
   rule INTEGER NOT NULL, check_key TEXT NOT NULL, kind INTEGER NOT NULL, domain TEXT NOT NULL,
@@ -33,35 +35,64 @@ CREATE UNIQUE INDEX alert_open ON alert (check_key, rule) WHERE open = 1;
 CREATE TABLE event (id INTEGER PRIMARY KEY, alert INTEGER NOT NULL REFERENCES alert (id),
   kind TEXT NOT NULL CHECK (kind IN ('open','update','escalate','reminder','resolve','given-up')),
   severity INTEGER NOT NULL, was INTEGER NOT NULL, value TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
-CREATE TABLE delivery (id INTEGER PRIMARY KEY, event INTEGER NOT NULL REFERENCES event (id),
+CREATE TABLE notice (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('test','down','expectations')),
+  domain TEXT NOT NULL, lines TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+CREATE TABLE delivery (id INTEGER PRIMARY KEY, event INTEGER REFERENCES event (id), notice INTEGER REFERENCES notice (id),
   channel TEXT NOT NULL CHECK (channel <> ''), label TEXT NOT NULL, body BLOB NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('pending','sent','given-up')), attempts INTEGER NOT NULL,
-  created INTEGER NOT NULL, next_at INTEGER NOT NULL, reason TEXT NOT NULL, done_at INTEGER NOT NULL) STRICT;
+  created INTEGER NOT NULL, next_at INTEGER NOT NULL, reason TEXT NOT NULL, done_at INTEGER NOT NULL,
+  CHECK ((event IS NULL) <> (notice IS NULL))) STRICT;
 CREATE INDEX delivery_due ON delivery (channel, next_at) WHERE state = 'pending';
+CREATE INDEX delivery_event ON delivery (event);
+CREATE INDEX delivery_notice ON delivery (notice);
 CREATE TABLE check_state (check_key TEXT PRIMARY KEY, last_clean INTEGER NOT NULL) STRICT;
-PRAGMA user_version = 1;
+CREATE TABLE beat (id INTEGER PRIMARY KEY CHECK (id = 1), at INTEGER NOT NULL, late TEXT NOT NULL DEFAULT '') STRICT;
+CREATE TABLE loaded (domain TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+PRAGMA user_version = 3;
 `
 
-// upgrade turns a store of version 1 into version 2 in place, so a folder
-// keeps its alerts and its outbox. A new store gets schema and then upgrade.
-const upgrade = `
+// upgrade2 turns a store of version 1 into version 2 in place, so a folder
+// keeps its alerts and its outbox.
+const upgrade2 = `
 CREATE TABLE beat (id INTEGER PRIMARY KEY CHECK (id = 1), at INTEGER NOT NULL) STRICT;
 PRAGMA user_version = 2;
+`
+
+// upgrade3 turns a store of version 2 into version 3 in place. A row of a
+// notice has no event, and SQLite cannot drop the NOT NULL of
+// delivery.event, so the table is made again with every row. The indexes
+// come after the rename, because the old table holds the name delivery_due
+// until it is dropped.
+const upgrade3 = `
+CREATE TABLE notice (id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('test','down','expectations')),
+  domain TEXT NOT NULL, lines TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+CREATE TABLE loaded (domain TEXT PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+CREATE TABLE delivery_new (id INTEGER PRIMARY KEY, event INTEGER REFERENCES event (id), notice INTEGER REFERENCES notice (id),
+  channel TEXT NOT NULL CHECK (channel <> ''), label TEXT NOT NULL, body BLOB NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending','sent','given-up')), attempts INTEGER NOT NULL,
+  created INTEGER NOT NULL, next_at INTEGER NOT NULL, reason TEXT NOT NULL, done_at INTEGER NOT NULL,
+  CHECK ((event IS NULL) <> (notice IS NULL))) STRICT;
+INSERT INTO delivery_new SELECT id, event, NULL, channel, label, body, state, attempts, created, next_at, reason, done_at FROM delivery;
+DROP TABLE delivery;
+ALTER TABLE delivery_new RENAME TO delivery;
+CREATE INDEX delivery_due ON delivery (channel, next_at) WHERE state = 'pending';
+CREATE INDEX delivery_event ON delivery (event);
+CREATE INDEX delivery_notice ON delivery (notice);
+ALTER TABLE beat ADD COLUMN late TEXT NOT NULL DEFAULT '';
+PRAGMA user_version = 3;
 `
 
 // Open opens the store in dir, and makes dir with mode 0700 when it is
 // missing.
 func Open(dir string) (*Store, error) {
-	// Both end the file name of a SQLite DSN.
-	if strings.ContainsAny(dir, "?#") {
-		return nil, fmt.Errorf("store: %s: a folder name with ? or # cannot be used", dir)
-	}
-	// The driver reads such a name as a URI, which can name another file.
-	if strings.HasPrefix(dir, "file:") {
-		return nil, fmt.Errorf("store: %s: a folder name that starts with file: cannot be used", dir)
+	if err := checkName(dir); err != nil {
+		return nil, err
 	}
 	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return nil, wrap(err)
+	}
+	if err := CheckFolder(dir); err != nil {
+		return nil, err
 	}
 	lock, held, err := lockFolder(dir)
 	if err != nil {
@@ -72,6 +103,36 @@ func Open(dir string) (*Store, error) {
 		return nil, errors.Join(err, wrap(held.Rollback()), wrap(lock.Close()))
 	}
 	return &Store{db: db, lock: lock, held: held}, nil
+}
+
+func checkName(dir string) error {
+	// Both end the file name of a SQLite DSN.
+	if strings.ContainsAny(dir, "?#") {
+		return fmt.Errorf("store: %s: a folder name with ? or # cannot be used", dir)
+	}
+	// The driver reads such a name as a URI, which can name another file.
+	if strings.HasPrefix(dir, "file:") {
+		return fmt.Errorf("store: %s: a folder name that starts with file: cannot be used", dir)
+	}
+	return nil
+}
+
+// CheckFolder refuses dir when it is not a folder or when other users may
+// enter or list it; Open and OpenReader refuse such a folder too. The mode
+// alone suffices: a folder that only its owner can enter keeps every file in
+// it private, whatever the mode of the file.
+func CheckFolder(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return wrap(err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("store: %s is not a folder", dir)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("store: %s is open to other users (mode %04o); run chmod 700 %s", dir, uint32(perm), dir)
+	}
+	return nil
 }
 
 // lockFolder holds an exclusive transaction on dir/osk.lock. SQLite keeps it
@@ -146,27 +207,49 @@ func prepare(db *sql.DB, path string) error {
 	}
 	switch version {
 	case 1:
-		return migrate(db, upgrade)
+		if err := migrate(db, upgrade2); err != nil {
+			return err
+		}
+		return migrate(db, upgrade3)
 	case 2:
+		return migrate(db, upgrade3)
+	case 3:
 		return nil
 	}
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema").Scan(&tables); err != nil {
 		return wrap(err)
 	}
 	if version != 0 || tables != 0 {
-		return fmt.Errorf("store: %s is not a store of this osk (schema %d)", path, version)
+		return notStore(path, version)
 	}
-	return migrate(db, schema+upgrade)
+	return migrate(db, schema)
+}
+
+func notStore(path string, version int) error {
+	return fmt.Errorf("store: %s is not a store of this osk (schema %d)", path, version)
 }
 
 // migrate runs ddl in one transaction, so that a failed upgrade leaves the
-// store of version 1 as it was.
+// store of the version before as it was.
 func migrate(db *sql.DB, ddl string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return wrap(err)
 	}
 	if _, err := tx.Exec(ddl); err != nil {
+		return wrap(errors.Join(err, tx.Rollback()))
+	}
+	return wrap(tx.Commit())
+}
+
+// inTx runs f in one transaction, which it commits only when f gives no
+// error.
+func (s *Store) inTx(f func(tx *sql.Tx) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return wrap(err)
+	}
+	if err := f(tx); err != nil {
 		return wrap(errors.Join(err, tx.Rollback()))
 	}
 	return wrap(tx.Commit())

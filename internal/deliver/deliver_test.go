@@ -422,7 +422,7 @@ func TestPassStopsWhenContextEnds(t *testing.T) {
 
 // A store that fails stops the pass with its error and sends nothing.
 func TestPassReturnsStoreError(t *testing.T) {
-	s, err := store.Open(t.TempDir())
+	s, err := store.Open(dlvPrivateDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}

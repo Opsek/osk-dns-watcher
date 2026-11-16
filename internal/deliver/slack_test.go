@@ -539,11 +539,23 @@ func TestSlackPrintsNoURL(t *testing.T) {
 	}
 }
 
+// dlvPrivateDir is a new folder that only its owner may enter: the store
+// refuses a folder that other users can read, and t.TempDir makes one with
+// the mode the umask leaves.
+func dlvPrivateDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // dlvStore opens a store in a new folder and closes it at the end of the
 // test.
 func dlvStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := dlvPrivateDir(t)
 	s, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +651,7 @@ func TestWebhookSecretNeverLeaves(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			// The store is closed once, before its files are read; the
 			// cleanup closes it only when the test stops before that.
-			dir := t.TempDir()
+			dir := dlvPrivateDir(t)
 			s, err := store.Open(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -740,7 +752,7 @@ func TestServerTextReachesNoReason(t *testing.T) {
 			show := func(text string) string { return strings.ReplaceAll(text, c.marker, "[marker]") }
 			holds := func(text string) bool { return strings.Contains(strings.ToLower(text), strings.ToLower(c.marker)) }
 			// The store is closed before its files are read.
-			dir := t.TempDir()
+			dir := dlvPrivateDir(t)
 			s, err := store.Open(dir)
 			if err != nil {
 				t.Fatal(err)

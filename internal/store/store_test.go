@@ -49,6 +49,17 @@ func stoMail(t testing.TB) obs.Key {
 	return obs.RecordsKey(stoName(t, "corp.test."), stoName(t, "mail.corp.test."), dnswire.TypeA)
 }
 
+// stoDir is a state folder that only its owner may enter, as the store
+// demands; t.TempDir makes one that other users may read.
+func stoDir(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func stoOpen(t *testing.T, dir string) *Store {
 	t.Helper()
 	s, err := Open(dir)
@@ -245,7 +256,7 @@ func TestOpenRefusesFolderThatStartsWithFile(t *testing.T) {
 }
 
 func TestSecondOpenOfOneFolderFailsUntilClose(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	first := stoOpen(t, dir)
 
 	second, err := Open(dir)
@@ -259,7 +270,7 @@ func TestSecondOpenOfOneFolderFailsUntilClose(t *testing.T) {
 	// has its own lock.
 	k := stoWWW(t)
 	stoApply(t, first, k, false, stoT0, stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99"), decide.SeverityHigh, stoT0))
-	stoOpen(t, t.TempDir())
+	stoOpen(t, stoDir(t))
 
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -285,7 +296,7 @@ func TestOpenFromAnotherProcessFailsUntilClose(t *testing.T) {
 		}
 		return
 	}
-	dir := t.TempDir()
+	dir := stoDir(t)
 	s := stoOpen(t, dir)
 	if got, want := stoChild(t, dir), "store: "+dir+" is in use by another osk process"; got != want {
 		t.Errorf("Open in another process while the store is open: %q, want %q", got, want)
@@ -316,9 +327,9 @@ func stoChild(t *testing.T, dir string) string {
 }
 
 func TestOtherSchemaVersionIsRefusedAndLeftAsItIs(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	s := stoOpen(t, dir)
-	stoExec(t, s, "PRAGMA user_version = 3")
+	stoExec(t, s, "PRAGMA user_version = 4")
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -329,8 +340,8 @@ func TestOtherSchemaVersionIsRefusedAndLeftAsItIs(t *testing.T) {
 	}
 
 	again, err := Open(dir)
-	if want := "store: " + db + " is not a store of this osk (schema 3)"; err == nil || err.Error() != want {
-		t.Errorf("Open of a store with schema 3: %v, want error %q", err, want)
+	if want := "store: " + db + " is not a store of this osk (schema 4)"; err == nil || err.Error() != want {
+		t.Errorf("Open of a store with schema 4: %v, want error %q", err, want)
 		if err == nil {
 			_ = again.Close()
 		}
@@ -347,7 +358,7 @@ func TestOtherSchemaVersionIsRefusedAndLeftAsItIs(t *testing.T) {
 // WAL lets other processes read while the store writes. A new store must
 // get it, and a store that is opened again must keep it.
 func TestOpenUsesWAL(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	for _, when := range []string{"new", "opened again"} {
 		s := stoOpen(t, dir)
 		var mode string
@@ -366,7 +377,7 @@ func TestOpenUsesWAL(t *testing.T) {
 // A database of another program is not in WAL mode; switching it to WAL
 // would rewrite its header before the schema check refuses it.
 func TestForeignDatabaseIsRefusedAndLeftAsItIs(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	path := filepath.Join(dir, "osk.db")
 	other, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -400,7 +411,7 @@ func TestForeignDatabaseIsRefusedAndLeftAsItIs(t *testing.T) {
 }
 
 func TestApplyWritesTheColumnsOfEachRow(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	// Mixed case: the columns hold the lower-case names.
 	k := obs.RecordsKey(stoName(t, "Corp.Test."), stoName(t, "WWW.Corp.TEST."), dnswire.TypeA)
 	opened := stoT0.In(stoZone)
@@ -521,7 +532,7 @@ func TestApplyWritesTheColumnsOfEachRow(t *testing.T) {
 }
 
 func TestApplyStoresEachEventKind(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	k := stoWWW(t)
 	a := stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99")
 	stoApply(t, s, k, false, stoT0, stoWrite(alert.EventOpen, a, decide.SeverityHigh, stoT0))
@@ -578,7 +589,7 @@ func TestApplyStoresEachEventKind(t *testing.T) {
 }
 
 func TestTwoOpensOfOneIdentityWriteNothing(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	k := stoWWW(t)
 	first := stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99"), decide.SeverityHigh, stoT0, "slack")
 	second := stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, k, "10.53.0.98"), decide.SeverityHigh, stoT0, "slack")
@@ -602,7 +613,7 @@ func TestTwoOpensOfOneIdentityWriteNothing(t *testing.T) {
 }
 
 func TestOtherRuleOtherCheckOrResolvedIdentityMayOpen(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www, mail := stoWWW(t), stoMail(t)
 	rs := stoAlert(t, decide.RuleRecordSet, www, "10.53.0.99")
 	stoApply(t, s, www, false, stoT0,
@@ -633,7 +644,7 @@ func TestOtherRuleOtherCheckOrResolvedIdentityMayOpen(t *testing.T) {
 }
 
 func TestUpdateOfAlertThatIsNotOpenFails(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www := stoWWW(t)
 	a := stoAlert(t, decide.RuleRecordSet, www, "10.53.0.99")
 	stoApply(t, s, www, false, stoT0, stoWrite(alert.EventOpen, a, a.Severity, stoT0))
@@ -677,7 +688,7 @@ func TestApplyFailureWritesNothing(t *testing.T) {
 		{"the clean time", "BEFORE INSERT ON check_state"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := stoOpen(t, t.TempDir())
+			s := stoOpen(t, stoDir(t))
 			x := stoAlert(t, decide.RuleRecordSet, www, "10.53.0.99")
 			stoApply(t, s, www, false, stoT0, stoWrite(alert.EventOpen, x, x.Severity, stoT0))
 			x.ID = stoNth(t, s, www, 1, 0).ID
@@ -712,7 +723,7 @@ func TestApplyFailureWritesNothing(t *testing.T) {
 }
 
 func TestOpenAlertsGivesOpenAlertsOfTheCheckByID(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www, mail := stoWWW(t), stoMail(t)
 	// Record-set is written first though its rule sorts after zone.
 	stoApply(t, s, www, false, stoT0,
@@ -745,7 +756,7 @@ func TestOpenAlertsGivesOpenAlertsOfTheCheckByID(t *testing.T) {
 }
 
 func TestLastCleanIsTheLatestCleanApply(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www, mail := stoWWW(t), stoMail(t)
 	last := func(k obs.Key) time.Time {
 		t.Helper()
@@ -780,7 +791,7 @@ func TestLastCleanIsTheLatestCleanApply(t *testing.T) {
 }
 
 func TestZeroTimesAreStoredAsZero(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	k := stoWWW(t)
 	a := stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99")
 	a.LastClean = time.Time{}
@@ -827,7 +838,7 @@ func TestZeroTimesAreStoredAsZero(t *testing.T) {
 }
 
 func TestRoundTripKeepsEveryField(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	s := stoOpen(t, dir)
 	k := stoWWW(t)
 	t1 := stoT0.In(stoZone)
@@ -941,7 +952,7 @@ func TestStoredAlertsGiveDecideTheSameChanges(t *testing.T) {
 		}
 		writes = append(writes, stoWrite(alert.EventOpen, a, a.Severity, stoT0))
 	}
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	stoApply(t, s, first.Key, false, stoT0, writes...)
 	var stored []decide.Finding
 	for _, a := range stoOpenAlerts(t, s, first.Key) {
@@ -988,7 +999,7 @@ func TestRecordWritesEachState(t *testing.T) {
 			stoCols("given-up", 30, at.UnixNano(), `status 400 "invalid_payload"`, at.UnixNano()), time.Time{}, 1},
 	} {
 		t.Run(c.done.State.String(), func(t *testing.T) {
-			s := stoOpen(t, t.TempDir())
+			s := stoOpen(t, stoDir(t))
 			k := stoWWW(t)
 			stoApply(t, s, k, false, stoT0, stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99"), decide.SeverityHigh, stoT0, "slack"))
 			rows := stoDue(t, s, "slack", stoT0)
@@ -1033,7 +1044,7 @@ func TestRecordWritesEachState(t *testing.T) {
 }
 
 func TestRecordGivenUpAddsEventOnTheRowsAlert(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www, mail := stoWWW(t), stoMail(t)
 	other := stoAlert(t, decide.RuleRecordSet, mail, "10.53.0.99")
 	a := stoAlert(t, decide.RuleRecordSet, www, "10.53.0.99")
@@ -1072,7 +1083,7 @@ func TestRecordGivenUpAddsEventOnTheRowsAlert(t *testing.T) {
 }
 
 func TestRecordGivenUpIsAllOrNothing(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	k := stoWWW(t)
 	stoApply(t, s, k, false, stoT0, stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99"), decide.SeverityHigh, stoT0, "slack"))
 	rows := stoDue(t, s, "slack", stoT0)
@@ -1090,7 +1101,7 @@ func TestRecordGivenUpIsAllOrNothing(t *testing.T) {
 }
 
 func TestRecordChangesOnlyPendingRows(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	k := stoWWW(t)
 	stoApply(t, s, k, false, stoT0, stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99"), decide.SeverityHigh, stoT0, "slack"))
 	rows := stoDue(t, s, "slack", stoT0)
@@ -1127,7 +1138,7 @@ func TestRecordChangesOnlyPendingRows(t *testing.T) {
 }
 
 func TestDueGivesPendingRowsOfOneChannelByID(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www, mail := stoWWW(t), stoMail(t)
 	shop := obs.RecordsKey(stoName(t, "corp.test."), stoName(t, "shop.corp.test."), dnswire.TypeA)
 	created := stoT0.In(stoZone)
@@ -1194,7 +1205,7 @@ func TestDueGivesPendingRowsOfOneChannelByID(t *testing.T) {
 // schedule waits more than an hour, so a row whose next try lies further
 // ahead is due now.
 func TestDueGivesRowsAfterTheClockStepsBack(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	www, mail := stoWWW(t), stoMail(t)
 	stoApply(t, s, www, false, stoT0,
 		stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, www, "10.53.0.99"), decide.SeverityHigh, stoT0, "slack"))

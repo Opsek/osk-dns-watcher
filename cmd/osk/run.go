@@ -247,7 +247,7 @@ func (m *monitor) start(ra runArgs) error {
 	now := time.Now()
 	last, err := m.store.LastBeat()
 	if err == nil {
-		err = m.store.Beat(now)
+		err = m.store.Beat(now, nil)
 	}
 	if err != nil {
 		return err
@@ -328,7 +328,7 @@ func (m *monitor) watch(ctx context.Context) error {
 			}
 		case <-due:
 		case <-beat.C:
-			err = m.store.Beat(time.Now())
+			err = m.store.Beat(time.Now(), nil)
 		case <-read.C:
 			err = m.startRead(reads, time.Now())
 		case r := <-reads:
@@ -549,7 +549,7 @@ func (m *monitor) apply(k obs.Key, failed bool, now time.Time, judge func(open [
 // the service, nil for the end of its context. Only the first error is
 // told: after a store error, the others are mostly its echo.
 func (m *monitor) stop(err error, stderr io.Writer) int {
-	beatErr := m.store.Beat(time.Now())
+	beatErr := m.store.Beat(time.Now(), nil)
 	closeErr := m.store.Close()
 	if err := cmp.Or(err, beatErr, closeErr); err != nil {
 		m.out.close(logDrain)

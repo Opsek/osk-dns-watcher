@@ -259,7 +259,9 @@ func TestCheckStateStoreErrors(t *testing.T) {
 	t.Setenv("OSK_SLACK_URL", slkDeadURL)
 	file := expFile(t, slkFile)
 
-	busy := t.TempDir()
+	// The store makes the folder for its owner alone; it refuses one that
+	// other users may enter, as a folder of the tests may be.
+	busy := filepath.Join(t.TempDir(), "state")
 	held, err := store.Open(busy)
 	if err != nil {
 		t.Fatal(err)

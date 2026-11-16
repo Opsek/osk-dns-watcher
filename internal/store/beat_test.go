@@ -36,23 +36,37 @@ CREATE TABLE check_state (check_key TEXT PRIMARY KEY, last_clean INTEGER NOT NUL
 PRAGMA user_version = 1;
 `
 
-// beaNamesV2 are the objects of a store of version 2, without the indexes
+// beaNamesV3 are the objects of a store of version 3, without the indexes
 // that SQLite makes for itself.
-const beaNamesV2 = `table alert
+const beaNamesV3 = `table alert
 index alert_open
 table beat
 table check_state
 table delivery
 index delivery_due
+index delivery_event
+index delivery_notice
 table event
+table loaded
+table notice
 `
 
-// beaBeatTableV2 is what beaBeatTable gives for the beat table of version 2.
-const beaBeatTableV2 = `id INTEGER notnull 0 pk 1
+// beaBeatTableV3 is what beaBeatTable gives for the beat table of version 3.
+const beaBeatTableV3 = `id INTEGER notnull 0 pk 1
 at INTEGER notnull 1 pk 0
+late TEXT notnull 1 pk 0
 strict 1
 a row with id 2 is refused true
 `
+
+// beaColumnsV1 are the columns of each table of version 1. Later versions
+// add columns, and every row must keep the values of these.
+var beaColumnsV1 = []struct{ table, columns string }{
+	{"alert", "id, open, rule, check_key, kind, domain, name, type, severity, peak, expected, value, lines, opened, last_clean, noticed, resolved"},
+	{"event", "id, alert, kind, severity, was, value, at"},
+	{"delivery", "id, event, channel, label, body, state, attempts, created, next_at, reason, done_at"},
+	{"check_state", "check_key, last_clean"},
+}
 
 // beaWithFile runs f on a connection of its own to the database at path and
 // closes it before it returns. No store of the folder may be open then:
@@ -142,7 +156,7 @@ func beaBeatTable(t *testing.T, db *sql.DB) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, refused := tx.Exec("INSERT INTO beat VALUES (2, 0)")
+	_, refused := tx.Exec("INSERT INTO beat (id, at) VALUES (2, 0)")
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
@@ -150,12 +164,14 @@ func beaBeatTable(t *testing.T, db *sql.DB) string {
 	return b.String()
 }
 
-// beaRows gives every row of the tables of version 1, by table and rowid.
+// beaRows gives every row of the tables of version 1, by table and rowid,
+// with the columns of version 1.
 func beaRows(t *testing.T, db *sql.DB) string {
 	t.Helper()
 	var b strings.Builder
-	for _, table := range []string{"alert", "event", "delivery", "check_state"} {
-		rows, err := db.Query("SELECT * FROM " + table + " ORDER BY rowid")
+	for _, c := range beaColumnsV1 {
+		table := c.table
+		rows, err := db.Query("SELECT " + c.columns + " FROM " + table + " ORDER BY rowid")
 		if err != nil {
 			t.Fatalf("read %s: %v", table, err)
 		}
@@ -242,7 +258,7 @@ func beaMakeVersion1(t *testing.T, path string) {
 
 func beaBeat(t *testing.T, s *Store, at time.Time) {
 	t.Helper()
-	if err := s.Beat(at); err != nil {
+	if err := s.Beat(at, nil); err != nil {
 		t.Fatalf("Beat(%v): %v", at, err)
 	}
 }
@@ -256,37 +272,37 @@ func beaLastBeat(t *testing.T, s *Store) time.Time {
 	return at
 }
 
-func TestNewStoreHasSchemaVersion2WithTheBeatTable(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
-	if v := beaVersion(t, s.db); v != 2 {
-		t.Errorf("a new store has user_version %d, want 2", v)
+func TestNewStoreHasSchemaVersion3WithTheBeatTable(t *testing.T) {
+	s := stoOpen(t, stoDir(t))
+	if v := beaVersion(t, s.db); v != 3 {
+		t.Errorf("a new store has user_version %d, want 3", v)
 	}
-	if got := beaNames(t, s.db); got != beaNamesV2 {
-		t.Errorf("a new store holds\n%s\nwant\n%s", got, beaNamesV2)
+	if got := beaNames(t, s.db); got != beaNamesV3 {
+		t.Errorf("a new store holds\n%s\nwant\n%s", got, beaNamesV3)
 	}
-	if got := beaBeatTable(t, s.db); got != beaBeatTableV2 {
-		t.Errorf("the beat table of a new store:\n%s\nwant\n%s", got, beaBeatTableV2)
+	if got := beaBeatTable(t, s.db); got != beaBeatTableV3 {
+		t.Errorf("the beat table of a new store:\n%s\nwant\n%s", got, beaBeatTableV3)
 	}
 }
 
 // After a restart the service must find its open alerts, its pending
 // deliveries and the clean time of each check in a store of version 1.
-func TestVersion1StoreIsMigratedToVersion2AndKeepsEveryRow(t *testing.T) {
-	dir := t.TempDir()
+func TestVersion1StoreIsMigratedToVersion3AndKeepsEveryRow(t *testing.T) {
+	dir := stoDir(t)
 	path := filepath.Join(dir, "osk.db")
 	beaMakeVersion1(t, path)
 	var before string
 	beaWithFile(t, path, func(db *sql.DB) { before = beaRows(t, db) })
 
 	s := stoOpen(t, dir)
-	if v := beaVersion(t, s.db); v != 2 {
-		t.Errorf("the migrated store has user_version %d, want 2", v)
+	if v := beaVersion(t, s.db); v != 3 {
+		t.Errorf("the migrated store has user_version %d, want 3", v)
 	}
-	if got := beaNames(t, s.db); got != beaNamesV2 {
-		t.Errorf("the migrated store holds\n%s\nwant\n%s", got, beaNamesV2)
+	if got := beaNames(t, s.db); got != beaNamesV3 {
+		t.Errorf("the migrated store holds\n%s\nwant\n%s", got, beaNamesV3)
 	}
-	if got := beaBeatTable(t, s.db); got != beaBeatTableV2 {
-		t.Errorf("the beat table of the migrated store:\n%s\nwant\n%s", got, beaBeatTableV2)
+	if got := beaBeatTable(t, s.db); got != beaBeatTableV3 {
+		t.Errorf("the beat table of the migrated store:\n%s\nwant\n%s", got, beaBeatTableV3)
 	}
 	if got := beaRows(t, s.db); got != before {
 		t.Errorf("rows after the migration:\n%s\nwant the rows before it:\n%s", got, before)
@@ -313,7 +329,7 @@ func TestVersion1StoreIsMigratedToVersion2AndKeepsEveryRow(t *testing.T) {
 // SQLite refuses a table whose name an index already has, also with IF NOT
 // EXISTS, so this migration must fail and must leave nothing of itself.
 func TestFailedMigrationLeavesVersion1StoreAsItWas(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	path := filepath.Join(dir, "osk.db")
 	beaMakeVersion1(t, path)
 	beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, "CREATE INDEX beat ON check_state (last_clean)") })
@@ -334,15 +350,15 @@ func TestFailedMigrationLeavesVersion1StoreAsItWas(t *testing.T) {
 	// folder go.
 	beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, "DROP INDEX beat") })
 	s = stoOpen(t, dir)
-	if v := beaVersion(t, s.db); v != 2 {
-		t.Errorf("without the planted index the store has user_version %d, want 2", v)
+	if v := beaVersion(t, s.db); v != 3 {
+		t.Errorf("without the planted index the store has user_version %d, want 3", v)
 	}
 }
 
 // A database of another program has user_version 0, as an empty one has,
 // but it holds tables; the store's tables must not be added to it.
 func TestForeignDatabaseOfVersion0IsRefusedAndLeftAsItIs(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	path := filepath.Join(dir, "osk.db")
 	beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, "CREATE TABLE other (x INTEGER)") })
 	before, err := os.ReadFile(path)
@@ -367,7 +383,7 @@ func TestForeignDatabaseOfVersion0IsRefusedAndLeftAsItIs(t *testing.T) {
 }
 
 func TestLastBeatIsZeroWhenNoBeatWasStored(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	if got, err := s.LastBeat(); err != nil || !got.IsZero() {
 		t.Errorf("LastBeat of a new store = %v, %v; want the zero time and no error", got, err)
 	}
@@ -377,7 +393,7 @@ func TestLastBeatIsZeroWhenNoBeatWasStored(t *testing.T) {
 // Unix nanoseconds and comes back as the same instant in UTC, as the other
 // times of the store do.
 func TestBeatComesBackAsTheSameInstantInUTC(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	at := stoT0.In(stoZone)
 	beaBeat(t, s, at)
 	if got := beaLastBeat(t, s); !got.Equal(at) || got.Location() != time.UTC {
@@ -395,7 +411,7 @@ func TestBeatComesBackAsTheSameInstantInUTC(t *testing.T) {
 // The last beat written is the one kept, also when its time is earlier:
 // after the clock stepped back, a beat ahead of it would hide a down time.
 func TestSecondBeatReplacesTheFirst(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	for _, at := range []time.Time{stoT0, stoT0.Add(10 * time.Second), stoT0.Add(-time.Hour)} {
 		beaBeat(t, s, at)
 		if got := beaLastBeat(t, s); !got.Equal(at) {
@@ -412,7 +428,7 @@ func TestSecondBeatReplacesTheFirst(t *testing.T) {
 }
 
 func TestBeatSurvivesCloseAndOpen(t *testing.T) {
-	dir := t.TempDir()
+	dir := stoDir(t)
 	s := stoOpen(t, dir)
 	beaBeat(t, s, stoT0)
 	if err := s.Close(); err != nil {
@@ -422,19 +438,19 @@ func TestBeatSurvivesCloseAndOpen(t *testing.T) {
 	if got := beaLastBeat(t, s); !got.Equal(stoT0) {
 		t.Errorf("LastBeat after Close and Open = %v, want %v", got, stoT0)
 	}
-	if v := beaVersion(t, s.db); v != 2 {
-		t.Errorf("the store opened again has user_version %d, want 2", v)
+	if v := beaVersion(t, s.db); v != 3 {
+		t.Errorf("the store opened again has user_version %d, want 3", v)
 	}
 }
 
 // Planted triggers make the write of a beat fail, whether it inserts the
 // row or updates it.
 func TestFailedBeatIsReportedAndKeepsTheBeatBefore(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	beaBeat(t, s, stoT0)
 	stoExec(t, s, "CREATE TRIGGER bea_insert BEFORE INSERT ON beat BEGIN SELECT RAISE(ABORT, 'planted fault'); END")
 	stoExec(t, s, "CREATE TRIGGER bea_update BEFORE UPDATE ON beat BEGIN SELECT RAISE(ABORT, 'planted fault'); END")
-	err := s.Beat(stoT0.Add(10 * time.Second))
+	err := s.Beat(stoT0.Add(10*time.Second), nil)
 	if err == nil || !strings.HasPrefix(err.Error(), "store: ") || !strings.Contains(err.Error(), "planted fault") {
 		t.Errorf("Beat: %v, want an error that starts with \"store: \" and holds the planted fault", err)
 	}
@@ -446,7 +462,7 @@ func TestFailedBeatIsReportedAndKeepsTheBeatBefore(t *testing.T) {
 // Only a store with no beat gives the zero time; a beat that cannot be read
 // is an error, or the service would report no down time.
 func TestLastBeatReportsAReadError(t *testing.T) {
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	stoExec(t, s, "DROP TABLE beat")
 	if got, err := s.LastBeat(); err == nil || !strings.HasPrefix(err.Error(), "store: ") {
 		t.Errorf("LastBeat without a beat table = %v, %v; want an error that starts with \"store: \"", got, err)

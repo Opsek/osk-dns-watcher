@@ -42,6 +42,13 @@ CREATE TABLE check_state (check_key TEXT PRIMARY KEY, last_clean INTEGER NOT NUL
 PRAGMA user_version = 1;
 `
 
+// upgrade turns a store of version 1 into version 2 in place, so a folder
+// keeps its alerts and its outbox. A new store gets schema and then upgrade.
+const upgrade = `
+CREATE TABLE beat (id INTEGER PRIMARY KEY CHECK (id = 1), at INTEGER NOT NULL) STRICT;
+PRAGMA user_version = 2;
+`
+
 // Open opens the store in dir, and makes dir with mode 0700 when it is
 // missing.
 func Open(dir string) (*Store, error) {
@@ -137,7 +144,10 @@ func prepare(db *sql.DB, path string) error {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return wrap(err)
 	}
-	if version == 1 {
+	switch version {
+	case 1:
+		return migrate(db, upgrade)
+	case 2:
 		return nil
 	}
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema").Scan(&tables); err != nil {
@@ -146,11 +156,17 @@ func prepare(db *sql.DB, path string) error {
 	if version != 0 || tables != 0 {
 		return fmt.Errorf("store: %s is not a store of this osk (schema %d)", path, version)
 	}
+	return migrate(db, schema+upgrade)
+}
+
+// migrate runs ddl in one transaction, so that a failed upgrade leaves the
+// store of version 1 as it was.
+func migrate(db *sql.DB, ddl string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return wrap(err)
 	}
-	if _, err := tx.Exec(schema); err != nil {
+	if _, err := tx.Exec(ddl); err != nil {
 		return wrap(errors.Join(err, tx.Rollback()))
 	}
 	return wrap(tx.Commit())

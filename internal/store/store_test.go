@@ -318,7 +318,7 @@ func stoChild(t *testing.T, dir string) string {
 func TestOtherSchemaVersionIsRefusedAndLeftAsItIs(t *testing.T) {
 	dir := t.TempDir()
 	s := stoOpen(t, dir)
-	stoExec(t, s, "PRAGMA user_version = 2")
+	stoExec(t, s, "PRAGMA user_version = 3")
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -329,8 +329,8 @@ func TestOtherSchemaVersionIsRefusedAndLeftAsItIs(t *testing.T) {
 	}
 
 	again, err := Open(dir)
-	if want := "store: " + db + " is not a store of this osk (schema 2)"; err == nil || err.Error() != want {
-		t.Errorf("Open of a store with schema 2: %v, want error %q", err, want)
+	if want := "store: " + db + " is not a store of this osk (schema 3)"; err == nil || err.Error() != want {
+		t.Errorf("Open of a store with schema 3: %v, want error %q", err, want)
 		if err == nil {
 			_ = again.Close()
 		}

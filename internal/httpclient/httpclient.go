@@ -111,6 +111,10 @@ func (c *Client) Post(ctx context.Context, rawURL, contentType string, body []by
 	req.Header.Set("Content-Type", contentType)
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// net/http lets the dial of a cut request go on, for a later request
+		// to use. This client keeps no connection, so the dial would only
+		// outlive the work, a stop of the service included.
+		c.http.CloseIdleConnections()
 		return Response{}, doError(err)
 	}
 	// The status is the answer. A body cut short by a failure only shortens

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -259,6 +260,58 @@ func TestCheckExpectFileErrors(t *testing.T) {
 			t.Errorf("--expect %s: exit code %d, output %q, errors %q; want 1, nothing and one line \"osk: ...\"",
 				file, code, out, errOut)
 		}
+	}
+	expNoQueries(t, s)
+}
+
+// expFIFO makes a FIFO, which holds whoever opens it to read until a writer
+// comes. At the end of the test a writer lets such a reader go.
+func expFIFO(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "corp.test.expect")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = f.Close()
+		}
+	})
+	return path
+}
+
+// expWithin calls osk and fails the test unless it returns within limit, so
+// that a hang fails the test and not the whole run.
+func expWithin(t *testing.T, limit time.Duration, osk func() (int, string, string)) (code int, out, errOut string) {
+	t.Helper()
+	type outcome struct {
+		code        int
+		out, errOut string
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		code, out, errOut := osk()
+		done <- outcome{code, out, errOut}
+	}()
+	select {
+	case o := <-done:
+		return o.code, o.out, o.errOut
+	case <-time.After(limit):
+		t.Fatalf("osk did not return within %v", limit)
+		return 0, "", ""
+	}
+}
+
+// A file that is not a regular file is refused before it is opened: a FIFO
+// would hold the open until a writer comes.
+func TestCheckExpectRefusesAFIFOAsTheFile(t *testing.T) {
+	s := transportStart(t, expWorld)
+	file := expFIFO(t)
+	code, out, errOut := expWithin(t, 2*time.Second, func() (int, string, string) {
+		return transportRun("check", "--root-server", s.addr, "--extra-range", "127.0.0.0/8", "--expect", file)
+	})
+	if want := "osk: " + file + ": is not a regular file\n"; code != 1 || out != "" || errOut != want {
+		t.Errorf("exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 	}
 	expNoQueries(t, s)
 }

@@ -315,9 +315,17 @@ func loadExpect(path string) (*expect.File, string) {
 	return f, ""
 }
 
+// errNotRegular refuses a FIFO or a device, which can hold whoever opens or
+// reads it for ever.
+var errNotRegular = errors.New("is not a regular file")
+
 // readExpect reads the file at path, up to one octet more than expect.Parse
 // takes, so that Parse can tell a file that is too large.
 func readExpect(path string) ([]byte, error) {
+	// A failed Stat is left to the open, whose error names the path.
+	if info, err := os.Stat(path); err == nil && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: %w", path, errNotRegular)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err

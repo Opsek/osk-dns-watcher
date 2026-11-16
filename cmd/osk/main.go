@@ -21,6 +21,7 @@ const usage = `usage: osk version
        osk check [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] <domain> [<name> <type>]...
        osk snapshot [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] <domain> [<name> <type>]...
        osk check [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] --expect <file> [--state <folder> [--slack-min-severity <severity>]]
+       osk run [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] [--serial-interval <duration>] [--parent-interval <duration>] [--fast-interval <duration>] [--other-interval <duration>] [--fast <name>]... [--slack-min-severity <severity>] --expect <file> --state <folder>
 `
 
 func main() {
@@ -41,6 +42,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return check(args[1:], stdout, stderr)
 	case len(args) > 0 && args[0] == "snapshot":
 		return snapshot(args[1:], stdout, stderr)
+	case len(args) > 0 && args[0] == "run":
+		return service(args[1:], stdout, stderr)
 	}
 	return fail(stderr, 2, usage)
 }

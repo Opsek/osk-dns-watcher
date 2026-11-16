@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -51,13 +55,15 @@ func TestRules(t *testing.T) {
 			"internal/b/b.go:15 uses crypto/tls.Listen",
 			"internal/b/b.go:16 uses crypto/tls.NewListener",
 		}},
-		// The passing tree holds folders that "go build ./..." skips.
+		// The passing tree holds folders that "go build ./..." skips, and
+		// names the two signals of syscall that the tool may name.
 		{"no-exec/pass", nil},
 		{"no-exec/fail", []string{
 			"internal/a/a.go:5 imports os/exec",
 			"internal/a/a.go:6 imports plugin",
-			"internal/a/a.go:7 imports syscall",
 			"internal/a/a.go:12 uses os.StartProcess",
+			"internal/a/a.go:13 uses syscall.Exec", // through an alias
+			"internal/b/b.go:5 imports syscall",    // a dot import
 		}},
 		{"no-unsafe/pass", nil},
 		{"no-unsafe/fail", []string{
@@ -128,6 +134,74 @@ func TestRules(t *testing.T) {
 				t.Errorf("faults:\n got %q\nwant %q", got, c.want)
 			}
 		})
+	}
+}
+
+// Each banned name, alone in a file of each package that must stay pure, is
+// the one fault of the rule pure. A name that the rule lets through, in the
+// last rows, gives no fault, so the tree itself is clean.
+func TestPureBansEveryName(t *testing.T) {
+	const dnswire = "osk/internal/dnswire"
+	cases := []struct {
+		path, name string
+		banned     bool
+	}{
+		{"time", "Now", true},
+		{"time", "Since", true},
+		{"time", "Until", true},
+		{"time", "Sleep", true},
+		{"time", "After", true},
+		{"time", "AfterFunc", true},
+		{"time", "Tick", true},
+		{"time", "NewTicker", true},
+		{"time", "NewTimer", true},
+		{"time", "LoadLocation", true},
+		{"time", "LoadLocationFromTZData", true},
+		{"time", "Local", true},
+		{"time", "Parse", true},
+		{"time", "ParseInLocation", true},
+		{"fmt", "Print", true},
+		{"fmt", "Println", true},
+		{"fmt", "Printf", true},
+		{"fmt", "Scan", true},
+		{"fmt", "Scanln", true},
+		{"fmt", "Scanf", true},
+		{dnswire, "Exchange", true},
+		{dnswire, "Transfer", true},
+		{"time", "Unix", false},
+		{"fmt", "Sprintf", false},
+		{dnswire, "ParseName", false},
+	}
+	for _, dir := range []string{"internal/decide", "internal/expect"} {
+		for _, c := range cases {
+			t.Run(dir+"/"+c.name, func(t *testing.T) {
+				root := t.TempDir()
+				archWrite(t, root, "go.mod", "module osk\n\ngo 1.27\n")
+				archWrite(t, root, "cmd/osk/main.go", "package main\n\nfunc main() {}\n")
+				archWrite(t, root, "internal/dnswire/dnswire.go", "package dnswire\n")
+				archWrite(t, root, dir+"/zz.go", fmt.Sprintf("package %s\n\nimport %q\n\nvar _ = %s.%s\n",
+					path.Base(dir), c.path, path.Base(c.path), c.name))
+				var want []string
+				if c.banned {
+					want = []string{fmt.Sprintf("%s/zz.go:5 uses %s.%s", dir, c.path, c.name)}
+				}
+				if got := faultsOf(t, check(root), "pure"); !slices.Equal(got, want) {
+					t.Errorf("faults of pure: got %q, want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
+// archWrite writes a file of a tree, with its folders.
+func archWrite(t *testing.T, root, name, text string) {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

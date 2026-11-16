@@ -512,6 +512,48 @@ import _ "syscall"
 EOF
 }
 
+syscall_dot_import() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import . "syscall"
+
+var Signal = SIGPIPE
+EOF
+}
+
+# The two signals that the tool may name, and nothing else of syscall.
+syscall_signals() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import (
+	"os/signal"
+	"syscall"
+)
+
+func Quiet() {
+	signal.Ignore(syscall.SIGPIPE, syscall.SIGTERM)
+}
+EOF
+}
+
+syscall_other_name() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import (
+	"os/signal"
+	"syscall"
+)
+
+func Fault() error {
+	signal.Ignore(syscall.SIGPIPE)
+	return syscall.Kill(1, syscall.SIGTERM)
+}
+EOF
+}
+
 unsafe_import() {
 	put internal/zzfault/zzfault.go <<'EOF'
 package zzfault
@@ -670,6 +712,28 @@ EOF
 
 rule_unknown_package() {
 	append gate/imports.txt "$MOD/internal/zzfault/... must-not-import net"
+}
+
+# An HTTP or TLS client outside internal/httpclient, which alone may post, and
+# only to the hosts it was given.
+http_import() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import "net/http"
+
+var Client = http.DefaultClient
+EOF
+}
+
+tls_import() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import "crypto/tls"
+
+const Version = tls.VersionTLS13
+EOF
 }
 
 # The constructs of the cases above, in a test file of a package in scope.
@@ -1019,6 +1083,18 @@ func zzFault() {
 EOF
 }
 
+pure_alert_imports_os() {
+	put internal/alert/zzfault.go <<'EOF'
+package alert
+
+import "os"
+
+func zzFault() string {
+	return os.Getenv("HOME")
+}
+EOF
+}
+
 pure_test_file() {
 	put internal/decide/zzfault_test.go <<'EOF'
 package decide
@@ -1060,6 +1136,44 @@ import "testing"
 func TestZzFault(t *testing.T) {
 t.Log("zzfault")
 }
+EOF
+}
+
+# model <n>: the counter of broken_model, which goes 0, 1, 2, 0, ..., with the
+# invariant that it stays below n. With n = 3 it holds and TLC must pass it,
+# so the failure of broken_model cannot come from how a model is planted.
+model() {
+	put models/zzfault.tla <<EOF || return 1
+---- MODULE zzfault ----
+EXTENDS Naturals
+VARIABLE x
+Init == x = 0
+Next == x' = (x + 1) % 3
+Below == x < $1
+====
+EOF
+	put models/zzfault.cfg <<'EOF'
+INIT Init
+NEXT Next
+INVARIANT Below
+EOF
+}
+
+broken_model() {
+	put models/broken.tla <<'EOF' || return 1
+---- MODULE broken ----
+\* The invariant is false on purpose: the model checker must refute it.
+EXTENDS Naturals
+VARIABLE x
+Init == x = 0
+Next == x' = (x + 1) % 3
+NeverTwo == x # 2
+====
+EOF
+	put models/broken.cfg <<'EOF'
+INIT Init
+NEXT Next
+INVARIANT NeverTwo
 EOF
 }
 
@@ -1366,6 +1480,9 @@ check exec-os-dot-import            os_startprocess_dot_import archcheck no-exec
 check syscall-import                syscall_import             archcheck no-exec $Z
 check syscall-alias-import          syscall_alias_import       archcheck no-exec $Z
 check syscall-blank-import          syscall_blank_import       archcheck no-exec $Z
+check syscall-dot-import            syscall_dot_import         archcheck no-exec "$Z:3 imports syscall"
+check syscall-signals               syscall_signals            archcheck 'ok no-exec'
+check syscall-other-name            syscall_other_name         archcheck no-exec "$Z:10 uses syscall.Kill"
 check syscall-not-under-no-listener syscall_import             archcheck 'ok no-listener'
 
 check unsafe-import                 unsafe_import              archcheck no-unsafe $Z
@@ -1375,7 +1492,11 @@ check unsafe-cgo-import             cgo_import                 archcheck no-unsa
 check import-rules-direct           rule_direct                archcheck import-rules internal/zzfault/a/a.go
 check import-rules-transitive       rule_transitive            archcheck import-rules internal/zzfault/b/b.go
 check import-rules-only             rule_only                  archcheck import-rules internal/zzfault/b/b.go
-check import-rules-unknown-package  rule_unknown_package       archcheck import-rules gate/imports.txt:4
+check import-rules-unknown-package  rule_unknown_package       archcheck import-rules gate/imports.txt:6
+check http-outside-client           http_import                archcheck import-rules \
+	"$Z:3 imports net/http (only $MOD/internal/httpclient/... may-import net/http/...)"
+check tls-outside-client            tls_import                 archcheck import-rules \
+	"$Z:3 imports crypto/tls (only $MOD/internal/httpclient/... may-import crypto/tls/...)"
 
 D=internal/dnswire
 check dns-net-dial                  "dialer $Z"                archcheck no-dns-update "$Z:6 uses net.Dial"
@@ -1409,6 +1530,7 @@ check pure-clock-dot-import         pure_clock_dot_import      archcheck pure "$
 check pure-sends-query              pure_sends_query           archcheck pure \
 	"internal/expect/zzfault.go:5 uses $MOD/internal/dnswire.Exchange"
 check pure-prints                   pure_prints                archcheck pure "$P:6 uses fmt.Println"
+check pure-alert-imports-os         pure_alert_imports_os      archcheck pure "internal/alert/zzfault.go:3 imports os"
 check pure-test-file                pure_test_file             archcheck pass
 
 check phase-clean-static            none                       static pass
@@ -1426,6 +1548,8 @@ check staticcheck-plain             staticcheck_plain          static staticchec
 check staticcheck-lab               staticcheck_lab            static staticcheck-lab
 check exhaustive-plain              exhaustive_plain           static exhaustive
 check exhaustive-lab                exhaustive_lab             static exhaustive-lab
+check tlc-true-invariant            'model 3'                  static 'ok tlc models/zzfault.tla'
+check tlc-false-invariant           broken_model               static 'tlc models/broken.tla' 'TLC found a problem'
 
 check phase-clean-tests             none                       tests pass
 check race-plain                    'racy internal/store/zzfault_test.go' tests go-test-race

@@ -4,8 +4,9 @@
 // listens, never starts a process, never uses unsafe or cgo, the import rules
 // of gate/imports.txt, that it sends no DNS message but a query (only the DNS
 // codec in internal/dnswire opens connections, and only its function
-// writeQuery writes to them), and that the packages under internal/decide and
-// internal/expect read no clock, network, file, store or randomness.
+// writeQuery writes to them), and that the packages under internal/decide,
+// internal/expect and internal/alert read no clock, network, file, store or
+// randomness.
 //
 // Usage:
 //

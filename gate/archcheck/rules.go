@@ -208,8 +208,44 @@ func noListener(t tree) []string {
 // noExec also bans syscall, which can start a process without os/exec, and
 // listen without package net; only this rule reports it.
 func noExec(t tree) []string {
-	faults := findImports(t.pkgs, "os/exec", "plugin", "syscall")
-	return append(faults, findUses(t.pkgs, map[string][]string{"os": {"StartProcess"}})...)
+	faults := findImports(t.pkgs, "os/exec", "plugin")
+	faults = append(faults, findUses(t.pkgs, map[string][]string{"os": {"StartProcess"}})...)
+	return append(faults, syscallUses(t.pkgs)...)
+}
+
+// signals are the only names of syscall that the tool may use.
+var signals = []string{"SIGPIPE", "SIGTERM"}
+
+// syscallUses reports each name of syscall other than signals, and a dot or
+// blank import of it, after which its uses cannot be told.
+func syscallUses(pkgs []*pkg) []string {
+	var faults []string
+	for _, p := range pkgs {
+		for _, f := range p.files {
+			for _, imp := range f.ast.Imports {
+				if importPath(imp) != "syscall" {
+					continue
+				}
+				name := "syscall"
+				if imp.Name != nil {
+					name = imp.Name.Name
+				}
+				if name == "." || name == "_" {
+					faults = append(faults, f.pos(imp.Pos())+" imports syscall")
+					continue
+				}
+				ast.Inspect(f.ast, func(n ast.Node) bool {
+					if s, ok := n.(*ast.SelectorExpr); ok {
+						if id, ok := s.X.(*ast.Ident); ok && id.Name == name && !slices.Contains(signals, s.Sel.Name) {
+							faults = append(faults, fmt.Sprintf("%s uses syscall.%s", f.pos(s.Pos()), s.Sel.Name))
+						}
+					}
+					return true
+				})
+			}
+		}
+	}
+	return faults
 }
 
 func noUnsafe(t tree) []string {
@@ -277,21 +313,21 @@ func writesOutside(f goFile) []string {
 }
 
 // pure keeps the judgement of the tool repeatable: the packages under
-// internal/decide and internal/expect read no clock, network, file, store or
-// randomness. Import rules cannot say this, because both packages reach net,
-// os and crypto/rand through internal/dnswire, and they need package time for
-// its types. So each direct import must be on a short list, and the names of
-// an allowed package that read the clock, the time zone of the machine (from
-// TZ and the disk), the network or standard input and output are banned. The
-// rule has no type information: a method value such as t.Local, or a function
-// handed in from outside, escapes it.
+// internal/decide, internal/expect and internal/alert read no clock, network,
+// file, store or randomness. Import rules cannot say this, because these
+// packages reach net, os and crypto/rand through internal/dnswire, and they
+// need package time for its types. So each direct import must be on a short
+// list, and the names of an allowed package that read the clock, the time
+// zone of the machine (from TZ and the disk), the network or standard input
+// and output are banned. The rule has no type information: a method value
+// such as t.Local, or a function handed in from outside, escapes it.
 func pure(t tree) []string {
 	dnswire := path.Join(t.module, dnswireDir)
 	allowed := []string{"bytes", "cmp", "errors", "fmt", "maps", "net/netip", "slices", "strconv", "strings",
 		"time", dnswire, path.Join(t.module, "internal/observe/obs")}
 	var scope []*pkg
 	for _, p := range t.pkgs {
-		if under(p.dir, "internal/decide") || under(p.dir, "internal/expect") {
+		if under(p.dir, "internal/decide") || under(p.dir, "internal/expect") || under(p.dir, "internal/alert") {
 			scope = append(scope, p)
 			allowed = append(allowed, p.path)
 		}

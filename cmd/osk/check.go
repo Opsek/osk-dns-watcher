@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Opsek/dns-monitoring/internal/config"
 	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/expect"
@@ -27,34 +27,32 @@ const checkInterval = 60 * time.Second
 
 const receivedLayout = "2006-01-02T15:04:05.000Z"
 
-// maxExpectFile is the size of the largest file of expectations that
-// expect.Parse takes.
-const maxExpectFile = 4194304
-
 // check runs "osk check". Without --expect: the delegation, DS and serial
 // checks of a domain and a records check for each pair of name and type, all
 // at once; it prints what the walk from the root asked and every answer, each
 // with its result. With --expect: the checks of a file of expectations; it
 // prints what differs from the file. With --state as well, it also keeps the
-// alerts in a folder and sends their notices to Slack.
+// alerts in a folder and sends their notices to Slack. With --json, each line
+// is a JSON object.
 func check(args []string, stdout, stderr io.Writer) int {
-	cfg, ex, keys, msg := parseArgs(args, true)
+	a, msg := parseArgs(args, true)
 	if msg != "" {
 		return checkWrongUse(stderr, msg)
 	}
-	o, err := observe.New(cfg)
+	o, err := observe.New(a.cfg)
 	if err != nil {
 		// Only the flags fill the configuration.
 		return checkWrongUse(stderr, err.Error())
 	}
-	if ex != nil && ex.state != nil {
-		return checkState(o, *ex, stdout, stderr)
+	if a.ex != nil && a.ex.state != nil {
+		return checkState(o, *a.ex, a.json, stdout, stderr)
 	}
-	if ex != nil {
-		return checkExpect(o, ex.file, stdout, stderr)
+	if a.ex != nil {
+		return checkExpect(o, a.ex.file, a.json, stdout, stderr)
 	}
-	text, failed := formatObservations(runChecks(o, keys))
-	if code := output(stdout, stderr, text); code != 0 || !failed {
+	out := &lines{json: a.json}
+	failed := formatObservations(out, runChecks(o, a.keys))
+	if code := output(stdout, stderr, out.String()); code != 0 || !failed {
 		return code
 	}
 	return 1
@@ -64,11 +62,18 @@ func checkWrongUse(stderr io.Writer, msg string) int {
 	return fail(stderr, 2, "osk check: "+msg+"\n"+usage)
 }
 
-// parseCheck reads the flags and the arguments of check without --expect,
-// which are also those of snapshot. It returns a message when they are wrong.
+// parseCheck reads the flags and the arguments of check without --expect.
 func parseCheck(args []string) (observe.Config, []obs.Key, string) {
-	cfg, _, keys, msg := parseArgs(args, false)
-	return cfg, keys, msg
+	a, msg := parseArgs(args, false)
+	return a.cfg, a.keys, msg
+}
+
+// checkArgs are the flags and the arguments of check and snapshot.
+type checkArgs struct {
+	cfg  observe.Config
+	ex   *expectArgs // nil without --expect
+	keys []obs.Key   // the checks of the arguments, without --expect
+	json bool
 }
 
 // expectArgs are the flags of check with --expect.
@@ -83,9 +88,10 @@ type expectArgs struct {
 // no argument may follow, because the file names the domain and the sets;
 // without, the arguments give the keys. It returns a message when they are
 // wrong.
-func parseArgs(args []string, withExpect bool) (cfg observe.Config, ex *expectArgs, keys []obs.Key, msg string) {
+func parseArgs(args []string, withExpect bool) (a checkArgs, msg string) {
 	var file, state *string
 	var minimum decide.Severity
+	cfg := &a.cfg
 	flags := flag.NewFlagSet("check", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Func("root-server", "a root server to start from, in place of the built-in ones", func(s string) error {
@@ -99,6 +105,7 @@ func parseArgs(args []string, withExpect bool) (cfg observe.Config, ex *expectAr
 		return err
 	})
 	flags.DurationVar(&cfg.QueryTimeout, "timeout", 2*time.Second, "time for one query")
+	flags.BoolVar(&a.json, "json", false, "print JSON Lines")
 	if withExpect {
 		flags.Func("expect", "a file of expectations to compare with", func(s string) error {
 			if file != nil {
@@ -120,22 +127,23 @@ func parseArgs(args []string, withExpect bool) (cfg observe.Config, ex *expectAr
 		})
 	}
 	if err := flags.Parse(args); err != nil {
-		return cfg, nil, nil, err.Error()
+		return a, err.Error()
 	}
 	switch {
 	case cfg.QueryTimeout <= 0:
-		return cfg, nil, nil, "the timeout must be positive"
+		return a, "the timeout must be positive"
 	case state != nil && file == nil:
-		return cfg, nil, nil, "--state needs --expect"
+		return a, "--state needs --expect"
 	case minimum != 0 && state == nil:
-		return cfg, nil, nil, "--slack-min-severity needs --state"
+		return a, "--slack-min-severity needs --state"
 	case file != nil && flags.NArg() > 0:
-		return cfg, nil, nil, "--expect takes no domain and no pairs: the file gives them"
+		return a, "--expect takes no domain and no pairs: the file gives them"
 	case file != nil:
-		return cfg, &expectArgs{file: *file, state: state, minimum: cmp.Or(minimum, decide.SeverityLow)}, nil, ""
+		a.ex = &expectArgs{file: *file, state: state, minimum: cmp.Or(minimum, decide.SeverityLow)}
+		return a, ""
 	}
-	keys, msg = parseKeys(flags.Args())
-	return cfg, nil, keys, msg
+	a.keys, msg = parseKeys(flags.Args())
+	return a, msg
 }
 
 // parseSeverity reads a severity word as the finding lines print it.
@@ -219,82 +227,99 @@ func runChecks(o *observe.Observer, keys []obs.Key) []obs.Observation {
 // formatObservations gives the walk entries and then the answers of each
 // observation. failed reports a failure among the answers; the walk is proof
 // only, and the answers show what it led to.
-func formatObservations(observations []obs.Observation) (text string, failed bool) {
-	var b strings.Builder
+func formatObservations(out *lines, observations []obs.Observation) (failed bool) {
 	for _, o := range observations {
 		for _, a := range o.Walk {
-			formatAnswer(&b, "walk", o.Key.Kind, a)
+			formatAnswer(out, "walk", o.Key.Kind, a)
 		}
 		for _, a := range o.Answers {
-			if formatAnswer(&b, "answer", o.Key.Kind, a) {
+			if formatAnswer(out, "answer", o.Key.Kind, a) {
 				failed = true
 			}
 		}
 	}
-	return b.String(), failed
+	return failed
+}
+
+// answerJSON is a line of an answer with --json; "" stands for a field that
+// the text prints as "-".
+type answerJSON struct {
+	Type      string `json:"type"`
+	Kind      string `json:"kind"`
+	QName     string `json:"qname"`
+	QType     string `json:"qtype"`
+	Address   string `json:"address"`
+	Host      string `json:"host"`
+	Received  string `json:"received"`
+	Transport string `json:"transport"`
+	Case      string `json:"case"`
+	Data      string `json:"data"`
 }
 
 // formatAnswer writes one line for each record of the answer, or one line for
 // its other case, and reports whether it is a failure. Text from the network
 // is printed only through Name.String, Record.String and strconv.Quote, which
 // escape what could start a line or a field of its own.
-func formatAnswer(b *strings.Builder, role string, kind obs.Kind, a obs.Answer) (failed bool) {
-	address, host, transport := "-", "-", "-"
+func formatAnswer(out *lines, role string, kind obs.Kind, a obs.Answer) (failed bool) {
+	j := answerJSON{Type: role, Kind: kind.String(), QName: a.Question.Name.String(), QType: a.Question.Type.String(),
+		Received: a.Received.UTC().Format(receivedLayout)}
 	if a.Server.Addr.IsValid() {
-		address = a.Server.Addr.String()
+		j.Address = a.Server.Addr.String()
 	}
 	// A configured root server has the root as its name, and an address.
 	if a.Server.Addr.IsValid() || a.Server.Name.LabelCount() > 0 {
-		host = a.Server.Name.String()
+		j.Host = a.Server.Name.String()
 	}
 	if a.Wire != nil {
-		transport = "udp"
+		j.Transport = "udp"
 		if a.TCP {
-			transport = "tcp"
+			j.Transport = "tcp"
 		}
 	}
-	prefix := fmt.Sprintf("%s %s %s %s %s %s %s %s ", role, kind, a.Question.Name, a.Question.Type,
-		address, host, a.Received.UTC().Format(receivedLayout), transport)
-	lines := obs.Match(a.Result,
-		func(r obs.Records) []string {
-			var lines []string
+	prefix := fmt.Sprintf("%s %s %s %s %s %s %s %s ", role, kind, j.QName, j.QType,
+		cmp.Or(j.Address, "-"), cmp.Or(j.Host, "-"), j.Received, cmp.Or(j.Transport, "-"))
+	cases := obs.Match(a.Result,
+		func(r obs.Records) [][2]string {
+			var cases [][2]string
 			for _, rr := range r.Set {
-				lines = append(lines, "records "+rr.String())
+				cases = append(cases, [2]string{"records", rr.String()})
 			}
 			for _, rr := range r.Glue {
-				lines = append(lines, "glue "+rr.String())
+				cases = append(cases, [2]string{"glue", rr.String()})
 			}
-			return lines
+			return cases
 		},
-		func(n obs.NoData) []string {
-			return []string{fmt.Sprintf("nodata %d %s", n.TTL(), n.SOA)}
+		func(n obs.NoData) [][2]string {
+			return [][2]string{{"nodata", fmt.Sprintf("%d %s", n.TTL(), n.SOA)}}
 		},
-		func(n obs.NoName) []string {
+		func(n obs.NoName) [][2]string {
 			word := "noname"
 			if n.Compact {
 				word = "noname-compact"
 			}
-			return []string{fmt.Sprintf("%s %d %s", word, n.TTL(), n.SOA)}
+			return [][2]string{{word, fmt.Sprintf("%d %s", n.TTL(), n.SOA)}}
 		},
-		func(f obs.Failure) []string {
+		func(f obs.Failure) [][2]string {
 			failed = true
-			return []string{"failure " + f.Reason.String() + " " + strconv.Quote(f.Detail)}
+			return [][2]string{{"failure", f.Reason.String() + " " + strconv.Quote(f.Detail)}}
 		})
-	for _, line := range lines {
-		b.WriteString(prefix + line + "\n")
+	for _, c := range cases {
+		j.Case, j.Data = c[0], c[1]
+		out.add(prefix+c[0]+" "+c[1], j)
 	}
 	return failed
 }
 
 // checkExpect runs the checks of the file of expectations at path and prints
 // each finding, each answer that could not be judged, and a count of both.
-func checkExpect(o *observe.Observer, path string, stdout, stderr io.Writer) int {
+func checkExpect(o *observe.Observer, path string, asJSON bool, stdout, stderr io.Writer) int {
 	f, problems := loadExpect(path)
 	if f == nil {
 		return fail(stderr, 1, problems)
 	}
-	text, clean := formatFindings(f, runChecks(o, expectKeys(f)), time.Now())
-	if code := output(stdout, stderr, text); code != 0 || clean {
+	out := &lines{json: asJSON}
+	clean := formatFindings(out, f, runChecks(o, expectKeys(f)), time.Now())
+	if code := output(stdout, stderr, out.String()); code != 0 || clean {
 		return code
 	}
 	return 1
@@ -315,23 +340,14 @@ func loadExpect(path string) (*expect.File, string) {
 	return f, ""
 }
 
-// errNotRegular refuses a FIFO or a device, which can hold whoever opens or
-// reads it for ever.
-var errNotRegular = errors.New("is not a regular file")
-
 // readExpect reads the file at path, up to one octet more than expect.Parse
-// takes, so that Parse can tell a file that is too large.
+// takes, so that Parse can tell a file that is too large. A refusal names
+// the path, as the error of an open does.
 func readExpect(path string) ([]byte, error) {
-	// A failed Stat is left to the open, whose error names the path.
-	if info, err := os.Stat(path); err == nil && !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: %w", path, errNotRegular)
+	data, err := config.ReadRegular(path, config.MaxExpectFile)
+	if errors.Is(err, config.ErrNotRegular) {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	data, err := io.ReadAll(io.LimitReader(file, maxExpectFile+1))
-	_ = file.Close() // the file was only read, so closing it can lose nothing
 	return data, err
 }
 
@@ -369,39 +385,80 @@ func expectKeys(f *expect.File) []obs.Key {
 // it, then a line for each answer that is a failure, and at the end a count of
 // the checks and of both. clean reports that there are neither. decide gets no
 // open alert, so that what this prints never depends on stored state.
-func formatFindings(f *expect.File, observations []obs.Observation, now time.Time) (text string, clean bool) {
-	var b strings.Builder
+func formatFindings(out *lines, f *expect.File, observations []obs.Observation, now time.Time) (clean bool) {
 	findings, unknown := 0, 0
 	for _, o := range observations {
 		for _, c := range decide.Decide(decide.Input{Expect: f, Observation: o, Now: now}) {
-			formatFinding(&b, c.Finding)
+			formatFinding(out, c.Finding)
 			findings++
 		}
 		for _, a := range o.Answers {
 			if isFailure(a.Result) {
-				formatAnswer(&b, "unknown", o.Key.Kind, lowerNames(a))
+				formatAnswer(out, "unknown", o.Key.Kind, lowerNames(a))
 				unknown++
 			}
 		}
 	}
-	fmt.Fprintf(&b, "checked %s %d sets: %d findings, %d unknown answers\n",
-		f.Domain.Lower().String(), len(observations), findings, unknown)
-	return b.String(), findings == 0 && unknown == 0
+	domain := f.Domain.Lower().String()
+	out.add(fmt.Sprintf("checked %s %d sets: %d findings, %d unknown answers", domain, len(observations), findings, unknown),
+		struct {
+			Type     string `json:"type"`
+			Domain   string `json:"domain"`
+			Sets     int    `json:"sets"`
+			Findings int    `json:"findings"`
+			Unknown  int    `json:"unknown"`
+		}{"checked", domain, len(observations), findings, unknown})
+	return findings == 0 && unknown == 0
+}
+
+type findingJSON struct {
+	Type     string     `json:"type"`
+	Severity string     `json:"severity"`
+	Rule     string     `json:"rule"`
+	Kind     string     `json:"kind"`
+	Name     string     `json:"name"`
+	RType    string     `json:"rtype"`
+	Expected string     `json:"expected"`
+	Seen     []seenJSON `json:"seen"`
+}
+
+type seenJSON struct {
+	Address string `json:"address"`
+	Host    string `json:"host"`
+	Text    string `json:"text"`
 }
 
 // formatFinding writes a finding with its proof. Value holds one line for
 // each Seen answer, which decide builds only from Name.String and
 // expect.SetText.
-func formatFinding(b *strings.Builder, f decide.Finding) {
+func formatFinding(out *lines, f decide.Finding) {
 	k := f.Check
-	fmt.Fprintf(b, "finding %s %s %s %s %s\n", f.Severity, f.Rule, k.Kind, k.Name.Lower().String(), k.Type)
-	b.WriteString("  expected " + cmp.Or(f.Expected, "-") + "\n")
-	if f.Value == "" {
-		return
+	j := findingJSON{Type: "finding", Severity: f.Severity.String(), Rule: f.Rule.String(), Kind: k.Kind.String(),
+		Name: k.Name.Lower().String(), RType: k.Type.String(), Expected: f.Expected, Seen: []seenJSON{}}
+	for _, s := range f.Seen {
+		j.Seen = append(j.Seen, seenOf(s))
 	}
-	for _, line := range strings.Split(f.Value, "\n") {
-		b.WriteString("  seen " + line + "\n")
+	text := fmt.Sprintf("finding %s %s %s %s %s\n", f.Severity, f.Rule, k.Kind, j.Name, k.Type)
+	text += "  expected " + cmp.Or(f.Expected, "-")
+	if f.Value != "" {
+		for _, line := range strings.Split(f.Value, "\n") {
+			text += "\n  seen " + line
+		}
 	}
+	out.add(text, j)
+}
+
+// seenOf names the server of a proof as decide does in Value, with "" where
+// Value has "-".
+func seenOf(s decide.Seen) seenJSON {
+	j := seenJSON{Text: s.Text}
+	if s.Answer.Server.Addr.IsValid() {
+		j.Address = s.Answer.Server.Addr.String()
+	}
+	if s.Answer.Server.Name.LabelCount() > 0 {
+		j.Host = s.Answer.Server.Name.Lower().String()
+	}
+	return j
 }
 
 func isFailure(r obs.Result) bool {

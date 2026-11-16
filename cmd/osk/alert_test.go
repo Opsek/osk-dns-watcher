@@ -389,6 +389,8 @@ const slkChildArgs = "OSK_TEST_OSK_ARGS"
 func TestCheckStateSurvivesClosedOutputPipe(t *testing.T) {
 	if args := os.Getenv(slkChildArgs); args != "" {
 		os.Args = append([]string{"osk"}, strings.Split(args, "\n")...)
+		// The tests may run as root, which main refuses.
+		geteuid = func() int { return 1000 }
 		main()
 		return
 	}

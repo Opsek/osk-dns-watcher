@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,7 +17,8 @@ import (
 )
 
 // query runs "osk query": it sends one query and prints the answer much as
-// dig does, so the two can be compared line by line.
+// dig does, so the two can be compared line by line. With --json, each line
+// is a JSON object.
 func query(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("query", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -25,6 +27,7 @@ func query(args []string, stdout, stderr io.Writer) int {
 	cd := flags.Bool("cd", false, "set CD, checking disabled")
 	tcp := flags.Bool("tcp", false, "use TCP from the start")
 	timeout := flags.Duration("timeout", 5*time.Second, "time for the whole exchange")
+	asJSON := flags.Bool("json", false, "print JSON Lines")
 	if err := flags.Parse(args); err != nil {
 		return wrongUse(stderr, err.Error())
 	}
@@ -49,7 +52,9 @@ func query(args []string, stdout, stderr io.Writer) int {
 	case err != nil:
 		return fail(stderr, 1, "osk: "+err.Error()+"\n")
 	}
-	return output(stdout, stderr, format(r.Msg))
+	out := &lines{json: *asJSON}
+	format(out, r.Msg)
+	return output(stdout, stderr, out.String())
 }
 
 func wrongUse(stderr io.Writer, msg string) int {
@@ -87,10 +92,8 @@ func parseQuery(args []string) (dnswire.Query, netip.AddrPort, string) {
 // format prints the answer: the header, the flags and counts, the EDNS data,
 // then each section that has records. Text that comes from the network is
 // printed only through Record.String, strconv.Quote or as hexadecimal.
-func format(m *dnswire.Message) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, ";; ->>HEADER<<- opcode: %v, status: %v, id: %d\n", m.Opcode, m.Rcode, m.ID)
-	b.WriteString(";; flags:")
+func format(out *lines, m *dnswire.Message) {
+	flags := []string{}
 	for _, f := range []struct {
 		set  bool
 		name string
@@ -99,7 +102,7 @@ func format(m *dnswire.Message) string {
 		{m.RecursionAvailable, "ra"}, {m.AuthenticData, "ad"}, {m.CheckingDisabled, "cd"},
 	} {
 		if f.set {
-			b.WriteString(" " + f.name)
+			flags = append(flags, f.name)
 		}
 	}
 	// The counts are those of the wire, so the OPT and TSIG records count,
@@ -111,20 +114,25 @@ func format(m *dnswire.Message) string {
 	if m.HasTSIG() {
 		additional++
 	}
-	fmt.Fprintf(&b, "; QUERY: %d, ANSWER: %d, AUTHORITY: %d, ADDITIONAL: %d\n",
-		len(m.Question), len(m.Answer), len(m.Authority), additional)
-	if e := m.EDNS; e != nil {
-		flags := ""
-		if e.DO {
-			flags = " do"
-		}
-		fmt.Fprintf(&b, "; EDNS: version: %d, flags:%s; udp: %d\n", e.Version, flags, e.UDPSize)
-		if client, server, ok := e.Cookie(); ok {
-			fmt.Fprintf(&b, "; COOKIE: %x%x\n", client, server)
-		}
-		for _, x := range e.ExtendedErrors() {
-			fmt.Fprintf(&b, "; EDE: %d %s\n", x.InfoCode, strconv.Quote(x.ExtraText))
-		}
+	header := fmt.Sprintf(";; ->>HEADER<<- opcode: %v, status: %v, id: %d", m.Opcode, m.Rcode, m.ID)
+	out.add(header, struct {
+		Type   string   `json:"type"`
+		Opcode string   `json:"opcode"`
+		Status string   `json:"status"`
+		ID     int      `json:"id"`
+		Flags  []string `json:"flags"`
+	}{"header", fmt.Sprint(m.Opcode), fmt.Sprint(m.Rcode), int(m.ID), flags})
+	counts := fmt.Sprintf(";; flags:%s; QUERY: %d, ANSWER: %d, AUTHORITY: %d, ADDITIONAL: %d",
+		strings.Join(append([]string{""}, flags...), " "), len(m.Question), len(m.Answer), len(m.Authority), additional)
+	out.add(counts, struct {
+		Type       string `json:"type"`
+		Query      int    `json:"query"`
+		Answer     int    `json:"answer"`
+		Authority  int    `json:"authority"`
+		Additional int    `json:"additional"`
+	}{"counts", len(m.Question), len(m.Answer), len(m.Authority), additional})
+	if m.EDNS != nil {
+		formatEDNS(out, m.EDNS)
 	}
 	for _, s := range []struct {
 		name    string
@@ -133,10 +141,44 @@ func format(m *dnswire.Message) string {
 		if len(s.records) == 0 {
 			continue
 		}
-		b.WriteString(";; " + s.name + " SECTION:\n")
+		if !out.json {
+			out.add(";; "+s.name+" SECTION:", nil)
+		}
 		for _, r := range s.records {
-			b.WriteString(r.String() + "\n")
+			out.add(r.String(), struct {
+				Type    string `json:"type"`
+				Section string `json:"section"`
+				Text    string `json:"text"`
+			}{"record", strings.ToLower(s.name), r.String()})
 		}
 	}
-	return b.String()
+}
+
+func formatEDNS(out *lines, e *dnswire.EDNS) {
+	flags, words := []string{}, ""
+	if e.DO {
+		flags, words = []string{"do"}, " do"
+	}
+	cookie := ""
+	if client, server, ok := e.Cookie(); ok {
+		cookie = hex.EncodeToString(client) + hex.EncodeToString(server)
+	}
+	text := fmt.Sprintf("; EDNS: version: %d, flags:%s; udp: %d", e.Version, words, e.UDPSize)
+	if cookie != "" {
+		text += "\n; COOKIE: " + cookie
+	}
+	out.add(text, struct {
+		Type    string   `json:"type"`
+		Version int      `json:"version"`
+		Flags   []string `json:"flags"`
+		UDP     int      `json:"udp"`
+		Cookie  string   `json:"cookie"`
+	}{"edns", int(e.Version), flags, int(e.UDPSize), cookie})
+	for _, x := range e.ExtendedErrors() {
+		out.add(fmt.Sprintf("; EDE: %d %s", x.InfoCode, strconv.Quote(x.ExtraText)), struct {
+			Type string `json:"type"`
+			Code int    `json:"code"`
+			Text string `json:"text"`
+		}{"ede", int(x.InfoCode), x.ExtraText})
+	}
 }

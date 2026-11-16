@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Opsek/dns-monitoring/internal/alert"
@@ -21,7 +20,7 @@ import (
 // checkState runs check with --expect and --state: it prints what checkExpect
 // prints, then keeps the alerts of each check in the folder and makes one
 // pass of their notices to Slack.
-func checkState(o *observe.Observer, ex expectArgs, stdout, stderr io.Writer) int {
+func checkState(o *observe.Observer, ex expectArgs, asJSON bool, stdout, stderr io.Writer) int {
 	slack, msg := slackChannel(ex.minimum)
 	if msg != "" {
 		return checkWrongUse(stderr, msg)
@@ -34,7 +33,7 @@ func checkState(o *observe.Observer, ex expectArgs, stdout, stderr io.Writer) in
 	if err != nil {
 		return fail(stderr, 1, "osk: "+err.Error()+"\n")
 	}
-	code := runState(o, f, s, []deliver.Channel{slack}, stdout, stderr)
+	code := runState(o, f, s, []deliver.Channel{slack}, asJSON, stdout, stderr)
 	if err := s.Close(); err != nil {
 		return fail(stderr, 1, "osk: "+err.Error()+"\n")
 	}
@@ -65,23 +64,25 @@ var clock = time.Now
 // the store holds can change them. A failed write gives exit 1 only after the
 // alerts are stored and sent: the next run sees the same difference and
 // sends nothing, so an alert dropped here would never be told.
-func runState(o *observe.Observer, f *expect.File, s *store.Store, channels []deliver.Channel, stdout, stderr io.Writer) int {
+func runState(o *observe.Observer, f *expect.File, s *store.Store, channels []deliver.Channel, asJSON bool, stdout, stderr io.Writer) int {
 	observations := runChecks(o, expectKeys(f))
 	now := clock()
-	text, clean := formatFindings(f, observations, now)
-	code := output(stdout, stderr, text)
+	findings := &lines{json: asJSON}
+	clean := formatFindings(findings, f, observations, now)
+	code := output(stdout, stderr, findings.String())
 	for _, ob := range observations {
-		lines, err := storeAlerts(s, f, ob, channels, now)
-		if err != nil {
+		alerts := &lines{json: asJSON}
+		if err := storeAlerts(alerts, s, f, ob, channels, now); err != nil {
 			return fail(stderr, 1, "osk: "+err.Error()+"\n")
 		}
 		if code == 0 {
-			code = output(stdout, stderr, lines)
+			code = output(stdout, stderr, alerts.String())
 		}
 	}
-	lines, sent, err := deliverOnce(s, channels, now)
+	attempts := &lines{json: asJSON}
+	sent, err := deliverOnce(attempts, s, channels, now)
 	if code == 0 {
-		code = output(stdout, stderr, lines)
+		code = output(stdout, stderr, attempts.String())
 	}
 	switch {
 	case err != nil:
@@ -95,19 +96,21 @@ func runState(o *observe.Observer, f *expect.File, s *store.Store, channels []de
 // storeAlerts stores the events of one observation with their deliveries,
 // in one transaction, and gives a line for each. A clean observation is
 // stored too: it is the last clean check that later notices show.
-func storeAlerts(s *store.Store, f *expect.File, o obs.Observation, channels []deliver.Channel, now time.Time) (string, error) {
-	out, err := alertEvents(s, f, o, now)
+func storeAlerts(out *lines, s *store.Store, f *expect.File, o obs.Observation, channels []deliver.Channel, now time.Time) error {
+	events, err := alertEvents(s, f, o, now)
 	if err == nil {
-		err = s.Apply(o.Key, out.Clean, now, deliver.Writes(out.Events, channels))
+		err = s.Apply(o.Key, events.Clean, now, deliver.Writes(events.Events, channels))
 	}
 	if err != nil {
-		return "", err
+		return err
 	}
-	var b strings.Builder
-	for _, e := range out.Events {
-		b.WriteString("alert " + e.Label() + "\n")
+	for _, e := range events.Events {
+		out.add("alert "+e.Label(), struct {
+			Type  string `json:"type"`
+			Label string `json:"label"`
+		}{"alert", e.Label()})
 	}
-	return b.String(), nil
+	return nil
 }
 
 // alertEvents gives the alert events of one observation. decide is given the
@@ -134,12 +137,28 @@ func alertEvents(s *store.Store, f *expect.File, o obs.Observation, now time.Tim
 // that earlier runs left, and gives a line for each, and whether all were
 // sent. It takes the time of the rows just stored: a clock that stepped back
 // since would leave them undue.
-func deliverOnce(s *store.Store, channels []deliver.Channel, now time.Time) (lines string, sent bool, err error) {
+func deliverOnce(out *lines, s *store.Store, channels []deliver.Channel, now time.Time) (sent bool, err error) {
 	attempts, err := deliver.Pass(context.Background(), s, channels, now)
-	var b strings.Builder
 	for _, a := range attempts {
-		b.WriteString(a.Line() + "\n")
+		out.add(a.Line(), deliveryOf(a))
 	}
 	sent = !slices.ContainsFunc(attempts, func(a deliver.Attempt) bool { return a.Done.State != store.RowSent })
-	return b.String(), sent, err
+	return sent, err
+}
+
+type deliveryJSON struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+	State   string `json:"state"` // in the words of test-alert: sent, failed, given-up
+	Label   string `json:"label"`
+	Reason  string `json:"reason"`
+	Next    string `json:"next"` // the next try of a failed attempt
+}
+
+func deliveryOf(a deliver.Attempt) deliveryJSON {
+	j := deliveryJSON{Type: "delivery", Channel: a.Channel, State: a.Done.State.String(), Label: a.Row.Label, Reason: a.Done.Reason}
+	if a.Done.State == store.RowPending {
+		j.State, j.Next = "failed", a.Done.NextAt.UTC().Format(secondLayout)
+	}
+	return j
 }

@@ -1,0 +1,323 @@
+package schedule
+
+import (
+	"slices"
+	"time"
+
+	"github.com/Opsek/dns-monitoring/internal/decide"
+	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/dns-monitoring/internal/expect"
+	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+)
+
+// Schedule keeps what decides when each check runs next. The maps are keyed
+// by Key.String(), because an obs.Key cannot be a map key; no result is ever
+// built by ranging over a map, so it never depends on map order.
+type Schedule struct {
+	iv   Intervals
+	fast []dnswire.Name
+	plan []Check
+	keys []string // keys[i] is plan[i].Key.String(), kept because every call needs it
+
+	starts  map[string]time.Time // no entry: not started since New or the last Replace
+	running map[string]bool      // also a key that left the plan, until its Done
+	failing map[string]time.Time // start of the unbroken series of failed runs
+
+	serials     []sighting // one per address of the domain's servers
+	serialMoved bool       // the last serial run saw a move
+	moved       time.Time  // when the last move was seen
+	round       *round     // nil when no round is pending
+
+	held       []decide.Move // moves of ended rounds that wait for their report
+	lastReport time.Time     // when moves were last reported
+}
+
+// sighting is the serial that an address gave last, and when.
+type sighting struct {
+	server obs.Server
+	serial uint32
+	at     time.Time
+}
+
+// round is the work that a move of the serial starts: each zone check must
+// give a usable answer once after the move, before the move is judged.
+type round struct {
+	moves     []decide.Move   // one per address, in order of first sight
+	pending   map[string]bool // the zone checks still to run
+	explained bool            // a run of the round gave a notice of its own
+}
+
+// Report is what the schedule adds to an observation for decide.
+type Report struct {
+	Known        bool // o's key is in the plan; false: drop o
+	Tier         Tier
+	FailingSince time.Time     // for decide.Input
+	FailLimit    time.Duration // for decide.Input
+	Moves        []decide.Move // serial checks only: the servers whose serial moved in o
+}
+
+func New(f *expect.File, fast []dnswire.Name, iv Intervals) *Schedule {
+	s := &Schedule{
+		iv:      iv,
+		fast:    slices.Clone(fast),
+		starts:  map[string]time.Time{},
+		running: map[string]bool{},
+		failing: map[string]time.Time{},
+	}
+	s.setPlan(f)
+	return s
+}
+
+func (s *Schedule) setPlan(f *expect.File) {
+	s.plan = Plan(f, s.fast, s.iv)
+	s.keys = make([]string, len(s.plan))
+	for i, c := range s.plan {
+		s.keys[i] = c.Key.String()
+	}
+}
+
+func (s *Schedule) Checks() []Check { return slices.Clone(s.plan) }
+
+// Replace puts the checks of a changed file in force. Every check is due at
+// once, because a line may now expect something else; what the runs in
+// flight and the past runs showed is kept for the keys that stay.
+func (s *Schedule) Replace(f *expect.File) {
+	s.setPlan(f)
+	clear(s.starts)
+	if s.round == nil {
+		return
+	}
+	zone := s.zoneChecks()
+	for k := range s.round.pending {
+		if !zone[k] {
+			delete(s.round.pending, k)
+		}
+	}
+	// A round left with no pending check ends at the next Judged.
+}
+
+// dueTime is the time from which plan[i] may start again. A zone check that
+// started before the last move is due at the move, so that a changed record
+// is seen at once.
+func (s *Schedule) dueTime(i int) time.Time {
+	start, ok := s.starts[s.keys[i]]
+	switch {
+	case !ok:
+		return time.Time{}
+	case s.plan[i].Zone && s.moved.After(start):
+		return s.moved
+	}
+	return start.Add(s.plan[i].Interval)
+}
+
+// Due marks as running, with start now, and returns the checks due at now,
+// the earliest due first. It never starts a running check again, and never
+// lets more than MaxRunning run, so a start, a change of the file or a move
+// of a large zone queues instead of bursting.
+func (s *Schedule) Due(now time.Time) []Check {
+	var due []int
+	for i := range s.plan {
+		if !s.running[s.keys[i]] && !s.dueTime(i).After(now) {
+			due = append(due, i)
+		}
+	}
+	slices.SortStableFunc(due, func(a, b int) int { return s.dueTime(a).Compare(s.dueTime(b)) })
+	due = due[:min(len(due), MaxRunning-len(s.running))]
+	var checks []Check
+	for _, i := range due {
+		s.running[s.keys[i]] = true
+		s.starts[s.keys[i]] = now
+		checks = append(checks, s.plan[i])
+	}
+	return checks
+}
+
+// Next gives the earliest due time of a check that is not running. ok is
+// false when no check can start before a running one is Done.
+func (s *Schedule) Next() (next time.Time, ok bool) {
+	if len(s.running) >= MaxRunning {
+		return time.Time{}, false
+	}
+	for i := range s.plan {
+		if s.running[s.keys[i]] {
+			continue
+		}
+		if t := s.dueTime(i); !ok || t.Before(next) {
+			next, ok = t, true
+		}
+	}
+	return next, ok
+}
+
+// Done ends the run that gave o, seen at now.
+func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
+	k := o.Key.String()
+	// A key that left the plan still held a place among the running checks.
+	delete(s.running, k)
+	i := slices.Index(s.keys, k)
+	if i < 0 {
+		return Report{}
+	}
+	tier := s.plan[i].Tier
+	r := Report{Known: true, Tier: tier, FailingSince: s.failingSince(k, o), FailLimit: s.iv.FailLimit(tier)}
+	if o.Key.Kind == obs.KindSerial {
+		r.Moves = s.serialMoves(o)
+		s.serialMoved = len(r.Moves) > 0
+	}
+	if len(r.Moves) > 0 {
+		s.startRound(r.Moves, now)
+	}
+	return r
+}
+
+func (s *Schedule) failingSince(k string, o obs.Observation) time.Time {
+	if !decide.Failed(o) {
+		delete(s.failing, k)
+		return time.Time{}
+	}
+	since, ok := s.failing[k]
+	if !ok {
+		since = o.Start
+		s.failing[k] = since
+	}
+	return since
+}
+
+// serialMoves compares the serial of each address in o with the one it gave
+// before. An address that gave no serial keeps what it gave before, and the
+// first serial of an address is only remembered: there is nothing to compare
+// it with.
+func (s *Schedule) serialMoves(o obs.Observation) []decide.Move {
+	var moves []decide.Move
+	for _, a := range o.Answers {
+		serial, ok := soaSerial(a.Result)
+		if !ok {
+			continue
+		}
+		seen := sighting{a.Server, serial, a.Received}
+		i := slices.IndexFunc(s.serials, func(x sighting) bool { return x.server.Addr == a.Server.Addr })
+		if i < 0 {
+			s.serials = append(s.serials, seen)
+			continue
+		}
+		if last := s.serials[i]; last.serial != serial {
+			moves = append(moves, decide.Move{Server: a.Server, From: last.serial, To: serial, Until: last.at, Since: a.Received})
+		}
+		s.serials[i] = seen
+	}
+	return moves
+}
+
+func soaSerial(r obs.Result) (uint32, bool) {
+	set := obs.Match(r,
+		func(rs obs.Records) []dnswire.Record { return rs.Set },
+		func(obs.NoData) []dnswire.Record { return nil },
+		func(obs.NoName) []dnswire.Record { return nil },
+		func(obs.Failure) []dnswire.Record { return nil })
+	for _, rr := range set {
+		if soa, ok := rr.Data.(dnswire.SOA); ok {
+			return soa.Serial, true
+		}
+	}
+	return 0, false
+}
+
+// startRound makes every zone check pending again, also those that a running
+// round had already seen, because each move may have changed any record.
+func (s *Schedule) startRound(moves []decide.Move, now time.Time) {
+	s.moved = now
+	if s.round == nil {
+		s.round = &round{}
+	}
+	for _, m := range moves {
+		s.round.moves = merge(s.round.moves, m)
+	}
+	s.round.pending = s.zoneChecks()
+}
+
+// merge keeps one move per address, from the first serial to the last.
+func merge(moves []decide.Move, m decide.Move) []decide.Move {
+	i := slices.IndexFunc(moves, func(x decide.Move) bool { return x.Server.Addr == m.Server.Addr })
+	if i < 0 {
+		return append(moves, m)
+	}
+	moves[i].To, moves[i].Since = m.To, m.Since
+	return moves
+}
+
+func (s *Schedule) zoneChecks() map[string]bool {
+	zone := map[string]bool{}
+	for i, c := range s.plan {
+		if c.Zone {
+			zone[s.keys[i]] = true
+		}
+	}
+	return zone
+}
+
+// Judged takes what decide made of o. ok with moves: rounds ended and none
+// of their runs gave a notice of its own, so the caller reports the moves. ok
+// without moves: the serial has been quiet for a while, so the caller ends
+// the notice of earlier moves.
+func (s *Schedule) Judged(o obs.Observation, changes []decide.Change, now time.Time) (moves []decide.Move, ok bool) {
+	k := o.Key.String()
+	i := slices.Index(s.keys, k)
+	if i < 0 {
+		return nil, false
+	}
+	if s.round != nil {
+		return s.judgeRound(k, s.plan[i].Tier, o, changes, now)
+	}
+	// A run with no usable answer is no evidence that the serial stayed.
+	if o.Key.Kind != obs.KindSerial || decide.Failed(o) || s.serialMoved {
+		return nil, false
+	}
+	// Moves held back are told before the notice may end.
+	if len(s.held) > 0 {
+		return s.report(now)
+	}
+	return nil, s.lastReport.IsZero() || now.Sub(s.lastReport) >= s.iv.Other
+}
+
+// judgeRound counts o for the round when it started after the last move and
+// gave a usable answer: a failed run is no evidence that nothing differs.
+func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, changes []decide.Change, now time.Time) ([]decide.Move, bool) {
+	r := s.round
+	if r.pending[k] && !o.Start.Before(s.moved) && !decide.Failed(o) {
+		delete(r.pending, k)
+		r.explained = r.explained || slices.ContainsFunc(changes, ownNotice)
+	}
+	// A zone check that has failed past its limit has its check-failing
+	// alert; waiting for its usable answer would mute every later move.
+	if since, failing := s.failing[k]; r.pending[k] && failing && now.Sub(since) >= s.iv.FailLimit(tier) {
+		delete(r.pending, k)
+	}
+	if len(r.pending) > 0 {
+		return nil, false
+	}
+	s.round = nil
+	if r.explained {
+		return nil, false
+	}
+	for _, m := range r.moves {
+		s.held = merge(s.held, m)
+	}
+	return s.report(now)
+}
+
+// report gives the held moves at most once for each other-interval: a serial
+// that moves at every run would otherwise send a notice at every run.
+func (s *Schedule) report(now time.Time) ([]decide.Move, bool) {
+	if !s.lastReport.IsZero() && now.Sub(s.lastReport) < s.iv.Other {
+		return nil, false
+	}
+	moves := s.held
+	s.held, s.lastReport = nil, now
+	return moves, true
+}
+
+// ownNotice reports a change that tells the operator about the zone anyway,
+// also when it ends an alert because a change was put back.
+func ownNotice(c decide.Change) bool {
+	return c.Finding.Rule == decide.RuleRecordSet || c.Finding.Rule == decide.RuleZone
+}

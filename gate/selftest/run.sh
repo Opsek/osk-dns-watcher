@@ -1095,6 +1095,19 @@ func zzFault() string {
 EOF
 }
 
+# The schedule takes every time from its caller.
+pure_schedule_clock() {
+	put internal/schedule/zzfault.go <<'EOF'
+package schedule
+
+import "time"
+
+func zzFault() time.Time {
+	return time.Now()
+}
+EOF
+}
+
 pure_test_file() {
 	put internal/decide/zzfault_test.go <<'EOF'
 package decide
@@ -1531,6 +1544,7 @@ check pure-sends-query              pure_sends_query           archcheck pure \
 	"internal/expect/zzfault.go:5 uses $MOD/internal/dnswire.Exchange"
 check pure-prints                   pure_prints                archcheck pure "$P:6 uses fmt.Println"
 check pure-alert-imports-os         pure_alert_imports_os      archcheck pure "internal/alert/zzfault.go:3 imports os"
+check pure-schedule-clock           pure_schedule_clock        archcheck pure "internal/schedule/zzfault.go:6 uses time.Now"
 check pure-test-file                pure_test_file             archcheck pass
 
 check phase-clean-static            none                       static pass

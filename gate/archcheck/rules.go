@@ -312,22 +312,23 @@ func writesOutside(f goFile) []string {
 	return faults
 }
 
-// pure keeps the judgement of the tool repeatable: the packages under
-// internal/decide, internal/expect and internal/alert read no clock, network,
-// file, store or randomness. Import rules cannot say this, because these
-// packages reach net, os and crypto/rand through internal/dnswire, and they
-// need package time for its types. So each direct import must be on a short
-// list, and the names of an allowed package that read the clock, the time
-// zone of the machine (from TZ and the disk), the network or standard input
-// and output are banned. The rule has no type information: a method value
-// such as t.Local, or a function handed in from outside, escapes it.
+// pure keeps the judgement and the schedule of the tool repeatable: the
+// packages under internal/decide, internal/expect, internal/alert and
+// internal/schedule read no clock, network, file, store or randomness. Import
+// rules cannot say this, because these packages reach net, os and crypto/rand
+// through internal/dnswire, and they need package time for its types. So each
+// direct import must be on a short list, and the names of an allowed package
+// that read the clock, the time zone of the machine (from TZ and the disk),
+// the network or standard input and output are banned. The rule has no type
+// information: a method value such as t.Local, or a function handed in from
+// outside, escapes it.
 func pure(t tree) []string {
 	dnswire := path.Join(t.module, dnswireDir)
 	allowed := []string{"bytes", "cmp", "errors", "fmt", "maps", "net/netip", "slices", "strconv", "strings",
 		"time", dnswire, path.Join(t.module, "internal/observe/obs")}
 	var scope []*pkg
 	for _, p := range t.pkgs {
-		if under(p.dir, "internal/decide") || under(p.dir, "internal/expect") || under(p.dir, "internal/alert") {
+		if under(p.dir, "internal/decide") || under(p.dir, "internal/expect") || under(p.dir, "internal/alert") || under(p.dir, "internal/schedule") {
 			scope = append(scope, p)
 			allowed = append(allowed, p.path)
 		}

@@ -124,6 +124,7 @@ func TestRules(t *testing.T) {
 			"internal/decide/decide.go:13 uses fmt.Println",
 			"internal/decide/decide.go:14 uses time.Now",
 			"internal/expect/expect.go:14 uses osk/internal/dnswire.Exchange", // through an alias
+			"internal/schedule/clock.go:7 uses time.Now",
 		}},
 	}
 	for _, c := range cases {

@@ -71,7 +71,7 @@ func TestStateChangeAllOrNothing(t *testing.T) {
 	e := out.Events[0]
 	writes := []Write{{Event: e, Deliveries: []Delivery{{Channel: "slack", Label: e.Label(), Body: []byte("{}")}}}}
 
-	s := stoOpen(t, t.TempDir())
+	s := stoOpen(t, stoDir(t))
 	stoExec(t, s, "CREATE TRIGGER sto_fault BEFORE INSERT ON delivery BEGIN SELECT RAISE(ABORT, 'planted fault'); END")
 	err = s.Apply(key, out.Clean, now, writes)
 	if err == nil || !strings.HasPrefix(err.Error(), "store: ") || !strings.Contains(err.Error(), "planted fault") {

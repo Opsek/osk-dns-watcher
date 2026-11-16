@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -174,7 +175,9 @@ func slkLab(t *testing.T) (n, state string) {
 	n = expLab(t)
 	t.Setenv("OSK_SLACK_URL", slkLabURL)
 	expCtl(t, "hooks", "clear")
-	return n, t.TempDir()
+	// The store makes the folder for its owner alone; it refuses one that
+	// other users may enter, as a folder of the tests may be.
+	return n, filepath.Join(t.TempDir(), "state")
 }
 
 // A changed delegation gives one Slack message with its proof; a run that

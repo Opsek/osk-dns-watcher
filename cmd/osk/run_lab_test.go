@@ -23,8 +23,12 @@ const (
 )
 
 // runChildEnv makes the test binary act as osk, with the arguments in it,
-// one on each line.
-const runChildEnv = "OSK_RUN_CHILD"
+// one on each line; runStartEnv set to 1 makes it go through the check for
+// root, as main does.
+const (
+	runChildEnv = "OSK_RUN_CHILD"
+	runStartEnv = "OSK_RUN_START"
+)
 
 // The deadline of a check is three quarters of its interval.
 const runSerialDeadline = 11250 * time.Millisecond
@@ -35,6 +39,9 @@ func TestRunChild(t *testing.T) {
 	args := os.Getenv(runChildEnv)
 	if args == "" {
 		return
+	}
+	if os.Getenv(runStartEnv) == "1" {
+		os.Exit(start(strings.Split(args, "\n"), os.Stdout, os.Stderr))
 	}
 	os.Exit(run(strings.Split(args, "\n"), os.Stdout, os.Stderr))
 }
@@ -99,10 +106,17 @@ func runLab(t *testing.T) (n, state string) {
 	return n, filepath.Join(t.TempDir(), "state")
 }
 
-// runLabArgs gives the arguments of a service that starts from the lab root
-// and may ask every lab address.
-func runLabArgs(n, file, state string, args ...string) []string {
-	return slices.Concat([]string{"--root-server", n + "2", "--extra-range", n + "0/24"}, args, []string{"--expect", file, "--state", state})
+// runLabCfg is the config of a service of corp.test. with file that starts
+// from the lab root, may ask every lab address and sends to Slack only.
+func runLabCfg(n, file, state string, iv map[string]string, fast ...string) runCfg {
+	return runCfg{State: state, Domains: []runCfgDomain{{Name: "corp.test.", Expect: file, Fast: fast}}, Intervals: iv,
+		Slack:   &runCfgSlack{URL: runSecret{Env: "OSK_SLACK_URL"}},
+		Network: &runCfgNet{RootServers: []string{n + "2"}, ExtraRanges: []string{n + "0/24"}}}
+}
+
+func runLabArgs(t *testing.T, n, file, state string, iv map[string]string, fast ...string) []string {
+	t.Helper()
+	return runConfig(t, runLabCfg(n, file, state, iv, fast...))
 }
 
 func runRecords(name, typ string) string {
@@ -163,13 +177,54 @@ func runHooks(t *testing.T) []runHook {
 	return hooks
 }
 
+// runNotice reports a message that belongs to no alert: a test, a down
+// time or a change of the expectations.
+func runNotice(text string) bool {
+	return strings.HasPrefix(text, ":test_tube: ") || strings.HasPrefix(text, ":warning: DOWN: ") ||
+		strings.HasPrefix(text, ":memo: CHANGED: ")
+}
+
+// runHookCount checks the number of Slack messages of alerts.
 func runHookCount(t *testing.T, what string, want int) []runHook {
 	t.Helper()
-	hooks := runHooks(t)
-	if len(hooks) != want {
-		t.Fatalf("%s: the receiver holds %d requests, want %d", what, len(hooks), want)
+	var alerts []runHook
+	for _, h := range runHooks(t) {
+		if !runNotice(h.text) {
+			alerts = append(alerts, h)
+		}
 	}
-	return hooks
+	if len(alerts) != want {
+		t.Fatalf("%s: the receiver holds %d messages of alerts, want %d", what, len(alerts), want)
+	}
+	return alerts
+}
+
+var runDownHeadline = regexp.MustCompile(`^:warning: DOWN: osk did not run for (\S+)$`)
+
+// runDownHooks checks that the receiver holds want down messages, and gives
+// the time down that each tells.
+func runDownHooks(t *testing.T, what string, want int) []time.Duration {
+	t.Helper()
+	var downs []time.Duration
+	for _, h := range runHooks(t) {
+		if !strings.HasPrefix(h.text, ":warning: DOWN: ") {
+			continue
+		}
+		m := runDownHeadline.FindStringSubmatch(strings.Split(h.text, "\n")[0])
+		if m == nil {
+			t.Errorf("%s: the down message %q does not start with the time down", what, h.text)
+			continue
+		}
+		d, err := time.ParseDuration(m[1])
+		if err != nil {
+			t.Errorf("%s: the down message %q does not start with the time down", what, h.text)
+		}
+		downs = append(downs, d)
+	}
+	if len(downs) != want {
+		t.Errorf("%s: the receiver holds %d down messages, want %d", what, len(downs), want)
+	}
+	return downs
 }
 
 func runNoAlert(t *testing.T, lines []runLine) {
@@ -190,7 +245,7 @@ func runSameHead(t *testing.T, lines []runLine, want []string) {
 
 func TestParentCheckedEveryInterval(t *testing.T) {
 	n, state := runLab(t)
-	svc := runStart(t, runLabArgs(n, slkLabFile(t), state, runIntervals("1h", "5s", "1h", "1h")...)...)
+	svc := runStart(t, runLabArgs(t, n, slkLabFile(t), state, runIntervals("1h", "5s", "1h", "1h"))...)
 	runs, _ := runFor(t, svc, runDelegationKey, 12*time.Second)
 	runCount(t, runs, "parent", 3, runDelegationKey, runDSKey)
 	runCount(t, runs, "serial", 1, runSerialKey)
@@ -201,16 +256,15 @@ func TestParentCheckedEveryInterval(t *testing.T) {
 	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
 }
 
-// The fixed fast set at the domain, the ACME challenge name and the names of
-// --fast run every --fast-interval; a --fast name that owns no line is
-// reported at the start.
+// The fixed fast set at the domain, the ACME challenge name and the fast
+// names of the config run every fast interval; a fast name that owns no
+// line is reported at the start.
 func TestFastNamesEveryInterval(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "corp.test. A "+n+"80", "corp.test. AAAA fd53:0:0:"+os.Getenv("LAB_ID")+"::80",
 		"corp.test. MX 10 mail.corp.test.", `corp.test. CAA 0 issue "ca.test"`, `corp.test. TXT "v=spf1 mx -all"`,
 		"_acme-challenge.corp.test. TXT none", "www.corp.test. A "+n+"81", "mail.corp.test. A "+n+"82")
-	svc := runStart(t, runLabArgs(n, file, state, slices.Concat(runIntervals("1h", "1h", "5s", "1h"),
-		[]string{"--fast", "mail.corp.test.", "--fast", "nothere.corp.test."})...)...)
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("1h", "1h", "5s", "1h"), "mail.corp.test.", "nothere.corp.test.")...)
 	fast := []string{runRecords("corp.test.", "A"), runRecords("corp.test.", "AAAA"), runRecords("corp.test.", "MX"),
 		runRecords("corp.test.", "CAA"), runRecords("_acme-challenge.corp.test.", "TXT"), runRecords("mail.corp.test.", "A")}
 	runs, lines := runFor(t, svc, fast[0], 12*time.Second)
@@ -228,7 +282,7 @@ func TestOtherNamesEveryInterval(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "www.corp.test. A "+n+"81", "mail.corp.test. A "+n+"82", "cdn.corp.test. CNAME edge.dnshost.test.",
 		`_dmarc.corp.test. TXT "v=DMARC1; p=reject"`)
-	svc := runStart(t, runLabArgs(n, file, state, runIntervals("1h", "1h", "1h", "8s")...)...)
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("1h", "1h", "1h", "8s"))...)
 	other := []string{runRecords("corp.test.", "NS"), runRecords("_dmarc.corp.test.", "TXT"), runRecords("cdn.corp.test.", "CNAME"),
 		runRecords("mail.corp.test.", "A"), runRecords("www.corp.test.", "A")}
 	runs, _ := runFor(t, svc, other[0], 18*time.Second)
@@ -240,24 +294,29 @@ func TestOtherNamesEveryInterval(t *testing.T) {
 	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
 }
 
-// Each interval is refused below 5 s and above 24 h, before anything is
-// opened or sent; at the floor itself, every tier runs every 5 s.
+// Each interval is refused below 5 s and above 24 h, as a problem of the
+// config, before anything is opened or sent; at the floor itself, every
+// tier runs every 5 s.
 func TestIntervalsSetWithFloor(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "corp.test. A "+n+"80", "www.corp.test. A "+n+"81")
 	for _, tier := range runTiers {
 		for _, c := range []struct{ value, msg string }{{"4s", "4s is below the floor of 5s"}, {"25h", "25h0m0s is above 24h0m0s"}} {
-			code, out, errOut := runRefused(t, runLabArgs(n, file, state, "--"+tier+"-interval", c.value)...)
-			if want := "osk run: --" + tier + "-interval " + c.msg + "\n" + usage; code != 2 || out != "" || errOut != want {
-				t.Errorf("--%s-interval %s: exit code %d, output %q, errors:\n%s\nwant 2, nothing and:\n%s",
+			text := runCfgText(t, runLabCfg(n, file, state, map[string]string{tier: c.value}))
+			path := runConfigText(t, text)
+			code, out, errOut := runRefused(t, "--config", path)
+			want := runProblemLines(t, path, text, runCfgProblem{`"` + tier + `": "` + c.value + `"`, "intervals." + tier, c.msg})
+			if code != 1 || out != "" || errOut != want {
+				t.Errorf("intervals.%s %s: exit code %d, output %q, errors:\n%s\nwant 1, nothing and:\n%s",
 					tier, c.value, code, runShow(out), runShow(errOut), want)
 			}
 		}
 	}
 	slkNotThere(t, state)
 	runHookCount(t, "after the refusals", 0)
+	runDownHooks(t, "after the refusals", 0)
 
-	svc := runStart(t, runLabArgs(n, file, state, runIntervals("5s", "5s", "5s", "5s")...)...)
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("5s", "5s", "5s", "5s"))...)
 	runs, _ := runFor(t, svc, runSerialKey, 11*time.Second)
 	runCount(t, runs, "serial", 3, runSerialKey)
 	runCount(t, runs, "parent", 3, runDelegationKey, runDSKey)
@@ -277,7 +336,7 @@ func TestSerialMoveStartsZoneChecks(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "www.corp.test. A "+n+"81", "mail.corp.test. A "+n+"82", "edge.dnshost.test. A "+n+"83")
 	begin := time.Now()
-	svc := runStart(t, runLabArgs(n, file, state, runIntervals("", "1h", "1h", "1h")...)...)
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("", "1h", "1h", "1h"))...)
 	ns, www, mail, edge := runRecords("corp.test.", "NS"), runRecords("www.corp.test.", "A"), runRecords("mail.corp.test.", "A"),
 		runRecords("edge.dnshost.test.", "A")
 	zone := []string{ns, www, mail}
@@ -394,7 +453,7 @@ func TestZoneChangedNotice(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "www.corp.test. A "+n+"81")
 	begin := time.Now()
-	svc := runStart(t, runLabArgs(n, file, state, runIntervals("5s", "1h", "1h", "10s")...)...)
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("5s", "1h", "1h", "10s"))...)
 	www := runRecords("www.corp.test.", "A")
 	for _, k := range []string{runSerialKey, runDelegationKey, runDSKey, runRecords("corp.test.", "NS"), www} {
 		svc.wait(t, "the first run of "+k, 0, begin.Add(10*time.Second), runRunOf(k))
@@ -471,7 +530,7 @@ func TestFailingCheckReported(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "corp.test. A "+n+"80", "www.corp.test. A "+n+"81")
 	begin := time.Now()
-	svc := runStart(t, runLabArgs(n, file, state, runIntervals("5s", "1h", "5s", "1h")...)...)
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("5s", "1h", "5s", "1h"))...)
 	apex := runRecords("corp.test.", "A")
 	for _, k := range []string{runSerialKey, runDelegationKey, runDSKey, runRecords("corp.test.", "NS"), apex, runRecords("www.corp.test.", "A")} {
 		l, _ := svc.wait(t, "the first run of "+k, 0, begin.Add(10*time.Second), runRunOf(k))
@@ -543,10 +602,10 @@ func TestFailingCheckReported(t *testing.T) {
 }
 
 // A second service on a folder in use is refused; once the first stopped,
-// another starts there and stops cleanly on SIGINT.
+// another starts there, sends one down message, and stops cleanly on SIGINT.
 func TestOneServicePerStateFolder(t *testing.T) {
 	n, state := runLab(t)
-	args := runLabArgs(n, slkLabFile(t), state, runIntervals("1h", "1h", "1h", "1h")...)
+	args := runLabArgs(t, n, slkLabFile(t), state, runIntervals("1h", "1h", "1h", "1h"))
 	first := runStart(t, args...)
 	first.wait(t, "the start line", 0, time.Now().Add(5*time.Second), runPrefix("start "))
 	second, _ := runChild(t, args...)
@@ -560,7 +619,9 @@ func TestOneServicePerStateFolder(t *testing.T) {
 
 	third, p := runChild(t, args...)
 	third.wait(t, "the start line", 0, time.Now().Add(10*time.Second), runPrefix("start corp.test. "))
+	third.wait(t, "the down message", 0, time.Now().Add(5*time.Second), runIs("delivery slack sent notice down -"))
 	runSignalStop(t, third, p, os.Interrupt)
+	runDownHooks(t, "after the restart", 1)
 	runNoSecret(t, state, first.out.String(), second.out.String(), second.errOut.String(), third.out.String(), third.errOut.String())
 }
 
@@ -568,17 +629,18 @@ func TestOneServicePerStateFolder(t *testing.T) {
 // SIGINT does.
 func TestSIGTERMStopsTheServiceCleanly(t *testing.T) {
 	n, state := runLab(t)
-	child, p := runChild(t, runLabArgs(n, slkLabFile(t), state, runIntervals("1h", "1h", "1h", "1h")...)...)
+	child, p := runChild(t, runLabArgs(t, n, slkLabFile(t), state, runIntervals("1h", "1h", "1h", "1h"))...)
 	child.wait(t, "the first run", 0, time.Now().Add(10*time.Second), runRunOf(runDelegationKey))
 	runSignalStop(t, child, p, syscall.SIGTERM)
 	runNoSecret(t, state, child.out.String(), child.errOut.String())
 }
 
-// A notice whose first send failed when the service was killed is sent once
-// after the restart, and the difference that stands opens nothing new.
+// A message whose first send failed when the service was killed is sent
+// once after the restart, beside one down message, and the difference that
+// stands opens nothing new.
 func TestRestartSendsNothingTwice(t *testing.T) {
 	n, state := runLab(t)
-	args := runLabArgs(n, slkLabFile(t), state, runIntervals("1h", "5s", "1h", "1h")...)
+	args := runLabArgs(t, n, slkLabFile(t), state, runIntervals("1h", "5s", "1h", "1h"))
 	expCtl(t, "delegate", "corp.test.", "ns1.dnshost.test.", "ns2.dnshost.test.")
 	expCtl(t, "hooks", "reply", "503", "1")
 	const label = "open critical nameservers delegation corp.test. NS"
@@ -596,6 +658,7 @@ func TestRestartSendsNothingTwice(t *testing.T) {
 	begin := time.Now()
 	svc := runStart(t, args...)
 	svc.wait(t, "the send of the kept row", 0, begin.Add(15*time.Second), runIs("delivery slack sent "+label))
+	svc.wait(t, "the down message", 0, begin.Add(15*time.Second), runIs("delivery slack sent notice down -"))
 	time.Sleep(time.Until(begin.Add(10 * time.Second)))
 	lines := svc.out.all()
 	_, down := runHead(t, lines)
@@ -618,6 +681,9 @@ func TestRestartSendsNothingTwice(t *testing.T) {
 	open := slkNameServersOpen(n)
 	open[7] = ":clock3: First seen <time> / Last OK: no clean check recorded"
 	slkSameText(t, hooks[1].text, open, slkRun{start: childStart, end: opened.at})
+	if downs := runDownHooks(t, "after the restart", 1); len(downs) == 1 && downs[0] < 2*time.Second {
+		t.Errorf("the down message tells %v, want at least the 2s that the service was down", downs[0])
+	}
 
 	back := time.Now()
 	expCtl(t, "delegate", "corp.test.", "ns1.corp.test.", "ns2.corp.test.")
@@ -627,6 +693,7 @@ func TestRestartSendsNothingTwice(t *testing.T) {
 	lines = svc.stop(t)
 	hooks = runHookCount(t, "after the resolve", 3)
 	slkSameText(t, hooks[2].text, slkNameServersResolved, slkRun{start: childStart, end: opened.at}, slkRun{start: back, end: resolved.at})
+	runDownHooks(t, "after the resolve", 1)
 	sent := 0
 	for _, l := range lines {
 		if l.text == "delivery slack sent "+label {
@@ -639,11 +706,11 @@ func TestRestartSendsNothingTwice(t *testing.T) {
 	runNoSecret(t, state, child.out.String(), child.errOut.String(), svc.out.String(), svc.errOut.String())
 }
 
-// The service stores a beat every 10 s, so after a crash the down line
-// starts at most 10 s before the crash.
+// The service stores a beat every 10 s, so after a crash the down line and
+// the down message start at most 10 s before the crash.
 func TestDownTimeAfterCrashIsAtMostTenSecondsEarly(t *testing.T) {
 	n, state := runLab(t)
-	args := runLabArgs(n, slkLabFile(t), state, runIntervals("1h", "1h", "1h", "1h")...)
+	args := runLabArgs(t, n, slkLabFile(t), state, runIntervals("1h", "1h", "1h", "1h"))
 	child, p := runChild(t, args...)
 	start, _ := child.wait(t, "the start line", 0, time.Now().Add(10*time.Second), runPrefix("start "))
 	time.Sleep(time.Until(start.at.Add(12 * time.Second)))
@@ -653,8 +720,10 @@ func TestDownTimeAfterCrashIsAtMostTenSecondsEarly(t *testing.T) {
 	}
 	child.end(t, 5*time.Second)
 
+	restarted := time.Now()
 	svc := runStart(t, args...)
 	svc.wait(t, "the first run", 0, time.Now().Add(10*time.Second), runRunOf(runDelegationKey))
+	svc.wait(t, "the down message", 0, time.Now().Add(5*time.Second), runIs("delivery slack sent notice down -"))
 	lines := svc.stop(t)
 	_, down := runHead(t, lines)
 	if down.text == "" {
@@ -662,6 +731,11 @@ func TestDownTimeAfterCrashIsAtMostTenSecondsEarly(t *testing.T) {
 	}
 	since, _ := runDown(t, down.text)
 	slkWithin(t, "the last beat before the kill", since, killed.Add(-11*time.Second), killed)
+	if downs := runDownHooks(t, "after the restart", 1); len(downs) == 1 {
+		if gap := restarted.Sub(killed); downs[0] < gap.Truncate(time.Second) || downs[0] > gap+11*time.Second {
+			t.Errorf("the down message tells %v, want %v to %v", downs[0], gap.Truncate(time.Second), gap+11*time.Second)
+		}
+	}
 	runNoSecret(t, state, child.out.String(), child.errOut.String(), svc.out.String(), svc.errOut.String())
 }
 
@@ -671,7 +745,7 @@ func TestChecksKeepRunningWhileASlackSendHangs(t *testing.T) {
 	n, state := runLab(t)
 	expCtl(t, "delegate", "corp.test.", "ns1.dnshost.test.", "ns2.dnshost.test.")
 	expCtl(t, "hooks", "reply", "200", "1", "--delay", "8")
-	svc := runStart(t, runLabArgs(n, slkLabFile(t), state, runIntervals("1h", "5s", "1h", "1h")...)...)
+	svc := runStart(t, runLabArgs(t, n, slkLabFile(t), state, runIntervals("1h", "5s", "1h", "1h"))...)
 	const label = "open critical nameservers delegation corp.test. NS"
 	opened, _ := svc.wait(t, "the alert", 0, time.Now().Add(10*time.Second), runIs("alert "+label))
 	sent, _ := svc.wait(t, "the slow send", 0, opened.at.Add(12*time.Second), runIs("delivery slack sent "+label))

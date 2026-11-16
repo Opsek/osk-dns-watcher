@@ -189,6 +189,9 @@ func (f *dlvFake) MinSeverity() decide.Severity { return f.min }
 func (f *dlvFake) Message(e alert.Event) []byte {
 	return []byte(f.name + " " + e.Alert.Check.Name.String())
 }
+func (f *dlvFake) Notice(n store.Notice) []byte {
+	return []byte(f.name + " notice " + string(n.Kind) + " " + n.Domain)
+}
 func (f *dlvFake) Send(_ context.Context, body []byte) deliver.Outcome {
 	f.sent = append(f.sent, string(body))
 	if o, ok := f.answers[string(body)]; ok {

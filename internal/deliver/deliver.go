@@ -1,10 +1,12 @@
-// Package deliver sends the notices of alert events to channels such as
-// Slack. Each notice is a delivery row of the store. A pass tries each due
-// row once and records the outcome, so the rows of a channel that fails wait
-// for a later pass without holding up any other row or channel.
+// Package deliver sends alert events, and notices that belong to no alert, to
+// channels such as Slack or a webhook. Each message is a delivery row of the
+// store. A pass tries each due row once and records the outcome, so the rows
+// of a channel that fails wait for a later pass without holding up any other
+// row or channel.
 package deliver
 
 import (
+	"cmp"
 	"context"
 	"regexp"
 	"slices"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/Opsek/dns-monitoring/internal/alert"
 	"github.com/Opsek/dns-monitoring/internal/decide"
+	"github.com/Opsek/dns-monitoring/internal/httpclient"
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
@@ -36,14 +39,15 @@ func Delay(n int) time.Duration {
 type Outcome struct {
 	Status     int           // HTTP status; 0 when no answer came
 	RetryAfter time.Duration // httpclient.Response.RetryAfter
-	Body       []byte        // the error word of the answer, if any, that the URL does not hold
+	Body       []byte        // the answer when it is one of Slack's error words; else nil
 	Err        string        // the httpclient error text when Status is 0
 }
 
 type Channel interface {
 	Name() string // unique among the channels; stored in each row
 	MinSeverity() decide.Severity
-	Message(e alert.Event) []byte // the body of one notice; pure
+	Message(e alert.Event) []byte // the body of one event; pure
+	Notice(n store.Notice) []byte // the body of a notice; pure
 	Send(ctx context.Context, body []byte) Outcome
 }
 
@@ -64,6 +68,17 @@ func Writes(events []alert.Event, channels []Channel) []store.Write {
 		writes = append(writes, w)
 	}
 	return writes
+}
+
+// NoticeWrites gives one delivery of n to every channel, in order, whatever
+// its minimum: a test must reach each channel, and the other notices are rare.
+func NoticeWrites(n store.Notice, channels []Channel) []store.Delivery {
+	label := "notice " + string(n.Kind) + " " + cmp.Or(n.Domain, "-")
+	var deliveries []store.Delivery
+	for _, c := range channels {
+		deliveries = append(deliveries, store.Delivery{Channel: c.Name(), Label: label, Body: c.Notice(n)})
+	}
+	return deliveries
 }
 
 // Next gives the state of row r after one attempt with outcome o. A 3xx or a
@@ -114,6 +129,20 @@ func errorWord(body []byte) string {
 		return ""
 	}
 	return w
+}
+
+// outcome keeps of the answer's body only a word of words that is the whole
+// body, without one LF at its end. A receiver may echo a URL or a key in any
+// form, padded or cut, so no other text of an answer is kept.
+func outcome(r httpclient.Response, err error, words []string) Outcome {
+	if err != nil {
+		return Outcome{Err: err.Error()}
+	}
+	var word []byte
+	if w := strings.TrimSuffix(string(r.Body), "\n"); slices.Contains(words, w) {
+		word = []byte(w)
+	}
+	return Outcome{Status: r.Status, RetryAfter: r.RetryAfter, Body: word}
 }
 
 // Attempt is one try of one row.

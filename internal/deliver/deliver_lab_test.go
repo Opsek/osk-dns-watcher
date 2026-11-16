@@ -20,6 +20,7 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/httpclient"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
 // dlvLab is the start of every lab address, "10.53.<LAB_ID>.".
@@ -103,6 +104,7 @@ type dlvDead struct{ c *httpclient.Client }
 func (dlvDead) Name() string                 { return "dead" }
 func (dlvDead) MinSeverity() decide.Severity { return decide.SeverityLow }
 func (dlvDead) Message(e alert.Event) []byte { return deliver.SlackMessage(e) }
+func (dlvDead) Notice(n store.Notice) []byte { return []byte(deliver.NoticeText(n)) }
 func (d dlvDead) Send(ctx context.Context, body []byte) deliver.Outcome {
 	r, err := d.c.Post(ctx, "https://hooks.lab.test:444/dead", "application/json", body)
 	if err != nil {

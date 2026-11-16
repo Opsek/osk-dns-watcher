@@ -14,18 +14,31 @@ import (
 
 // Slack posts notices to a Slack incoming webhook.
 type Slack struct {
-	client *httpclient.Client
-	url    string // the webhook's secret is in its path: it goes only into the request
-	min    decide.Severity
+	min decide.Severity
+	// post alone holds the URL, whose path is the webhook's secret. fmt
+	// prints a func as an address, so no verb, and no print of a value that
+	// holds a Slack, can show it.
+	post func(ctx context.Context, body []byte) Outcome
 }
 
+// slackWords are the error words of Slack's incoming webhooks. An answer
+// reaches a reason only when it is one of them, so that no receiver can put
+// a secret into a log line, the state or the output of status and watch.
+var slackWords = []string{"invalid_payload", "user_not_found", "channel_not_found", "channel_is_archived",
+	"action_prohibited", "posting_to_general_channel_denied", "too_many_attachments", "no_service",
+	"no_service_id", "no_team", "team_disabled", "invalid_token", "no_text", "no_active_hooks"}
+
 func NewSlack(c *httpclient.Client, url string, min decide.Severity) *Slack {
-	return &Slack{client: c, url: url, min: min}
+	post := func(ctx context.Context, body []byte) Outcome {
+		r, err := c.Post(ctx, url, "application/json", body)
+		return outcome(r, err, slackWords)
+	}
+	return &Slack{min: min, post: post}
 }
 
 func (s *Slack) Name() string { return "slack" }
 
-// String and GoString keep the URL out of anything that prints a channel.
+// A printed Slack channel reads as its name.
 func (Slack) String() string { return "slack" }
 
 func (Slack) GoString() string { return "slack" }
@@ -34,18 +47,7 @@ func (s *Slack) MinSeverity() decide.Severity { return s.min }
 
 func (s *Slack) Message(e alert.Event) []byte { return SlackMessage(e) }
 
-func (s *Slack) Send(ctx context.Context, body []byte) Outcome {
-	r, err := s.client.Post(ctx, s.url, "application/json", body)
-	if err != nil {
-		return Outcome{Err: err.Error()}
-	}
-	// An error word that the URL holds may be a part of its secret path.
-	var word []byte
-	if w := errorWord(r.Body); w != "" && !strings.Contains(strings.ToLower(s.url), w) {
-		word = []byte(w)
-	}
-	return Outcome{Status: r.Status, RetryAfter: r.RetryAfter, Body: word}
-}
+func (s *Slack) Send(ctx context.Context, body []byte) Outcome { return s.post(ctx, body) }
 
 func SlackMessage(e alert.Event) []byte {
 	// Marshal cannot fail on a struct of one string.

@@ -4,8 +4,10 @@ package main
 import (
 	"io"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
@@ -18,10 +20,12 @@ const usage = `usage: osk version
        osk query [--rd] [--do] [--cd] [--tcp] [--timeout <duration>] @<server> <name> [<type>]
        osk check [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] <domain> [<name> <type>]...
        osk snapshot [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] <domain> [<name> <type>]...
-       osk check [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] --expect <file>
+       osk check [--root-server <address>]... [--extra-range <prefix>]... [--timeout <duration>] --expect <file> [--state <folder> [--slack-min-severity <severity>]]
 `
 
 func main() {
+	// A closed output pipe must fail the write, not end osk before it stores and sends the alerts.
+	signal.Ignore(syscall.SIGPIPE)
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 

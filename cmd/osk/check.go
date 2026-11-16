@@ -35,9 +35,10 @@ const maxExpectFile = 4194304
 // checks of a domain and a records check for each pair of name and type, all
 // at once; it prints what the walk from the root asked and every answer, each
 // with its result. With --expect: the checks of a file of expectations; it
-// prints what differs from the file.
+// prints what differs from the file. With --state as well, it also keeps the
+// alerts in a folder and sends their notices to Slack.
 func check(args []string, stdout, stderr io.Writer) int {
-	cfg, file, keys, msg := parseArgs(args, true)
+	cfg, ex, keys, msg := parseArgs(args, true)
 	if msg != "" {
 		return checkWrongUse(stderr, msg)
 	}
@@ -46,8 +47,11 @@ func check(args []string, stdout, stderr io.Writer) int {
 		// Only the flags fill the configuration.
 		return checkWrongUse(stderr, err.Error())
 	}
-	if file != nil {
-		return checkExpect(o, *file, stdout, stderr)
+	if ex != nil && ex.state != nil {
+		return checkState(o, *ex, stdout, stderr)
+	}
+	if ex != nil {
+		return checkExpect(o, ex.file, stdout, stderr)
 	}
 	text, failed := formatObservations(runChecks(o, keys))
 	if code := output(stdout, stderr, text); code != 0 || !failed {
@@ -67,11 +71,21 @@ func parseCheck(args []string) (observe.Config, []obs.Key, string) {
 	return cfg, keys, msg
 }
 
-// parseArgs reads the flags and the arguments. withExpect allows --expect,
-// which only check takes. With --expect, file is set and no argument may
-// follow, because the file names the domain and the sets; without, the
-// arguments give the keys. It returns a message when they are wrong.
-func parseArgs(args []string, withExpect bool) (cfg observe.Config, file *string, keys []obs.Key, msg string) {
+// expectArgs are the flags of check with --expect.
+type expectArgs struct {
+	file    string
+	state   *string // nil without --state
+	minimum decide.Severity
+}
+
+// parseArgs reads the flags and the arguments. withExpect allows --expect and
+// the flags that need it, which only check takes. With --expect, ex is set and
+// no argument may follow, because the file names the domain and the sets;
+// without, the arguments give the keys. It returns a message when they are
+// wrong.
+func parseArgs(args []string, withExpect bool) (cfg observe.Config, ex *expectArgs, keys []obs.Key, msg string) {
+	var file, state *string
+	var minimum decide.Severity
 	flags := flag.NewFlagSet("check", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Func("root-server", "a root server to start from, in place of the built-in ones", func(s string) error {
@@ -93,6 +107,17 @@ func parseArgs(args []string, withExpect bool) (cfg observe.Config, file *string
 			file = &s
 			return nil
 		})
+		flags.Func("state", "a folder that keeps the alerts from run to run", func(s string) error {
+			if state != nil {
+				return errors.New("given more than once")
+			}
+			state = &s
+			return nil
+		})
+		flags.Func("slack-min-severity", "the lowest severity of an alert that Slack hears of", func(s string) (err error) {
+			minimum, err = parseSeverity(s)
+			return err
+		})
 	}
 	if err := flags.Parse(args); err != nil {
 		return cfg, nil, nil, err.Error()
@@ -100,13 +125,27 @@ func parseArgs(args []string, withExpect bool) (cfg observe.Config, file *string
 	switch {
 	case cfg.QueryTimeout <= 0:
 		return cfg, nil, nil, "the timeout must be positive"
+	case state != nil && file == nil:
+		return cfg, nil, nil, "--state needs --expect"
+	case minimum != 0 && state == nil:
+		return cfg, nil, nil, "--slack-min-severity needs --state"
 	case file != nil && flags.NArg() > 0:
 		return cfg, nil, nil, "--expect takes no domain and no pairs: the file gives them"
 	case file != nil:
-		return cfg, file, nil, ""
+		return cfg, &expectArgs{file: *file, state: state, minimum: cmp.Or(minimum, decide.SeverityLow)}, nil, ""
 	}
 	keys, msg = parseKeys(flags.Args())
 	return cfg, nil, keys, msg
+}
+
+// parseSeverity reads a severity word as the finding lines print it.
+func parseSeverity(s string) (decide.Severity, error) {
+	for v := decide.SeverityLow; v <= decide.SeverityCritical; v++ {
+		if v.String() == s {
+			return v, nil
+		}
+	}
+	return 0, errors.New("want low, medium, high or critical")
 }
 
 // parseServer reads an IP address with an optional port. Host names are
@@ -250,20 +289,30 @@ func formatAnswer(b *strings.Builder, role string, kind obs.Kind, a obs.Answer) 
 // checkExpect runs the checks of the file of expectations at path and prints
 // each finding, each answer that could not be judged, and a count of both.
 func checkExpect(o *observe.Observer, path string, stdout, stderr io.Writer) int {
-	data, err := readExpect(path)
-	if err != nil {
-		return fail(stderr, 1, "osk: "+err.Error()+"\n")
-	}
-	// One run has no earlier valid file to fall back on.
-	f, err := expect.Keep(nil, data)
-	if err != nil {
-		return fail(stderr, 1, problemLines(path, err))
+	f, problems := loadExpect(path)
+	if f == nil {
+		return fail(stderr, 1, problems)
 	}
 	text, clean := formatFindings(f, runChecks(o, expectKeys(f)), time.Now())
 	if code := output(stdout, stderr, text); code != 0 || clean {
 		return code
 	}
 	return 1
+}
+
+// loadExpect reads the file of expectations at path. When it cannot, it
+// returns nil and the lines for standard error.
+func loadExpect(path string) (*expect.File, string) {
+	data, err := readExpect(path)
+	if err != nil {
+		return nil, "osk: " + err.Error() + "\n"
+	}
+	// One run has no earlier valid file to fall back on.
+	f, err := expect.Keep(nil, data)
+	if err != nil {
+		return nil, problemLines(path, err)
+	}
+	return f, ""
 }
 
 // readExpect reads the file at path, up to one octet more than expect.Parse
@@ -310,8 +359,8 @@ func expectKeys(f *expect.File) []obs.Key {
 
 // formatFindings gives for each observation the findings that decide makes of
 // it, then a line for each answer that is a failure, and at the end a count of
-// the checks and of both. clean reports that there are neither. No alert is
-// open in a single run, so every change opens one.
+// the checks and of both. clean reports that there are neither. decide gets no
+// open alert, so that what this prints never depends on stored state.
 func formatFindings(f *expect.File, observations []obs.Observation, now time.Time) (text string, clean bool) {
 	var b strings.Builder
 	findings, unknown := 0, 0

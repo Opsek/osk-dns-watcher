@@ -713,7 +713,7 @@ func dlvAnswer(status, body string) string {
 // A server may repeat the secret path of the webhook URL in any form: cut,
 // escaped, in lower case, inside a longer text, or in a header that the client
 // cannot read. None of its text reaches a result, a reason, a line or the
-// store, except one short error word that the URL does not hold.
+// store, except one of Slack's own error words.
 func TestServerTextReachesNoReason(t *testing.T) {
 	const m = "dlvEchoMarker7"
 	const short = "dlvMk7z" // shorter than 8 octets

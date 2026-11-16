@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
+	"net/http"
 	"reflect"
 	"slices"
 	"strconv"
@@ -176,7 +178,8 @@ func TestAttemptLine(t *testing.T) {
 }
 
 // dlvFake is a channel of these tests. Its message names the alert's check,
-// which is unique in each test, and it answers each message from a table.
+// which is unique in each test, its notice names the notice's kind and
+// domain, and it answers each body from a table.
 type dlvFake struct {
 	name    string
 	min     decide.Severity
@@ -439,5 +442,80 @@ func TestPassReturnsStoreError(t *testing.T) {
 	}
 	if _, err := deliver.Pass(context.Background(), s, []deliver.Channel{f}, dlvLater); err == nil || len(f.sent) != 0 {
 		t.Errorf("Pass on a closed store: error %v, %d sends; want an error and none", err, len(f.sent))
+	}
+}
+
+// A receiver may echo a secret padded, or the secret of another channel. An
+// answer reaches a reason only as one of Slack's own error words, and only
+// from Slack; a generic webhook gives its status alone. Nothing else of an
+// answer reaches a reason, a line, the health that status prints, the events
+// that watch prints, or a file of the store.
+func TestAnswerReachesAReasonOnlyAsAKnownSlackWord(t *testing.T) {
+	const mark = "bhookpathmarkq"
+	key := []byte(strings.Repeat("crosskeyrun", 4)) // 44 octets of a to z
+	cases := []struct{ name, channel, answer, reason, secret string }{
+		{"Slack echoes its path padded", "slack", "x" + mark + "x", "status 400", mark},
+		{"Slack echoes the key of the webhook", "slack", string(key[:30]) + "\n", "status 400", string(key[:30])},
+		{"Slack answers a word that is not its own", "slack", "no_such_word", "status 400", "no_such_word"},
+		{"Slack answers its error word", "slack", "invalid_payload\n", `status 400 "invalid_payload"`, mark},
+		{"the webhook echoes its path padded", "siem", "x" + mark + "x", "status 400", mark},
+		{"the webhook answers a Slack error word", "siem", "invalid_payload", "status 400", "invalid_payload"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, client := dlvServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				if _, err := io.WriteString(w, c.answer); err != nil {
+					t.Error(err)
+				}
+			})
+			var ch deliver.Channel = deliver.NewSlack(client, srv.URL+"/slack/"+mark, decide.SeverityLow)
+			if c.channel == "siem" {
+				ch = deliver.NewWebhook(client, "siem", srv.URL+"/hook/"+mark, key, decide.SeverityLow)
+			}
+			dir := dlvPrivateDir(t)
+			s, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := dlvOpen(t, "www.corp.test.", decide.SeverityHigh, decide.SeverityHigh)
+			var attempts []deliver.Attempt
+			err = s.Apply(e.Alert.Check, false, dlvLater, deliver.Writes([]alert.Event{e}, []deliver.Channel{ch}))
+			if err == nil {
+				attempts, err = deliver.Pass(context.Background(), s, []deliver.Channel{ch}, dlvLater)
+			}
+			if err := errors.Join(err, s.Close()); err != nil || len(attempts) != 1 {
+				t.Fatalf("Apply, Pass and Close: %d attempts, %v; want 1 and no error", len(attempts), err)
+			}
+			a := attempts[0]
+			if a.Done.Reason != c.reason {
+				t.Errorf("reason %q, want %q", a.Done.Reason, c.reason)
+			}
+			r, err := store.OpenReader(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			h, err := r.Health(dlvLater, []string{ch.Name()})
+			if err != nil || len(h.Channels) != 1 || h.Channels[0].Reason != c.reason {
+				t.Errorf("health %+v, %v; want the reason %q", h, err, c.reason)
+			}
+			events, err := r.Events(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			texts := map[string]string{"body": string(a.Outcome.Body), "line": a.Line()}
+			for _, ev := range events {
+				texts["event "+ev.Kind] = ev.Value
+			}
+			for what, text := range texts {
+				if c.reason == "status 400" && strings.Contains(text, c.secret) {
+					t.Errorf("the %s holds %q: %q", what, c.secret, text)
+				}
+			}
+			if c.reason == "status 400" && dlvFolderHolds(t, dir, c.secret) {
+				t.Errorf("a file of the store holds %q", c.secret)
+			}
+		})
 	}
 }

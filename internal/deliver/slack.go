@@ -56,8 +56,9 @@ func SlackMessage(e alert.Event) []byte {
 }
 
 // wording is the text of one rule. {D}, {N} and {NT} stand for the domain,
-// the name, and the name with its type, each as inline code. now is the
-// view line of a resolve.
+// the name, and the name with its type, each as inline code; {K} for the
+// kind of the check, a fixed word of the tool. now is the view line of a
+// resolve.
 type wording struct {
 	phrase, resolved, action, now string
 }
@@ -92,6 +93,18 @@ var wordings = map[decide.Rule]wording{
 		resolved: "the expectations file of {D} is valid again",
 		action:   "Fix the file. Until then the last valid file is used.",
 		now:      "the file is valid",
+	},
+	decide.RuleCheckFailing: {
+		phrase:   "the {K} check of {NT} has had no usable answer for too long",
+		resolved: "the {K} check of {NT} has usable answers again",
+		action:   "Find out why no server of {D} answers this machine; until one does, a change there is not seen.",
+		now:      "a server answers now",
+	},
+	decide.RuleZoneChanged: {
+		phrase:   "the zone {D} changed, and no watched record differs",
+		resolved: "the zone {D} has not changed again for a while",
+		action:   "If you did not change the zone, find out who did; only a zone transfer shows which record changed.",
+		now:      "no new change of the serial",
 	},
 }
 
@@ -131,6 +144,7 @@ func SlackText(e alert.Event) string {
 func fields(k obs.Key) *strings.Replacer {
 	name := Clean(k.Name.Lower().String(), 100)
 	return strings.NewReplacer(
+		"{K}", k.Kind.String(),
 		"{D}", "`"+Clean(k.Domain.Lower().String(), 100)+"`",
 		"{N}", "`"+name+"`",
 		"{NT}", "`"+name+" "+Clean(k.Type.String(), 20)+"`")
@@ -159,8 +173,16 @@ func headline(e alert.Event) string {
 func view(e alert.Event, resolvedNow string) []string {
 	a := e.Alert
 	resolve := e.Kind == alert.EventResolve
-	if a.Rule == decide.RuleInvalidFile && !resolve {
+	if !resolve && (a.Rule == decide.RuleInvalidFile || a.Rule == decide.RuleCheckFailing) {
 		return []string{"problem   " + Clean(a.Value, 160)}
+	}
+	if !resolve && a.Rule == decide.RuleZoneChanged {
+		// This alert has no server lines: each line of Value is one move.
+		var moves []string
+		for _, m := range strings.Split(a.Value, "\n") {
+			moves = append(moves, Clean(m, 160))
+		}
+		return capped(moves)
 	}
 	expected := Clean(a.Expected, 160)
 	if expected == "" {
@@ -170,11 +192,17 @@ func view(e alert.Event, resolvedNow string) []string {
 	if resolve {
 		return append(lines, "now       "+resolvedNow)
 	}
-	for _, l := range a.Lines[:min(len(a.Lines), maxServers)] {
-		lines = append(lines, nowLine(l))
+	var servers []string
+	for _, l := range a.Lines {
+		servers = append(servers, nowLine(l))
 	}
-	if more := len(a.Lines) - maxServers; more > 0 {
-		lines = append(lines, "and "+strconv.Itoa(more)+" more servers")
+	return append(lines, capped(servers)...)
+}
+
+// capped keeps the first maxServers lines and counts the others.
+func capped(lines []string) []string {
+	if more := len(lines) - maxServers; more > 0 {
+		return append(lines[:maxServers], "and "+strconv.Itoa(more)+" more servers")
 	}
 	return lines
 }

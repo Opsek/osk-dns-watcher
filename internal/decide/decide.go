@@ -16,23 +16,28 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
 
-// Rule is what a finding says is wrong.
+// Rule is what a finding says is wrong. The store keeps the number of a
+// rule, so a new rule is only ever appended.
 type Rule uint8
 
 const (
-	RuleInvalidFile Rule = iota + 1 // the expectations file is not valid
-	RuleNotCovered                  // no expectation covers the check
-	RuleZone                        // the set was served by another zone than the file declares
-	RuleNameServers                 // the parent delegates the domain to other name servers
-	RuleRecordSet                   // a server gives another record set than expected
+	RuleInvalidFile  Rule = iota + 1 // the expectations file is not valid
+	RuleNotCovered                   // no expectation covers the check
+	RuleZone                         // the set was served by another zone than the file declares
+	RuleNameServers                  // the parent delegates the domain to other name servers
+	RuleRecordSet                    // a server gives another record set than expected
+	RuleCheckFailing                 // the check has had no usable answer for too long
+	RuleZoneChanged                  // the serial of the zone moved and no watched record differs
 )
 
 var ruleWords = map[Rule]string{
-	RuleInvalidFile: "invalid-file",
-	RuleNotCovered:  "not-covered",
-	RuleZone:        "zone",
-	RuleNameServers: "nameservers",
-	RuleRecordSet:   "record-set",
+	RuleInvalidFile:  "invalid-file",
+	RuleNotCovered:   "not-covered",
+	RuleZone:         "zone",
+	RuleNameServers:  "nameservers",
+	RuleRecordSet:    "record-set",
+	RuleCheckFailing: "check-failing",
+	RuleZoneChanged:  "zone-changed",
 }
 
 func (r Rule) String() string { return word(ruleWords, r, "rule") }
@@ -82,11 +87,13 @@ func word[T ~uint8](words map[T]string, v T, prefix string) string {
 // severities is the weight of each rule. A record-set finding about one of
 // highTypes weighs high instead: those sets steer traffic and mail.
 var severities = map[Rule]Severity{
-	RuleInvalidFile: SeverityMedium,
-	RuleNotCovered:  SeverityMedium,
-	RuleZone:        SeverityHigh,
-	RuleNameServers: SeverityCritical,
-	RuleRecordSet:   SeverityMedium,
+	RuleInvalidFile:  SeverityMedium,
+	RuleNotCovered:   SeverityMedium,
+	RuleZone:         SeverityHigh,
+	RuleNameServers:  SeverityCritical,
+	RuleRecordSet:    SeverityMedium,
+	RuleCheckFailing: SeverityMedium,
+	RuleZoneChanged:  SeverityLow,
 }
 
 var highTypes = map[dnswire.Type]bool{
@@ -112,23 +119,25 @@ type Seen struct {
 type Finding struct {
 	Rule     Rule
 	Severity Severity
-	Check    obs.Key // the check that shows it; RuleInvalidFile: Kind 0, Domain = Name = the domain, Type 0
+	Check    obs.Key // the check that shows it; RuleInvalidFile, RuleZoneChanged: Kind 0, Domain = Name = the domain, Type 0
 	Expected string  // FormText of the expectation; "" when there is none
 	Seen     []Seen
-	Value    string // the Seen lines "<addr> <host> <Text>" joined by "\n"; RuleInvalidFile: the error text
+	Value    string // the Seen lines "<addr> <host> <Text>" joined by "\n"; RuleInvalidFile: the error text; RuleCheckFailing: the limit; RuleZoneChanged: a line for each move
 }
 
 type Change struct {
 	Op      Op
 	Finding Finding   // open, update: the finding now; resolve: the open finding that ends
-	At      time.Time // the time given to Decide or FileChanges
+	At      time.Time // the time given to Decide, FileChanges or ZoneChanges
 }
 
 type Input struct {
-	Expect      *expect.File // the file in force (expect.Keep); nil when no file was ever valid
-	Open        []Finding    // open alerts: the finding that opened or last updated each
-	Observation obs.Observation
-	Now         time.Time
+	Expect       *expect.File // the file in force (expect.Keep); nil when no file was ever valid
+	Open         []Finding    // open alerts: the finding that opened or last updated each
+	Observation  obs.Observation
+	Now          time.Time
+	FailingSince time.Time     // start of the unbroken series of runs of this check with no usable answer, this one included; zero when this run had one
+	FailLimit    time.Duration // how long such a series may last before check-failing; 0: never
 }
 
 // Findings judges o against f, in Rule order. A failed answer is unknown: it
@@ -256,31 +265,46 @@ func newFinding(r Rule, o obs.Observation, expected string, seen []Seen) Finding
 	return Finding{Rule: r, Severity: severity(r, o.Key.Type), Check: o.Key, Expected: expected, Seen: seen, Value: value(seen)}
 }
 
-// value writes "-" for a server with no address, and for a server whose
-// name is not known, which observe gives as the root.
 func value(seen []Seen) string {
 	lines := make([]string, len(seen))
 	for i, s := range seen {
-		addr, host := "-", "-"
-		if s.Answer.Server.Addr.IsValid() {
-			addr = s.Answer.Server.Addr.String()
-		}
-		if s.Answer.Server.Name.LabelCount() > 0 {
-			host = s.Answer.Server.Name.Lower().String()
-		}
-		lines[i] = addr + " " + host + " " + s.Text
+		lines[i] = serverText(s.Answer.Server) + " " + s.Text
 	}
 	return strings.Join(lines, "\n")
+}
+
+// serverText writes "-" for a server with no address, and for a server whose
+// name is not known, which observe gives as the root.
+func serverText(s obs.Server) string {
+	addr, host := "-", "-"
+	if s.Addr.IsValid() {
+		addr = s.Addr.String()
+	}
+	if s.Name.LabelCount() > 0 {
+		host = s.Name.Lower().String()
+	}
+	return addr + " " + host
 }
 
 // Decide gives the changes of the open alerts of the observed check. Open
 // findings of other checks are never read.
 func Decide(in Input) []Change {
-	found := Findings(in.Expect, in.Observation)
-	open := firstOpen(in.Open, in.Observation.Key.String())
+	o := in.Observation
+	found := Findings(in.Expect, o)
+	if f, ok := checkFailing(in); ok {
+		found = append(found, f)
+	}
+	open := firstOpen(in.Open, o.Key.String())
 	changes := openOrUpdate(found, open, in.Now)
 	for _, was := range open {
-		if !hasRule(found, was.Rule) && !blocked(was, in.Observation.Answers) {
+		ends := !hasRule(found, was.Rule) && !blocked(was, o)
+		if was.Rule == RuleCheckFailing {
+			// A restart forgets the series, so a failed run may not reach
+			// the limit again; only a usable answer shows that the check
+			// sees the zone again.
+			ends = !Failed(o)
+		}
+		if ends {
 			changes = append(changes, Change{Op: OpResolve, Finding: was, At: in.Now})
 		}
 	}
@@ -290,14 +314,25 @@ func Decide(in Input) []Change {
 // FileChanges opens or updates the invalid-file alert of the domain while
 // the file is not valid, and resolves it once it is.
 func FileChanges(domain dnswire.Name, err error, open []Finding, now time.Time) []Change {
-	// No observation has a key of kind 0, so no check can resolve this alert.
-	scope := obs.Key{Domain: domain, Name: domain}
+	scope := domainScope(domain)
 	mine := firstOpen(open, scope.String())
 	if err != nil {
 		f := Finding{Rule: RuleInvalidFile, Severity: severity(RuleInvalidFile, 0), Check: scope, Value: err.Error()}
 		return openOrUpdate([]Finding{f}, mine, now)
 	}
-	i := slices.IndexFunc(mine, func(f Finding) bool { return f.Rule == RuleInvalidFile })
+	return resolveRule(mine, RuleInvalidFile, now)
+}
+
+// domainScope is the check of an alert about the whole domain. No
+// observation has a key of kind 0, so no check can open, update or resolve
+// such an alert.
+func domainScope(domain dnswire.Name) obs.Key {
+	return obs.Key{Domain: domain, Name: domain}
+}
+
+// resolveRule resolves the open finding of rule r in mine, if there is one.
+func resolveRule(mine []Finding, r Rule, now time.Time) []Change {
+	i := slices.IndexFunc(mine, func(f Finding) bool { return f.Rule == r })
 	if i < 0 {
 		return nil
 	}
@@ -352,12 +387,15 @@ func lines(v string) []string {
 }
 
 // blocked reports whether a failure now could hide the problem that f shows:
-// a failure with no address (the walk or a host lookup failed), or at a
-// server that showed the problem. Any other failure does not block, so an
-// address that this machine cannot reach does not keep an alert open for
-// good.
-func blocked(f Finding, answers []obs.Answer) bool {
-	for _, a := range answers {
+// every answer failed, so the run saw nothing; a failure with no address
+// (the walk or a host lookup failed); or a failure at a server that showed
+// the problem. Any other failure does not block, so an address that this
+// machine cannot reach does not keep an alert open for good.
+func blocked(f Finding, o obs.Observation) bool {
+	if Failed(o) {
+		return true
+	}
+	for _, a := range o.Answers {
 		if _, ok := answerSet(a); ok {
 			continue
 		}

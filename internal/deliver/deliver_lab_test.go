@@ -124,7 +124,7 @@ func dlvFinding(t *testing.T, rule decide.Rule, sev decide.Severity, at time.Tim
 		server, text = obs.Server{Name: dlvName(t, "ns.test."), Addr: netip.MustParseAddrPort(lab + "3:53")}, "ns1.dnshost.test. | ns2.dnshost.test."
 	case decide.RuleRecordSet:
 		f.Check, f.Expected = obs.RecordsKey(corp, dlvName(t, "www.corp.test."), dnswire.TypeA), lab+"81"
-	case decide.RuleInvalidFile, decide.RuleNotCovered, decide.RuleZone:
+	case decide.RuleInvalidFile, decide.RuleNotCovered, decide.RuleZone, decide.RuleCheckFailing, decide.RuleZoneChanged:
 		t.Fatalf("no finding of rule %v here", rule)
 	}
 	f.Seen = []decide.Seen{{Answer: obs.Answer{Proof: obs.Proof{Server: server, Received: at}}, Text: text}}

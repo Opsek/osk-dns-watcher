@@ -1,5 +1,3 @@
-// Package store holds the state of the tool in SQLite.
-// This is the only file that imports the SQLite driver.
 package store
 
 import (

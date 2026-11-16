@@ -94,9 +94,12 @@ func New(hosts []string, roots *x509.CertPool) *Client {
 	return &Client{hosts: slices.Clone(hosts), http: client}
 }
 
+// Header is one more header of a request.
+type Header struct{ Name, Value string }
+
 // Post sends body to rawURL. A URL that is not https or whose host is not
-// listed fails before any I/O.
-func (c *Client) Post(ctx context.Context, rawURL, contentType string, body []byte) (Response, error) {
+// listed fails before any I/O. Each header is set after Content-Type.
+func (c *Client) Post(ctx context.Context, rawURL, contentType string, body []byte, headers ...Header) (Response, error) {
 	u, err := parse(rawURL)
 	if err != nil {
 		return Response{}, err
@@ -109,6 +112,9 @@ func (c *Client) Post(ctx context.Context, rawURL, contentType string, body []by
 		return Response{}, ErrURL
 	}
 	req.Header.Set("Content-Type", contentType)
+	for _, h := range headers {
+		req.Header.Set(h.Name, h.Value)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// net/http lets the dial of a cut request go on, for a later request

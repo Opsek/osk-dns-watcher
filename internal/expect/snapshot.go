@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
@@ -143,11 +144,23 @@ func (g *setGroup) line() (Expectation, []obs.Server, string) {
 	if len(sets[0]) == 0 {
 		return Expectation{Name: g.name, Type: g.t, Form: FormNone}, left, ""
 	}
+	if IsChallengeName(g.name) {
+		return Expectation{}, nil, "a certificate-challenge record is there now; write none once it is gone, or no line if you use DNS challenges"
+	}
 	data := canonicalData(recordData(sets[0]))
 	if len(data) > maxRecords {
 		return Expectation{}, nil, fmt.Sprintf("more than %d records", maxRecords)
 	}
 	return Expectation{Name: g.name, Type: g.t, Form: FormSets, Sets: [][]dnswire.RData{data}}, left, ""
+}
+
+// IsChallengeName reports whether name is an ACME challenge name. The record
+// at such a name, or an alias that hands it to another zone, lets whoever
+// controls it obtain a certificate. Its token changes with each request, so a
+// line for it would report the next one.
+func IsChallengeName(name dnswire.Name) bool {
+	labels := name.Labels()
+	return len(labels) > 0 && strings.EqualFold(labels[0], "_acme-challenge")
 }
 
 // reachable gives the answers that judge the set, and the servers left out.

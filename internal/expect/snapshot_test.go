@@ -615,3 +615,185 @@ func TestSnapshotInvariant(t *testing.T) {
 		t.Errorf("test fault: %d lines and %d skips; both must come up often", written, skipped)
 	}
 }
+
+// --- the names of a certificate challenge ---
+
+const expChallengeWhy = "a certificate-challenge record is there now; write none once it is gone, or no line if you use DNS challenges"
+
+// expBothAnswer is one check of name and type, answered with the same result
+// by both servers of corp.test.
+func expBothAnswer(t testing.TB, name string, typ dnswire.Type, r obs.Result) obs.Observation {
+	t.Helper()
+	return expObs(t, expRecordsKey(t, name, typ), "corp.test.",
+		expAnswer(t, "ns1.corp.test.", expNS1Addr, r), expAnswer(t, "ns2.corp.test.", expNS2Addr, r))
+}
+
+func TestSnapshotWritesNoLineForAChallengeNameWithARecord(t *testing.T) {
+	for _, c := range []struct{ name, owner, text string }{
+		{"the name of the domain", "_acme-challenge.corp.test.", "_acme-challenge.corp.test. TXT"},
+		{"capitals", "_ACME-Challenge.Corp.Test.", "_acme-challenge.corp.test. TXT"},
+		{"a name below", "_acme-challenge.www.corp.test.", "_acme-challenge.www.corp.test. TXT"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, skips := expSnapshot(t, expBothAnswer(t, c.owner, dnswire.TypeTXT,
+				expRecords(t, dnswire.TypeTXT, c.owner, `"t0ken1"`)))
+			if want := []string{c.text + ": " + expChallengeWhy}; !slices.Equal(skips, want) {
+				t.Errorf("skips %q; want %q", skips, want)
+			}
+			if len(f.Expectations) != 0 {
+				t.Errorf("the file holds %q; want no line", f.String())
+			}
+		})
+	}
+}
+
+// Every type counts: an alias that hands the challenge to another zone is a
+// record too.
+func TestSnapshotWritesNoLineForAChallengeNameWithAnAlias(t *testing.T) {
+	f, skips := expSnapshot(t, expBothAnswer(t, "_acme-challenge.corp.test.", dnswire.TypeCNAME,
+		expRecords(t, dnswire.TypeCNAME, "_acme-challenge.corp.test.", "validate.dnshost.test.")))
+	if want := []string{"_acme-challenge.corp.test. CNAME: " + expChallengeWhy}; !slices.Equal(skips, want) {
+		t.Errorf("skips %q; want %q", skips, want)
+	}
+	if len(f.Expectations) != 0 {
+		t.Errorf("the file holds %q; want no line", f.String())
+	}
+}
+
+func TestSnapshotWritesNoneForAChallengeNameWithNoRecord(t *testing.T) {
+	zone := func(r obs.Result, owner string) []obs.Observation {
+		return []obs.Observation{expBothAnswer(t, owner, dnswire.TypeTXT, r)}
+	}
+	for _, c := range []struct {
+		name string
+		obs  []obs.Observation
+		want string
+	}{
+		{"no such name", zone(expNoName(t, "corp.test."), "_acme-challenge.corp.test."),
+			"domain corp.test.\n_acme-challenge.corp.test. TXT none\n"},
+		{"no data", zone(expNoData(t, "corp.test."), "_acme-challenge.corp.test."),
+			"domain corp.test.\n_acme-challenge.corp.test. TXT none\n"},
+		{"capitals", zone(expNoName(t, "corp.test."), "_Acme-CHALLENGE.www.corp.test."),
+			"domain corp.test.\n_acme-challenge.www.corp.test. TXT none\n"},
+		{"one answer of each kind", []obs.Observation{expObs(t, expRecordsKey(t, "_acme-challenge.corp.test.", dnswire.TypeTXT), "corp.test.",
+			expAnswer(t, "ns1.corp.test.", expNS1Addr, expNoName(t, "corp.test.")),
+			expAnswer(t, "ns2.corp.test.", expNS2Addr, expNoData(t, "corp.test.")))},
+			"domain corp.test.\n_acme-challenge.corp.test. TXT none\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, skips := expSnapshot(t, c.obs...)
+			if f.String() != c.want || len(skips) != 0 {
+				t.Errorf("String() %q, skips %q; want %q and no skip", f.String(), skips, c.want)
+			}
+		})
+	}
+}
+
+// A challenge name whose servers do not agree, or do not all answer, keeps
+// the reason of any other name: there is no agreed set to call a record.
+func TestSnapshotGivesTheOrdinaryReasonForAChallengeNameThatHasNoAgreedSet(t *testing.T) {
+	const name = "_acme-challenge.corp.test."
+	token := func(host, addr string) obs.Answer {
+		return expAnswer(t, host, addr, expRecords(t, dnswire.TypeTXT, name, `"t0ken1"`))
+	}
+	for _, c := range []struct {
+		name string
+		obs  obs.Observation
+		want string
+	}{
+		{"a server with another record", expObs(t, expRecordsKey(t, name, dnswire.TypeTXT), "corp.test.",
+			token("ns1.corp.test.", expNS1Addr),
+			expAnswer(t, "ns2.corp.test.", expNS2Addr, expRecords(t, dnswire.TypeTXT, name, `"t0ken2"`))),
+			`_acme-challenge.corp.test. TXT: servers disagree: 10.53.0.11:53 ns1.corp.test. gives "t0ken1"; 10.53.0.12:53 ns2.corp.test. gives "t0ken2"`},
+		{"a server with no record", expObs(t, expRecordsKey(t, name, dnswire.TypeTXT), "corp.test.",
+			token("ns1.corp.test.", expNS1Addr), expAnswer(t, "ns2.corp.test.", expNS2Addr, expNoName(t, "corp.test."))),
+			`_acme-challenge.corp.test. TXT: servers disagree: 10.53.0.11:53 ns1.corp.test. gives "t0ken1"; 10.53.0.12:53 ns2.corp.test. gives none`},
+		{"a server that timed out", expObs(t, expRecordsKey(t, name, dnswire.TypeTXT), "corp.test.",
+			token("ns1.corp.test.", expNS1Addr), expAnswer(t, "ns2.corp.test.", expNS2Addr, expFailure(obs.ReasonTimeout))),
+			"_acme-challenge.corp.test. TXT: 10.53.0.12:53 ns2.corp.test. gave no answer: timeout"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, skips := expSnapshot(t, c.obs)
+			if !slices.Equal(skips, []string{c.want}) || len(f.Expectations) != 0 {
+				t.Errorf("skips %q, file %q; want [%q] and no line", skips, f.String(), c.want)
+			}
+		})
+	}
+}
+
+// A name that holds the label anywhere but first, or only a part of it, is
+// any other name: its record is an exact line.
+func TestSnapshotTreatsANameThatOnlyHoldsTheLabelAsAnyName(t *testing.T) {
+	for _, owner := range []string{
+		"x._acme-challenge.corp.test.", "_acme-challenge-old.corp.test.", "_acme-challenge2.corp.test.",
+		"acme-challenge.corp.test.", "__acme-challenge.corp.test.", "my_acme-challenge.corp.test.",
+		"www._acme-challenge.www.corp.test.",
+	} {
+		t.Run(owner, func(t *testing.T) {
+			f, skips := expSnapshot(t, expBothAnswer(t, owner, dnswire.TypeTXT, expRecords(t, dnswire.TypeTXT, owner, `"t0ken1"`)))
+			if want := "domain corp.test.\n" + owner + ` TXT "t0ken1"` + "\n"; f.String() != want || len(skips) != 0 {
+				t.Errorf("String() %q, skips %q; want %q and no skip", f.String(), skips, want)
+			}
+		})
+	}
+}
+
+// The skip stands with the others, in their order, and the name beside it
+// keeps its line.
+func TestSnapshotListsTheChallengeSkipAmongTheOthers(t *testing.T) {
+	f, skips := expSnapshot(t,
+		expBothAnswer(t, "www.corp.test.", dnswire.TypeA, expRecords(t, dnswire.TypeA, "www.corp.test.", "10.53.0.81")),
+		expBothAnswer(t, "_acme-challenge.www.corp.test.", dnswire.TypeTXT,
+			expRecords(t, dnswire.TypeTXT, "_acme-challenge.www.corp.test.", `"t0ken1"`)),
+		expTimedOut(t, "corp.test.", dnswire.TypeTXT),
+		expBothAnswer(t, "_acme-challenge.corp.test.", dnswire.TypeTXT, expNoName(t, "corp.test.")))
+	if want := "domain corp.test.\n_acme-challenge.corp.test. TXT none\nwww.corp.test. A 10.53.0.81\n"; f.String() != want {
+		t.Errorf("String() %q; want %q", f.String(), want)
+	}
+	want := []string{
+		"corp.test. TXT: 10.53.0.11:53 ns1.corp.test. gave no answer: timeout",
+		"_acme-challenge.www.corp.test. TXT: " + expChallengeWhy,
+	}
+	if !slices.Equal(skips, want) {
+		t.Errorf("skips %q; want %q", skips, want)
+	}
+}
+
+// --- the wildcard check ---
+
+// A wildcard check asks a random name, so no line of the file can be its
+// set: it gives no line and no skip, and it does not change the set of the
+// name that it carries.
+func TestSnapshotIgnoresTheWildcardCheck(t *testing.T) {
+	d := expName(t, "corp.test.")
+	random := func(zone string) obs.Observation {
+		owner := "ab3cd4ef5gh6ij7kl2mn3op4qr." + zone
+		return expObs(t, obs.WildcardKey(d, expName(t, zone)), "corp.test.",
+			expAnswer(t, "ns1.corp.test.", expNS1Addr, expRecords(t, dnswire.TypeA, owner, "10.53.0.99")),
+			expAnswer(t, "ns2.corp.test.", expNS2Addr, expNoName(t, "corp.test.")))
+	}
+	f, skips := expSnapshot(t, random("corp.test."), random("www.corp.test."))
+	if len(f.Expectations) != 0 || len(skips) != 0 {
+		t.Errorf("String() %q, skips %q; want no line and no skip", f.String(), skips)
+	}
+	f, skips = expSnapshot(t,
+		expBothAnswer(t, "corp.test.", dnswire.TypeA, expRecords(t, dnswire.TypeA, "corp.test.", "10.53.0.80")),
+		random("corp.test."))
+	if want := "domain corp.test.\ncorp.test. A 10.53.0.80\n"; f.String() != want || len(skips) != 0 {
+		t.Errorf("String() %q, skips %q; want %q and no skip", f.String(), skips, want)
+	}
+}
+
+func TestSetOfGivesNoSetForAWildcardKey(t *testing.T) {
+	d := expName(t, "corp.test.")
+	for _, zone := range []string{"corp.test.", "www.corp.test.", "shop.test."} {
+		if name, typ, ok := setOf(obs.WildcardKey(d, expName(t, zone))); ok {
+			t.Errorf("setOf of the wildcard key of %s gave %v %v; want no set", zone, name, typ)
+		}
+	}
+	for _, k := range []obs.Key{obs.DelegationKey(d), obs.DSKey(d), expRecordsKey(t, "www.corp.test.", dnswire.TypeA)} {
+		if _, _, ok := setOf(k); !ok {
+			t.Errorf("setOf of %v gave no set", k)
+		}
+	}
+}

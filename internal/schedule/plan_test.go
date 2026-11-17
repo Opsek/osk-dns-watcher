@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
@@ -101,16 +102,12 @@ func schEvery(iv Intervals) map[Tier]time.Duration {
 
 var schFastTypes = []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeCAA, dnswire.TypeMX}
 
-// schModelPlan is the plan as the rules state it: the serial check, the two
-// parent checks, then one records check for each line that is not DS, in
-// the order of the file.
-func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
+// schPlanBefore is the plan of a file that names no target and no wildcard:
+// the serial check, the two parent checks, then one records check for each
+// line that is not DS, in the order of the file.
+func schPlanBefore(t testing.TB, f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	t.Helper()
 	d := f.Domain
-	acme, err := dnswire.NameFromLabels(append([]string{"_acme-challenge"}, d.Labels()...))
-	if err != nil {
-		t.Fatalf("the challenge name of %s: %v", d, err)
-	}
 	plan := []Check{
 		{Key: obs.SerialKey(d), Tier: TierSerial, Interval: iv.Serial},
 		{Key: obs.DelegationKey(d), Tier: TierParent, Interval: iv.Parent},
@@ -120,13 +117,75 @@ func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Interval
 		if e.Type == dnswire.TypeDS {
 			continue
 		}
-		tier := TierOther
-		if e.Name.Equal(d) && slices.Contains(schFastTypes, e.Type) || e.Name.Equal(acme) ||
-			slices.ContainsFunc(fast, e.Name.Equal) {
-			tier = TierFast
+		plan = append(plan, schRecordsCheck(f, e, fast, iv))
+	}
+	return plan
+}
+
+func schRecordsCheck(f *expect.File, e expect.Expectation, fast []dnswire.Name, iv Intervals) Check {
+	d := f.Domain
+	tier := TierOther
+	if e.Name.Equal(d) && slices.Contains(schFastTypes, e.Type) || dngChallengeOwner(e.Name, d) ||
+		slices.ContainsFunc(fast, e.Name.Equal) {
+		tier = TierFast
+	}
+	return Check{Key: obs.RecordsKey(d, e.Name, e.Type), Tier: tier, Interval: schEvery(iv)[tier],
+		Zone: e.Name.IsSubdomainOf(d) && f.Zone(e.Name).Equal(d)}
+}
+
+// schIsWildcardLine says whether e is the line "*.<zone> A none", the only
+// line that a wildcard check takes the place of.
+func schIsWildcardLine(e expect.Expectation) bool {
+	labels := e.Name.Labels()
+	return len(labels) > 0 && labels[0] == "*" && e.Type == dnswire.TypeA && e.Form == expect.FormNone
+}
+
+// schWildcardZones are the zones of the wildcard lines whose zone has room
+// for the random label, in the order of the lines, each once.
+func schWildcardZones(f *expect.File) []dnswire.Name {
+	var zones []dnswire.Name
+	for _, e := range f.Expectations {
+		zone := e.Name.Parent()
+		label := strings.Repeat("a", obs.WildcardLabel)
+		if _, err := dnswire.NameFromLabels(append([]string{label}, zone.Labels()...)); err != nil ||
+			!schIsWildcardLine(e) || slices.ContainsFunc(zones, zone.Equal) {
+			continue
 		}
-		plan = append(plan, Check{Key: obs.RecordsKey(d, e.Name, e.Type), Tier: tier, Interval: schEvery(iv)[tier],
-			Zone: e.Name.IsSubdomainOf(d) && f.Zone(e.Name).Equal(d)})
+		zones = append(zones, zone)
+	}
+	return zones
+}
+
+// schModelPlan is the plan as the rules state it: the serial check, the two
+// parent checks, a records check for each line in the order of the file
+// (none for DS, and none for a wildcard line whose zone has a wildcard
+// check), a records check of type A for each target that no line already
+// checks, and a wildcard check for each wildcard zone, which is a check of
+// the zone when the zone of the domain holds it.
+func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
+	t.Helper()
+	d := f.Domain
+	wild := schWildcardZones(f)
+	plan := []Check{
+		{Key: obs.SerialKey(d), Tier: TierSerial, Interval: iv.Serial},
+		{Key: obs.DelegationKey(d), Tier: TierParent, Interval: iv.Parent},
+		{Key: obs.DSKey(d), Tier: TierParent, Interval: iv.Parent},
+	}
+	for _, e := range f.Expectations {
+		if e.Type == dnswire.TypeDS || schIsWildcardLine(e) && slices.ContainsFunc(wild, e.Name.Parent().Equal) {
+			continue
+		}
+		plan = append(plan, schRecordsCheck(f, e, fast, iv))
+	}
+	for _, target := range decide.Targets(f) {
+		key := obs.RecordsKey(d, target.Name, dnswire.TypeA)
+		if !slices.ContainsFunc(plan, func(c Check) bool { return c.Key.String() == key.String() }) {
+			plan = append(plan, Check{Key: key, Tier: TierOther, Interval: iv.Other})
+		}
+	}
+	for _, zone := range wild {
+		plan = append(plan, Check{Key: obs.WildcardKey(d, zone), Tier: TierOther, Interval: iv.Other,
+			Zone: zone.IsSubdomainOf(d) && f.Zone(zone).Equal(d)})
 	}
 	return plan
 }
@@ -264,7 +323,7 @@ func TestPlanFastTiers(t *testing.T) {
 		"corp.test. NS":                      other + " zone true",
 		"_acme-challenge.corp.test. TXT":     fastTier + " zone true",
 		"_acme-challenge.corp.test. CNAME":   fastTier + " zone true",
-		"_acme-challenge.www.corp.test. TXT": other + " zone true",
+		"_acme-challenge.www.corp.test. TXT": fastTier + " zone true",
 		"www.corp.test. A":                   other + " zone true",
 		"mail.corp.test. A":                  fastTier + " zone true",
 		"mail.corp.test. TXT":                fastTier + " zone true",
@@ -305,6 +364,9 @@ func TestPlanZoneOnlyForNamesInTheDomainsOwnZone(t *testing.T) {
 		"records corp.test. old.corp.test. NS":    true, // a none line declares no zone
 		"records corp.test. x.old.corp.test. A":   true,
 		"records corp.test. edge.dnshost.test. A": false,
+		// The host of the cut is a target: it lies in the cut, not in the
+		// zone of the domain.
+		"records corp.test. ns1.sub.corp.test. A": false,
 	}
 	got := map[string]bool{}
 	for _, c := range Plan(f, nil, schIv) {
@@ -338,11 +400,14 @@ func TestUnusedGivesFastNamesWithoutLineInGivenOrder(t *testing.T) {
 }
 
 // Owners of the random files: the lab names, a challenge name above and
-// below the domain, a cut, a name under a cut and names outside the domain.
+// below the domain, a cut, a name under a cut, names outside the domain and
+// wildcard owners in the zone of the domain, in a cut and outside.
 var schOwners = []string{
 	"corp.test.", "www.corp.test.", "mail.corp.test.", "cdn.corp.test.", "_dmarc.corp.test.",
 	"_acme-challenge.corp.test.", "_acme-challenge.www.corp.test.", "sub.corp.test.", "www.sub.corp.test.",
 	"deep.www.corp.test.", "edge.dnshost.test.", "shop.test.",
+	"ns1.sub.corp.test.", "mail.dnshost.test.", "mail.sub.corp.test.",
+	"*.corp.test.", "*.corp.test.", "*.sub.corp.test.", "*.www.corp.test.", "*.shop.test.",
 }
 
 // schTypes are the types that a line may have. Every type takes the form
@@ -350,6 +415,19 @@ var schOwners = []string{
 var schTypes = []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeCAA, dnswire.TypeMX, dnswire.TypeTXT,
 	dnswire.TypeNS, dnswire.TypeCNAME, dnswire.TypeSOA, dnswire.TypePTR, dnswire.TypeDNAME, dnswire.TypeSPF,
 	dnswire.TypeRRSIG, dnswire.TypeNSEC, dnswire.TypeDNSKEY, dnswire.TypeNSEC3, dnswire.TypeNSEC3PARAM, dnswire.TypeDS}
+
+// schData are the forms with data that a line of a type may take, besides
+// none: names in the zone of the domain, in a cut and outside the domain,
+// and SPF records with and without an include.
+var schData = map[dnswire.Type][]string{
+	dnswire.TypeA:     {"10.53.0.99"},
+	dnswire.TypeNS:    {"ns1.corp.test.", "ns1.sub.corp.test.", "ns1.dnshost.test. | ns2.dnshost.test.", "ns1.shop.test."},
+	dnswire.TypeCNAME: {"edge.dnshost.test.", "www.corp.test.", "cdn.sub.corp.test.", "ns1.sub.corp.test."},
+	dnswire.TypeDNAME: {"edge.dnshost.test.", "www.corp.test."},
+	dnswire.TypeMX:    {"10 mail.dnshost.test.", "10 mail.corp.test.", "10 mail.sub.corp.test."},
+	dnswire.TypeTXT: {`"v=spf1 include:spf.dnshost.test. -all"`, `"v=spf1 include:spf.corp.test. -all"`,
+		`"v=spf1 mx -all"`, `"hello"`},
+}
 
 var schFastPool = []string{"mail.corp.test.", "MAIL.CORP.TEST.", "www.sub.corp.test.", "edge.dnshost.test.",
 	"nothere.corp.test.", "corp.test.", "_acme-challenge.corp.test.", "Www.Corp.Test.", "other.test."}
@@ -366,8 +444,8 @@ func schShout(rng *rand.Rand, s string) string {
 }
 
 // schRandomLines gives up to most lines of corp.test. whose owner and type
-// are not in seen: NS lines with data make cuts, other lines take the form
-// none.
+// are not in seen. A line takes the form none or, for the types of schData,
+// data; the parser takes every such file.
 func schRandomLines(rng *rand.Rand, most int, seen map[string]bool) []string {
 	var lines []string
 	for range rng.IntN(most + 1) {
@@ -377,8 +455,8 @@ func schRandomLines(rng *rand.Rand, most int, seen map[string]bool) []string {
 		}
 		seen[owner+typ.String()] = true
 		form := "none"
-		if typ == dnswire.TypeNS && rng.IntN(2) == 0 {
-			form = "ns1." + owner
+		if data := schData[typ]; data != nil && rng.IntN(3) > 0 {
+			form = schShout(rng, schPick(rng, data...))
 		}
 		lines = append(lines, schShout(rng, owner)+" "+typ.String()+" "+form)
 	}
@@ -417,8 +495,47 @@ func schOwnsOnlyDS(f *expect.File, n dnswire.Name) bool {
 	return owns
 }
 
+// schKinds counts the cases of TestPlanProperty by what their file holds, so
+// that a generator that stops making a kind shows.
+type schKinds struct{ plain, probes, shared, wildcards, owned, kept int }
+
+// add counts the kinds of f and checks the plan of a file with no target
+// and no wildcard owner against the plan that such a file had before.
+func (k *schKinds) add(t testing.TB, where string, f *expect.File, fast []dnswire.Name, iv Intervals, got []Check) {
+	t.Helper()
+	targets, wild := decide.Targets(f), schWildcardZones(f)
+	owner := slices.ContainsFunc(f.Expectations, func(e expect.Expectation) bool {
+		labels := e.Name.Labels()
+		return len(labels) > 0 && labels[0] == "*"
+	})
+	if len(targets) == 0 && !owner {
+		k.plain++
+		if g, w := schTexts(got), schTexts(schPlanBefore(t, f, fast, iv)); !slices.Equal(g, w) {
+			t.Fatalf("%s: file\n%s--fast %v\nPlan gave%s\nwant the plan of before%s", where, f, fast, schShow(g), schShow(w))
+		}
+	}
+	for _, target := range targets {
+		if slices.ContainsFunc(f.Expectations, func(e expect.Expectation) bool {
+			return e.Type == dnswire.TypeA && e.Name.Equal(target.Name)
+		}) {
+			k.shared++
+		} else {
+			k.probes++
+		}
+	}
+	k.wildcards += len(wild)
+	for _, e := range f.Expectations {
+		if schIsWildcardLine(e) && slices.ContainsFunc(wild, e.Name.Parent().Equal) {
+			k.owned++
+		} else if labels := e.Name.Labels(); len(labels) > 0 && labels[0] == "*" {
+			k.kept++
+		}
+	}
+}
+
 func TestPlanProperty(t *testing.T) {
 	fastSeen, zoneSeen, outsideSeen := 0, 0, 0
+	var kinds schKinds
 	for c := range schCases {
 		rng := schRand(c)
 		where := fmt.Sprintf("seed %d case %d", schSeed, c)
@@ -439,6 +556,7 @@ func TestPlanProperty(t *testing.T) {
 		if again := Plan(f, fast, iv); !reflect.DeepEqual(again, got) {
 			t.Fatalf("%s: a second Plan gave%s\nthe first%s", where, schShow(schTexts(again)), schShow(schTexts(got)))
 		}
+		kinds.add(t, where, f, fast, iv, got)
 		for _, ch := range got[3:] {
 			if ch.Tier == TierFast {
 				fastSeen++
@@ -469,5 +587,8 @@ func TestPlanProperty(t *testing.T) {
 	if fastSeen == 0 || zoneSeen == 0 || outsideSeen == 0 {
 		t.Fatalf("seed %d: fast %d, zone %d, outside %d records checks: the cases miss a kind", schSeed,
 			fastSeen, zoneSeen, outsideSeen)
+	}
+	if kinds.plain < 100 || kinds.probes < 200 || kinds.shared < 20 || kinds.wildcards < 40 || kinds.owned < 40 || kinds.kept < 100 {
+		t.Fatalf("seed %d: %+v: the cases miss a kind", schSeed, kinds)
 	}
 }

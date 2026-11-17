@@ -145,7 +145,8 @@ func iniBase(k obs.Key) []obs.Answer {
 }
 
 // iniLines are the lines of domain d of the fake world, as File.String
-// prints them.
+// prints them: the sets of the apex, then the names under it where the fake
+// world has no record.
 func iniLines(d string) []string {
 	return []string{
 		"domain " + d,
@@ -156,6 +157,9 @@ func iniLines(d string) []string {
 		d + " AAAA 2001:db8::10",
 		d + " DS none",
 		d + ` CAA 0 issue "letsencrypt.org"`,
+		"*." + d + " A none",
+		"_acme-challenge." + d + " TXT none",
+		"_acme-challenge.www." + d + " TXT none",
 	}
 }
 
@@ -168,15 +172,17 @@ func iniKey(domain, name string, t dnswire.Type) string {
 }
 
 // iniKeys are the checks of a snapshot of d: the delegation, the DS set, the
-// NS set of the apex and the six sets that init watches.
-func iniKeys(d string, www bool) []string {
+// NS set of the apex, the five other sets of the apex and, when under is
+// true, the four names under d: www, the two challenge names and the wildcard.
+func iniKeys(d string, under bool) []string {
 	n := iniName(d)
 	keys := []string{obs.DelegationKey(n).String(), obs.DSKey(n).String()}
 	for _, t := range []dnswire.Type{dnswire.TypeNS, dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeMX, dnswire.TypeTXT, dnswire.TypeCAA} {
 		keys = append(keys, iniKey(d, d, t))
 	}
-	if www {
-		keys = append(keys, iniKey(d, "www."+d, dnswire.TypeA))
+	if under {
+		keys = append(keys, iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT),
+			iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT), iniKey(d, "*."+d, dnswire.TypeA))
 	}
 	return keys
 }
@@ -942,8 +948,8 @@ func TestInitWritesNothingBeforeYes(t *testing.T) {
 		}
 	}
 	// What is written is what was shown: no check runs after the answer.
-	if n := s.runner.count(); moments[2].checks != 9 || n != 9 {
-		t.Errorf("%d checks had run when yes was asked, %d at the end; want 9 and 9", moments[2].checks, n)
+	if n := s.runner.count(); moments[2].checks != 12 || n != 12 {
+		t.Errorf("%d checks had run when yes was asked, %d at the end; want 12 and 12", moments[2].checks, n)
 	}
 	if code != 0 || !strings.HasSuffix(out, "yes\n"+s.wrote(d)) {
 		t.Errorf("exit code %d, output ends %q; want 0 and the written files", code, out[max(0, len(out)-200):])
@@ -1051,8 +1057,8 @@ func TestInitWritesOnlyForExactlyYes(t *testing.T) {
 				t.Errorf("exit code %d; want 1", code)
 			}
 			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+answer+"\n"+iniNothing)
-			if n := s.runner.count(); n != 9 {
-				t.Errorf("%d checks ran; want 9", n)
+			if n := s.runner.count(); n != 12 {
+				t.Errorf("%d checks ran; want 12", n)
 			}
 			s.nothingWritten()
 		})
@@ -1242,16 +1248,17 @@ func TestInitTakesAtMostHundredDomains(t *testing.T) {
 	if n := strings.Count(out, " as osk sees it now."); n != 100 {
 		t.Errorf("init showed %d domains; want 100", n)
 	}
-	if n := s.runner.count(); n != 900 {
-		t.Errorf("%d checks ran; want 900", n)
+	if n := s.runner.count(); n != 1200 {
+		t.Errorf("%d checks ran; want 1200", n)
 	}
 	s.nothingWritten()
 }
 
-// The checks of a domain are those of "osk snapshot" for the six sets, with
+// The checks of a domain are those of "osk snapshot" for the six sets, www,
+// the two challenge names and the wildcard name, with
 // the interval of the faster checks, and they run at once: the observer
-// answers no check before all nine have started.
-func TestInitRunsTheNineChecksOfADomainAtOnce(t *testing.T) {
+// answers no check before all twelve have started.
+func TestInitRunsTheTwelveChecksOfADomainAtOnce(t *testing.T) {
 	s := iniNew(t, "example.com", iniURL, "no")
 	all := make(chan struct{})
 	var once sync.Once
@@ -1259,7 +1266,7 @@ func TestInitRunsTheNineChecksOfADomainAtOnce(t *testing.T) {
 	apart := false
 	deadline := time.Now().Add(5 * time.Second)
 	s.runner.during = func(calls int) {
-		if calls == 9 {
+		if calls == 12 {
 			once.Do(func() { close(all) })
 		}
 		select {
@@ -1276,7 +1283,7 @@ func TestInitRunsTheNineChecksOfADomainAtOnce(t *testing.T) {
 	}
 	mu.Lock()
 	if apart {
-		t.Errorf("the nine checks did not run at once")
+		t.Errorf("the twelve checks did not run at once")
 	}
 	mu.Unlock()
 	keys := s.runner.keys()
@@ -1293,8 +1300,9 @@ func TestInitRunsTheNineChecksOfADomainAtOnce(t *testing.T) {
 	s.runner.mu.Unlock()
 }
 
-// www.<d> is longer than a name may be, so its pair is left out.
-func TestInitLeavesOutTheWWWCheckOfALongName(t *testing.T) {
+// No name under <d> may be longer than a name may be, so none of the four
+// pairs under it is asked.
+func TestInitLeavesOutTheChecksUnderALongName(t *testing.T) {
 	d := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61) + "."
 	if _, err := dnswire.ParseName(d); err != nil {
 		t.Fatalf("%s: %v", d, err)
@@ -1446,7 +1454,9 @@ func TestInitDoesNotTrustASetTheServersDisagreeOn(t *testing.T) {
 		t.Errorf("the output holds a control octet other than the line end:\n%q", out)
 	}
 	lines, skips := iniShown(out, d)
-	want := slices.DeleteFunc(iniLines(d), func(l string) bool { return strings.Contains(l, " NS ") || strings.Contains(l, " TXT ") })
+	want := slices.DeleteFunc(iniLines(d), func(l string) bool {
+		return strings.HasPrefix(l, d+" NS ") || strings.HasPrefix(l, d+" TXT ")
+	})
 	if !slices.Equal(lines, want) {
 		t.Errorf("init showed:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
@@ -1524,7 +1534,9 @@ func TestInitWritesASetWhoseOnlyFailureIsAnUnreachedIPv6Address(t *testing.T) {
 			}
 			lines, skips := iniLines(d), []string{iniAliasSkip(d)}
 			if _, ok := c.over[iniKey(d, "www."+d, dnswire.TypeA)]; ok {
-				lines, skips = append(lines, "www."+d+" A 192.0.2.80"), nil
+				// It sorts before the challenge name under it.
+				at := slices.Index(lines, "_acme-challenge.www."+d+" TXT none")
+				lines, skips = slices.Insert(lines, at, "www."+d+" A 192.0.2.80"), nil
 			}
 			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, skips...)+iniNotAsked(c.notAsked))+"yes\n"+s.wrote(d))
 			data := s.written(d)["example.com.expect"]
@@ -1818,4 +1830,144 @@ func TestInitGivesAbsolutePathsForARelativeConfig(t *testing.T) {
 	}
 	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
 	iniSame(t, "osk.json", s.written(d)["osk.json"], s.configText(d))
+}
+
+// --- the challenge names and the wildcard name ---
+
+// iniLongName gives a name of n octets in wire form: three labels of 63
+// octets and a first label that makes up the rest.
+func iniLongName(t *testing.T, n int) string {
+	t.Helper()
+	d := strings.Repeat("e", n-194) + "." + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "."
+	if _, err := dnswire.ParseName(d); err != nil {
+		t.Fatalf("a name of %d octets: %v", n, err)
+	}
+	return d
+}
+
+// The names under the domain follow www in the order that osk snapshot
+// gives its sets, and every one is a records check.
+func TestLookKeysAsksTheChallengeAndWildcardNamesAfterWWW(t *testing.T) {
+	d := "example.com."
+	got := lookKeys(iniName(d))
+	var texts []string
+	for _, k := range got {
+		texts = append(texts, k.String())
+	}
+	want := []string{
+		obs.DelegationKey(iniName(d)).String(),
+		obs.DSKey(iniName(d)).String(),
+		iniKey(d, d, dnswire.TypeNS),
+		iniKey(d, d, dnswire.TypeA),
+		iniKey(d, d, dnswire.TypeAAAA),
+		iniKey(d, d, dnswire.TypeMX),
+		iniKey(d, d, dnswire.TypeTXT),
+		iniKey(d, d, dnswire.TypeCAA),
+		iniKey(d, "www."+d, dnswire.TypeA),
+		iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT),
+		iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT),
+		iniKey(d, "*."+d, dnswire.TypeA),
+	}
+	if !slices.Equal(texts, want) {
+		t.Errorf("lookKeys gave\n%s\nwant\n%s", strings.Join(texts, "\n"), strings.Join(want, "\n"))
+	}
+	for _, k := range got[8:] {
+		if k.Kind != obs.KindRecords {
+			t.Errorf("%s is a check of kind %v; want a records check", k, k.Kind)
+		}
+	}
+}
+
+// Each name is left out when it is longer than a name may be, and not
+// before: a name may have 255 octets, and each prefix adds its own length.
+func TestLookKeysLeavesOutEachNameThatWouldBeTooLong(t *testing.T) {
+	for _, c := range []struct {
+		octets int
+		under  []string // the names kept, in order
+	}{
+		{235, []string{"www", "_acme-challenge", "_acme-challenge.www", "*"}},
+		{236, []string{"www", "_acme-challenge", "*"}},
+		{239, []string{"www", "_acme-challenge", "*"}},
+		{240, []string{"www", "*"}},
+		{251, []string{"www", "*"}},
+		{252, []string{"*"}},
+		{253, []string{"*"}},
+		{254, nil},
+		{255, nil},
+	} {
+		t.Run(strconv.Itoa(c.octets), func(t *testing.T) {
+			d := iniLongName(t, c.octets)
+			var got []string
+			for _, k := range lookKeys(iniName(d)) {
+				got = append(got, k.String())
+			}
+			want := iniKeys(d, false)
+			for _, prefix := range c.under {
+				typ := dnswire.TypeTXT
+				if prefix == "www" || prefix == "*" {
+					typ = dnswire.TypeA
+				}
+				want = append(want, iniKey(d, prefix+"."+d, typ))
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("lookKeys of a name of %d octets gave\n%s\nwant\n%s", c.octets, strings.Join(got, "\n"), strings.Join(want, "\n"))
+			}
+		})
+	}
+}
+
+// A name that has room for the wildcard name only is asked that one name,
+// and init shows its line.
+func TestInitAsksOnlyTheWildcardNameOfALongName(t *testing.T) {
+	d := iniLongName(t, 253)
+	s := iniNew(t, d, iniURL, "no")
+	s.runner.over = map[string][]obs.Answer{iniKey(d, d, dnswire.TypeMX): iniBoth(iniRecords(d, dnswire.TypeMX, "10 mail.example.net."))}
+	code, out := s.run()
+	if code != 1 {
+		t.Errorf("exit code %d; want 1", code)
+	}
+	keys := s.runner.keys()
+	slices.Sort(keys)
+	if want := append(iniKeys(d, false), iniKey(d, "*."+d, dnswire.TypeA)); !slices.Equal(keys, slices.Sorted(slices.Values(want))) {
+		t.Errorf("checks %q; want each of %q once", keys, want)
+	}
+	lines, _ := iniShown(out, d)
+	if want := "*." + d + " A none"; !slices.Contains(lines, want) {
+		t.Errorf("init showed %q; want the line %q among them", lines, want)
+	}
+}
+
+// A wildcard that answers has a data line at the name, in the place of the
+// none line.
+func TestInitWritesTheAddressOfAWildcardThatAnswers(t *testing.T) {
+	d := "example.com."
+	s := iniNew(t, "example.com", iniURL, "yes")
+	s.runner.over = map[string][]obs.Answer{iniKey(d, "*."+d, dnswire.TypeA): iniBoth(iniRecords("*."+d, dnswire.TypeA, "192.0.2.99"))}
+	code, out := s.run()
+	if code != 0 {
+		t.Errorf("exit code %d; want 0; output:\n%s", code, out)
+	}
+	lines := slices.Clone(iniLines(d))
+	lines[slices.Index(lines, "*."+d+" A none")] = "*." + d + " A 192.0.2.99"
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
+}
+
+// A certificate-challenge record that is there during the setup would give
+// an alert at once, as an exact line, when it goes; init leaves the name out
+// and says why.
+func TestInitLeavesOutAChallengeRecordThatIsThere(t *testing.T) {
+	d := "example.com."
+	s := iniNew(t, "example.com", iniURL, "yes")
+	s.runner.over = map[string][]obs.Answer{
+		iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT): iniBoth(iniRecords("_acme-challenge."+d, dnswire.TypeTXT, `"t0ken1"`)),
+	}
+	code, out := s.run()
+	if code != 0 {
+		t.Errorf("exit code %d; want 0; output:\n%s", code, out)
+	}
+	lines := slices.DeleteFunc(slices.Clone(iniLines(d)), func(l string) bool { return l == "_acme-challenge."+d+" TXT none" })
+	challenge := "_acme-challenge." + d + " TXT: a certificate-challenge record is there now; write none once it is gone, or no line if you use DNS challenges"
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, challenge, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
 }

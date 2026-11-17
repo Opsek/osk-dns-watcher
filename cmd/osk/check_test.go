@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/dns-monitoring/internal/expect"
+	"github.com/Opsek/dns-monitoring/internal/observe"
+	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
 
 // The tests ask one fake server on 127.0.0.1, given as the only root server.
@@ -513,5 +516,112 @@ func TestCheckOutputFails(t *testing.T) {
 	if code != 1 || !strings.HasPrefix(e, "osk: ") || !strings.Contains(e, "disk full") || strings.Count(e, "\n") != 1 ||
 		!strings.HasSuffix(e, "\n") {
 		t.Errorf("exit code %d, errors %q; want 1 and one line \"osk: ...disk full\"", code, e)
+	}
+}
+
+// --- the checks of a file ---
+
+func dngqParse(t *testing.T, lines ...string) *expect.File {
+	t.Helper()
+	f, err := expect.Parse([]byte("domain corp.test.\n" + strings.Join(lines, "\n") + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return f
+}
+
+func dngqKeys(keys []obs.Key) []string {
+	texts := []string{}
+	for _, k := range keys {
+		texts = append(texts, k.String())
+	}
+	return texts
+}
+
+// dngqOldKeys are the checks that osk gave a file before the probes: the
+// delegation and DS checks, then a records check for each line but DS.
+func dngqOldKeys(f *expect.File) []string {
+	keys := []string{obs.DelegationKey(f.Domain).String(), obs.DSKey(f.Domain).String()}
+	for _, e := range f.Expectations {
+		if e.Type != dnswire.TypeDS {
+			keys = append(keys, obs.RecordsKey(f.Domain, e.Name, e.Type).String())
+		}
+	}
+	return keys
+}
+
+// The keys are the plan of the file without its serial check: the lines, the
+// probes of the names that they point at, then the wildcard checks.
+func TestExpectKeysAreThePlanWithoutTheSerialCheck(t *testing.T) {
+	f := dngqParse(t,
+		"corp.test. A 10.53.0.80",
+		"corp.test. DS none",
+		"corp.test. MX 10 mail.dnshost.test.",
+		"cdn.corp.test. CNAME edge.dnshost.test.",
+		"*.corp.test. A none",
+		"*.sub.corp.test. A none",
+		"sub.corp.test. NS ns1.sub.corp.test.",
+		"www.corp.test. A 10.53.0.81",
+		"edge.dnshost.test. A 10.53.0.84",
+	)
+	keys := expectKeys(f)
+	want := []string{
+		"delegation corp.test. corp.test. NS",
+		"ds corp.test. corp.test. DS",
+		"records corp.test. corp.test. A",
+		"records corp.test. corp.test. MX",
+		"records corp.test. cdn.corp.test. CNAME",
+		"records corp.test. sub.corp.test. NS",
+		"records corp.test. www.corp.test. A",
+		"records corp.test. edge.dnshost.test. A",
+		"records corp.test. mail.dnshost.test. A",
+		"records corp.test. ns1.sub.corp.test. A",
+		"wildcard corp.test. corp.test. A",
+		"wildcard corp.test. sub.corp.test. A",
+	}
+	if got := dngqKeys(keys); !slices.Equal(got, want) {
+		t.Errorf("expectKeys gave\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, k := range keys {
+		if err := (observe.Check{Key: k, Interval: checkInterval}).Validate(); err != nil {
+			t.Errorf("%s: %v", k, err)
+		}
+	}
+}
+
+func TestExpectKeysOfAFileWithNoLine(t *testing.T) {
+	want := []string{"delegation corp.test. corp.test. NS", "ds corp.test. corp.test. DS"}
+	if got := dngqKeys(expectKeys(dngqParse(t))); !slices.Equal(got, want) {
+		t.Errorf("expectKeys gave %q, want %q", got, want)
+	}
+}
+
+// A file with no none line at a wildcard owner has its old checks first.
+func TestExpectKeysKeepTheOldChecksFirst(t *testing.T) {
+	for _, lines := range [][]string{
+		{"corp.test. A 10.53.0.80", "www.corp.test. A 10.53.0.81"},
+		{"corp.test. A 10.53.0.80", "corp.test. DS none", "corp.test. MX 10 mail.dnshost.test.", "*.corp.test. A 10.53.0.99"},
+		{"cdn.corp.test. CNAME edge.dnshost.test.", "edge.dnshost.test. A 10.53.0.84", "sub.corp.test. NS ns1.sub.corp.test."},
+		{"corp.test. NS ns1.corp.test. | ns2.corp.test.", `corp.test. TXT "v=spf1 include:spf.dnshost.test. -all"`},
+	} {
+		f := dngqParse(t, lines...)
+		got, old := dngqKeys(expectKeys(f)), dngqOldKeys(f)
+		if len(got) < len(old) || !slices.Equal(got[:len(old)], old) {
+			t.Errorf("file %q: expectKeys gave\n%s\nwant these first\n%s", lines, strings.Join(got, "\n"), strings.Join(old, "\n"))
+		}
+	}
+}
+
+// The wildcard check takes the place of the none line at the wildcard owner.
+func TestExpectKeysHaveNoRecordsCheckForANoneLineThatAWildcardCheckOwns(t *testing.T) {
+	f := dngqParse(t, "*.corp.test. A none", "www.corp.test. A 10.53.0.81")
+	want := []string{
+		"delegation corp.test. corp.test. NS",
+		"ds corp.test. corp.test. DS",
+		"records corp.test. www.corp.test. A",
+		"wildcard corp.test. corp.test. A",
+	}
+	if got := dngqKeys(expectKeys(f)); !slices.Equal(got, want) {
+		t.Errorf("expectKeys gave\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

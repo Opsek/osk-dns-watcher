@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"net/netip"
 	"slices"
 	"time"
 
@@ -19,9 +20,10 @@ type Schedule struct {
 	plan []Check
 	keys []string // keys[i] is plan[i].Key.String(), kept because every call needs it
 
-	starts  map[string]time.Time // no entry: not started since New or the last Replace
-	running map[string]bool      // also a key that left the plan, until its Done
-	failing map[string]time.Time // start of the unbroken series of failed runs
+	starts      map[string]time.Time // no entry: not started since New or the last Replace
+	running     map[string]bool      // also a key that left the plan, until its Done
+	failing     map[string]time.Time // start of the unbroken series of failed runs
+	disagreeing map[string]*series   // the unbroken series of runs with two differing answers
 
 	serials     []sighting // one per address of the domain's servers
 	serialMoved bool       // the last serial run saw a move
@@ -30,6 +32,17 @@ type Schedule struct {
 
 	held       []decide.Move // moves of ended rounds that wait for their report
 	lastReport time.Time     // when moves were last reported
+}
+
+// series is what a records check has shown about its servers disagreeing.
+// A split counts only while every server keeps giving the same answer,
+// because servers whose answers rotate by design disagree at random and
+// never steadily.
+type series struct {
+	since time.Time                 // o.Start of the first run of the split
+	runs  int                       // runs of the split; 0: no split now
+	quiet int                       // runs since the last run that went on with a split
+	texts map[netip.AddrPort]string // the last set that each server address gave
 }
 
 // sighting is the serial that an address gave last, and when.
@@ -53,16 +66,26 @@ type Report struct {
 	Tier         Tier
 	FailingSince time.Time     // for decide.Input
 	FailLimit    time.Duration // for decide.Input
+	DisagreeLong bool          // for decide.Input
+	DisagreeOver bool          // for decide.Input
 	Moves        []decide.Move // serial checks only: the servers whose serial moved in o
 }
 
+// DisagreeRuns is how many runs in a row a split must last before it is
+// reported. With two servers and two equally likely answers, a steady split
+// of N runs comes by chance once in 2*4^(N-1) runs; 11 runs make about one
+// false alert in 4 years for a set checked every 60 seconds, and are 10
+// minutes of the fast tier.
+const DisagreeRuns = 11
+
 func New(f *expect.File, fast []dnswire.Name, iv Intervals) *Schedule {
 	s := &Schedule{
-		iv:      iv,
-		fast:    slices.Clone(fast),
-		starts:  map[string]time.Time{},
-		running: map[string]bool{},
-		failing: map[string]time.Time{},
+		iv:          iv,
+		fast:        slices.Clone(fast),
+		starts:      map[string]time.Time{},
+		running:     map[string]bool{},
+		failing:     map[string]time.Time{},
+		disagreeing: map[string]*series{},
 	}
 	s.setPlan(f)
 	return s
@@ -84,6 +107,17 @@ func (s *Schedule) Checks() []Check { return slices.Clone(s.plan) }
 func (s *Schedule) Replace(f *expect.File) {
 	s.setPlan(f)
 	clear(s.starts)
+	// A line that comes back must start new series, not join old ones.
+	for k := range s.failing {
+		if !slices.Contains(s.keys, k) {
+			delete(s.failing, k)
+		}
+	}
+	for k := range s.disagreeing {
+		if !slices.Contains(s.keys, k) {
+			delete(s.disagreeing, k)
+		}
+	}
 	if s.round == nil {
 		return
 	}
@@ -168,6 +202,9 @@ func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 	}
 	tier := s.plan[i].Tier
 	r := Report{Known: true, Tier: tier, FailingSince: s.failingSince(k, o), FailLimit: s.iv.FailLimit(tier)}
+	if o.Key.Kind == obs.KindRecords {
+		r.DisagreeLong, r.DisagreeOver = s.disagreeState(k, o, now)
+	}
 	if o.Key.Kind == obs.KindSerial {
 		r.Moves = s.serialMoves(o)
 		s.serialMoved = len(r.Moves) > 0
@@ -190,6 +227,69 @@ func (s *Schedule) failingSince(k string, o obs.Observation) time.Time {
 	}
 	return since
 }
+
+// disagreeState counts o in the entry of its key and reports whether the
+// split is long enough to open an alert and whether it has been absent long
+// enough to end one. A split goes on while every server that the entry knows
+// gives the set it gave last; a new server joins. A run with no split in
+// which a known server was asked and failed, and the others repeat, is
+// unknown: a stale server that fails now and then must not end its own split.
+func (s *Schedule) disagreeState(k string, o obs.Observation, now time.Time) (long, over bool) {
+	d := s.disagreeing[k]
+	if d == nil {
+		d = &series{texts: map[netip.AddrPort]string{}}
+		s.disagreeing[k] = d
+	}
+	sets := decide.Sets(o)
+	repeats := d.runs > 0 && !slices.ContainsFunc(sets, func(x decide.Seen) bool {
+		last, known := d.texts[x.Answer.Server.Addr]
+		return known && last != x.Text
+	})
+	split := decide.Disagree(o)
+	switch {
+	case split && repeats:
+		d.runs++
+		d.quiet = 0
+	case split:
+		d.since, d.runs = o.Start, 1
+		clear(d.texts)
+		d.quiet++
+	case repeats && d.failedAt(o, sets):
+		return d.long(now, s.iv), d.quiet >= DisagreeRuns
+	default:
+		// The texts stay but are never read while runs is 0.
+		d.runs = 0
+		d.quiet++
+	}
+	if split {
+		for _, x := range sets {
+			d.texts[x.Answer.Server.Addr] = x.Text
+		}
+	}
+	return d.long(now, s.iv), d.quiet >= DisagreeRuns
+}
+
+// failedAt reports whether o holds a failure at a server that d knows, or a
+// failure with no address (the walk failed). A server that o did not ask,
+// for instance one taken out of the NS set, is no failure.
+func (d *series) failedAt(o obs.Observation, sets []decide.Seen) bool {
+	return slices.ContainsFunc(o.Answers, func(a obs.Answer) bool {
+		if slices.ContainsFunc(sets, func(x decide.Seen) bool { return x.Answer.Server.Addr == a.Server.Addr }) {
+			return false
+		}
+		_, known := d.texts[a.Server.Addr]
+		return known || !a.Server.Addr.IsValid()
+	})
+}
+
+func (d *series) long(now time.Time, iv Intervals) bool {
+	return d.runs >= DisagreeRuns && now.Sub(d.since) >= iv.DisagreeLimit()
+}
+
+// DisagreeLimit is how long the runs of a check may show two differing
+// answers before it is reported: two intervals of the other tier, 10 minutes
+// at the defaults. A server that is only slow to catch up must not alert.
+func (iv Intervals) DisagreeLimit() time.Duration { return 2 * iv.Other }
 
 // serialMoves compares the serial of each address in o with the one it gave
 // before. An address that gave no serial keeps what it gave before, and the
@@ -339,5 +439,6 @@ func (s *Schedule) Flush(now time.Time) []decide.Move {
 // ownNotice reports a change that tells the operator about the zone anyway,
 // also when it ends an alert because a change was put back.
 func ownNotice(c decide.Change) bool {
-	return c.Finding.Rule == decide.RuleRecordSet || c.Finding.Rule == decide.RuleZone
+	r := c.Finding.Rule
+	return r == decide.RuleRecordSet || r == decide.RuleChallenge || r == decide.RuleZone || r == decide.RuleWildcard
 }

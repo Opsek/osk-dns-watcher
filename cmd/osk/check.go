@@ -19,6 +19,7 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/dns-monitoring/internal/schedule"
 )
 
 // checkInterval is the interval each check of "osk check" is given. The
@@ -368,14 +369,13 @@ func problemLines(path string, err error) string {
 	return b.String()
 }
 
-// expectKeys gives the checks of a file: the delegation and DS checks of its
-// domain, then a records check for each expectation, in file order. The DS
-// check judges the DS line, the only place a file may hold DS.
+// expectKeys gives the checks of a file: those of the schedule without the
+// serial check, so that one command and the service run the same probes.
 func expectKeys(f *expect.File) []obs.Key {
-	keys := []obs.Key{obs.DelegationKey(f.Domain), obs.DSKey(f.Domain)}
-	for _, e := range f.Expectations {
-		if e.Type != dnswire.TypeDS {
-			keys = append(keys, obs.RecordsKey(f.Domain, e.Name, e.Type))
+	var keys []obs.Key
+	for _, c := range schedule.Plan(f, nil, schedule.Defaults()) {
+		if c.Key.Kind != obs.KindSerial {
+			keys = append(keys, c.Key)
 		}
 	}
 	return keys

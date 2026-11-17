@@ -101,8 +101,10 @@ func stfBlock(d string, lines []string, skips ...string) string {
 	return iniBlock(d, lines, skips...) + stfWarning(d)
 }
 
+// stfWithout gives the lines without the one of the apex set of the type kind.
 func stfWithout(lines []string, kind string) []string {
-	return slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return strings.Contains(l, " "+kind+" ") })
+	d := strings.TrimPrefix(lines[0], "domain ")
+	return slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return strings.HasPrefix(l, d+" "+kind+" ") })
 }
 
 // stfOneDead is the answer of a set whose second server gives none.
@@ -478,15 +480,22 @@ func stfNothingCompared(d string) string {
 		"Until its file has those lines, a change of them gives no alert.\n"
 }
 
-// stfDead fails each check of the records of d that is named, twice.
-func stfDead(d string, keep ...dnswire.Type) map[string][][]obs.Answer {
+// stfDead fails twice each check of the records of d that is not in keep, the
+// ones under the apex too.
+func stfDead(d string, keep ...string) map[string][][]obs.Answer {
 	seq := map[string][][]obs.Answer{}
+	keys := []string{
+		iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "*."+d, dnswire.TypeA),
+		iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT), iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT),
+	}
 	for _, ty := range []dnswire.Type{dnswire.TypeNS, dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeMX, dnswire.TypeTXT, dnswire.TypeCAA} {
-		if !slices.Contains(keep, ty) {
-			seq[iniKey(d, d, ty)] = [][]obs.Answer{iniBoth(iniFail(obs.ReasonTimeout))}
+		keys = append(keys, iniKey(d, d, ty))
+	}
+	for _, k := range keys {
+		if !slices.Contains(keep, k) {
+			seq[k] = [][]obs.Answer{iniBoth(iniFail(obs.ReasonTimeout))}
 		}
 	}
-	seq[iniKey(d, "www."+d, dnswire.TypeA)] = [][]obs.Answer{iniBoth(iniFail(obs.ReasonTimeout))}
 	return seq
 }
 
@@ -501,9 +510,12 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 		sets bool // the warning about the record sets
 	}{
 		{"only DS", stfDead(com), true, true},
-		{"NS and DS", stfDead(com, dnswire.TypeNS), false, true},
-		{"DS and one more line", stfDead(com, dnswire.TypeA), true, false},
-		{"NS, DS and one more line", stfDead(com, dnswire.TypeNS, dnswire.TypeMX), false, false},
+		{"NS and DS", stfDead(com, iniKey(com, com, dnswire.TypeNS)), false, true},
+		{"DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeA)), true, false},
+		{"DS and a none line of a name under the apex", stfDead(com, iniKey(com, "*."+com, dnswire.TypeA)), true, false},
+		{"DS and the none line of a challenge name", stfDead(com, iniKey(com, "_acme-challenge."+com, dnswire.TypeTXT)), true, false},
+		{"NS, DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, com, dnswire.TypeMX)), false, false},
+		{"NS, DS and a none line of a name under the apex", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, "_acme-challenge.www."+com, dnswire.TypeTXT)), false, false},
 		{"the fake world", nil, false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -533,7 +545,7 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 	}
 	t.Run("two domains, each block has its own", func(t *testing.T) {
 		seq := stfDead(com)
-		maps.Copy(seq, stfDead(org, dnswire.TypeNS))
+		maps.Copy(seq, stfDead(org, iniKey(org, org, dnswire.TypeNS)))
 		s, _ := stfNew(t, seq, "example.com example.org", iniURL, "yes")
 		code, out := s.run()
 		if code != 0 {

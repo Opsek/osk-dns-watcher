@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
@@ -86,7 +87,7 @@ type Check struct {
 	Key      obs.Key
 	Tier     Tier
 	Interval time.Duration // iv.Of(Tier)
-	Zone     bool          // a records check of a name in the domain's own zone
+	Zone     bool          // a records or wildcard check of a name in the domain's own zone
 }
 
 // fastTypes at the domain itself: where it receives its web and mail
@@ -94,7 +95,9 @@ type Check struct {
 var fastTypes = []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeCAA, dnswire.TypeMX}
 
 // Plan gives the checks of f: the serial, delegation and DS checks of its
-// domain, then a records check for each expectation in file order.
+// domain, a records check for each expectation in file order, an address
+// check for each name that a line points at, and a wildcard check for each
+// zone that the file says has no wildcard.
 func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	d := f.Domain
 	checks := []Check{
@@ -102,14 +105,22 @@ func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 		{Key: obs.DelegationKey(d), Tier: TierParent, Interval: iv.Of(TierParent)},
 		{Key: obs.DSKey(d), Tier: TierParent, Interval: iv.Of(TierParent)},
 	}
-	owners := fastOwners(d, fast)
+	wildcards := decide.Wildcards(f)
 	for _, e := range f.Expectations {
 		// The DS check judges the DS line, the only place a file may hold DS.
 		if e.Type == dnswire.TypeDS {
 			continue
 		}
+		// The wildcard check judges the line "*.<zone> A none"; a records
+		// check as well would report one added wildcard twice. A line of
+		// another type at a "*" owner is judged by its own records check
+		// only: the wildcard check asks for A.
+		if decide.IsWildcardOwner(e.Name) && e.Type == dnswire.TypeA && e.Form == expect.FormNone &&
+			slices.ContainsFunc(wildcards, e.Name.Parent().Equal) {
+			continue
+		}
 		tier := TierOther
-		if e.Name.Equal(d) && slices.Contains(fastTypes, e.Type) || slices.ContainsFunc(owners, e.Name.Equal) {
+		if e.Name.Equal(d) && slices.Contains(fastTypes, e.Type) || slices.ContainsFunc(fast, e.Name.Equal) || decide.IsChallenge(d, e.Name) {
 			tier = TierFast
 		}
 		checks = append(checks, Check{
@@ -121,20 +132,23 @@ func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 			Zone: e.Name.IsSubdomainOf(d) && f.Zone(e.Name).Equal(d),
 		})
 	}
-	return checks
-}
-
-// fastOwners are the names whose lines are all fast: the given names, and
-// the owner of the ACME DNS challenge of the domain (RFC 8555 section 8.4),
-// where the challenge record, or an alias that hands it to another zone, lets
-// whoever controls it obtain a certificate for the domain.
-func fastOwners(d dnswire.Name, fast []dnswire.Name) []dnswire.Name {
-	owners := slices.Clone(fast)
-	// A domain too long for the challenge name cannot have that line.
-	if acme, err := dnswire.NameFromLabels(append([]string{"_acme-challenge"}, d.Labels()...)); err == nil {
-		owners = append(owners, acme)
+	for _, t := range decide.Targets(f) {
+		// A line "<target> A …" is the same check.
+		if !slices.ContainsFunc(checks, func(c Check) bool {
+			return c.Key.Kind == obs.KindRecords && c.Key.Type == dnswire.TypeA && c.Key.Name.Equal(t.Name)
+		}) {
+			checks = append(checks, Check{Key: obs.RecordsKey(d, t.Name, dnswire.TypeA), Tier: TierOther, Interval: iv.Of(TierOther)})
+		}
 	}
-	return owners
+	for _, z := range wildcards {
+		checks = append(checks, Check{
+			Key:      obs.WildcardKey(d, z),
+			Tier:     TierOther,
+			Interval: iv.Of(TierOther),
+			Zone:     z.IsSubdomainOf(d) && f.Zone(z).Equal(d),
+		})
+	}
+	return checks
 }
 
 // Unused gives the names of fast that own no line of f, in the given order,

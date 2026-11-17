@@ -257,7 +257,8 @@ func (m *monitor) judge(r result) error {
 	}
 	changes, err := m.apply(d, o.Key, failed, now, func(open []decide.Finding) []decide.Change {
 		return decide.Decide(decide.Input{Expect: d.file, Open: open, Observation: o, Now: now,
-			FailingSince: rep.FailingSince, FailLimit: rep.FailLimit, NameServersOpen: nsOpen})
+			FailingSince: rep.FailingSince, FailLimit: rep.FailLimit, NameServersOpen: nsOpen,
+			DisagreeLong: rep.DisagreeLong, DisagreeOver: rep.DisagreeOver})
 	})
 	if err != nil {
 		return err

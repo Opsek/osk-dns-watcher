@@ -104,7 +104,7 @@ func changeFor(c *config.Config, a alert.Alert) (change, error) {
 		return change{}, fmt.Errorf("alert %d is not open", a.ID)
 	}
 	if hint := refusal(a.Rule); hint != "" {
-		return change{}, fmt.Errorf("accept cannot change the file for a %s alert: %s", a.Rule, hint)
+		return change{}, fmt.Errorf("accept cannot change the file for %s %s alert: %s", article(a.Rule.String()), a.Rule, hint)
 	}
 	text, err := seenText(a)
 	if err != nil {
@@ -127,6 +127,14 @@ func changeFor(c *config.Config, a alert.Alert) (change, error) {
 	return ch, nil
 }
 
+// article is "an" before a vowel and "a" before any other letter.
+func article(word string) string {
+	if strings.ContainsAny(word[:1], "aeiou") {
+		return "an"
+	}
+	return "a"
+}
+
 // refusal gives why the file cannot be changed for an alert of rule r, or ""
 // when it can: only these rules compare the set of one line with what the
 // servers show.
@@ -146,6 +154,16 @@ func refusal(r decide.Rule) string {
 		return "nothing to accept: no server answers"
 	case decide.RuleZoneChanged:
 		return "nothing to accept: no watched record differs"
+	case decide.RuleDisagree:
+		return "nothing to accept: the servers give different sets; find the server that is wrong"
+	case decide.RuleAliasTarget, decide.RuleMailTarget:
+		return "nothing to accept: the name does not exist; change or remove the line that points at it"
+	case decide.RuleNameServerHost:
+		return "nothing to accept: the nameserver does not exist; change the delegation and the NS line"
+	case decide.RuleChallenge:
+		return "a challenge record changes with each certificate request; remove the line by hand if you use DNS challenges"
+	case decide.RuleWildcard:
+		return "write the lines of the wildcard by hand"
 	}
 	return "edit the file by hand"
 }

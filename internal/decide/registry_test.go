@@ -179,8 +179,8 @@ func TestRegistryRuleWordsAndNumbers(t *testing.T) {
 			t.Errorf("Rule(%d).String() is %q, want %q", c.num, got, c.word)
 		}
 	}
-	if got := Rule(11).String(); got != "rule11" {
-		t.Errorf("Rule(11).String() is %q, want rule11", got)
+	if got := Rule(17).String(); got != "rule17" {
+		t.Errorf("Rule(17).String() is %q, want rule17", got)
 	}
 }
 
@@ -1185,7 +1185,8 @@ func regOutcomeOf(in Input, or regOracle, r Rule) regOutcome {
 			}
 			want = &f
 		}
-	case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged:
+	case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
+		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard:
 		// Not registry-level rules: the oracle wants no finding.
 	}
 	switch {
@@ -1297,7 +1298,8 @@ func regCheckFindings(t *testing.T, seed uint64, in Input) {
 			want = or.gone
 		case RuleDS:
 			want = or.ds
-		case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged:
+		case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
+			RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard:
 			t.Fatalf("seed %d: %v is not a registry-level rule", seed, r)
 		}
 		g := byRule(r)

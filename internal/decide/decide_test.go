@@ -228,7 +228,7 @@ func TestRuleSeverityAndOpWords(t *testing.T) {
 		{Rule(4).String(), "nameservers"},
 		{Rule(5).String(), "record-set"},
 		{Rule(0).String(), "rule0"},
-		{Rule(11).String(), "rule11"},
+		{Rule(17).String(), "rule17"},
 		{Severity(1).String(), "low"},
 		{Severity(2).String(), "medium"},
 		{Severity(3).String(), "high"},
@@ -359,7 +359,7 @@ func TestSerialAndOtherKindsGiveNothing(t *testing.T) {
 	for _, key := range []obs.Key{
 		obs.SerialKey(corp),
 		{Kind: 0, Domain: corp, Name: www, Type: dnswire.TypeA},
-		{Kind: 5, Domain: corp, Name: www, Type: dnswire.TypeA},
+		{Kind: 6, Domain: corp, Name: www, Type: dnswire.TypeA},
 	} {
 		// A zone that is not the expected one, so that no rule has a reason to look.
 		o := decObservation(key, www, nil, answer)

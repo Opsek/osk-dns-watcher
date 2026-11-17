@@ -109,15 +109,26 @@ func worthRetry(a obs.Answer) bool {
 }
 
 // lookKeys gives the delegation first, then the checks that osk snapshot
-// makes of "<d> A <d> AAAA <d> MX <d> TXT <d> CAA www.<d> A". A www name
-// longer than a name may be is left out.
+// makes of "<d> A <d> AAAA <d> MX <d> TXT <d> CAA www.<d> A", then the names
+// where a wildcard or a certificate challenge would show. A name longer than
+// a name may be is left out.
 func lookKeys(domain dnswire.Name) []obs.Key {
 	keys := []obs.Key{obs.DelegationKey(domain), obs.DSKey(domain), obs.RecordsKey(domain, domain, dnswire.TypeNS)}
 	for _, t := range []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeMX, dnswire.TypeTXT, dnswire.TypeCAA} {
 		keys = append(keys, obs.RecordsKey(domain, domain, t))
 	}
-	if www, err := dnswire.NameFromLabels(append([]string{"www"}, domain.Labels()...)); err == nil {
-		keys = append(keys, obs.RecordsKey(domain, www, dnswire.TypeA))
+	for _, p := range []struct {
+		prefix []string
+		t      dnswire.Type
+	}{
+		{[]string{"www"}, dnswire.TypeA},
+		{[]string{"_acme-challenge"}, dnswire.TypeTXT},
+		{[]string{"_acme-challenge", "www"}, dnswire.TypeTXT},
+		{[]string{"*"}, dnswire.TypeA},
+	} {
+		if n, err := dnswire.NameFromLabels(append(slices.Clone(p.prefix), domain.Labels()...)); err == nil {
+			keys = append(keys, obs.RecordsKey(domain, n, p.t))
+		}
 	}
 	return keys
 }

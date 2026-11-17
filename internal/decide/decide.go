@@ -21,16 +21,22 @@ import (
 type Rule uint8
 
 const (
-	RuleInvalidFile  Rule = iota + 1 // the expectations file is not valid
-	RuleNotCovered                   // no expectation covers the check
-	RuleZone                         // the set was served by another zone than the file declares
-	RuleNameServers                  // the parent delegates the domain to other name servers
-	RuleRecordSet                    // a server gives another record set than expected
-	RuleCheckFailing                 // the check has had no usable answer for too long
-	RuleZoneChanged                  // the serial of the zone moved and no watched record differs
-	RuleGlue                         // a glue address at the parent differs from the expectations
-	RuleDS                           // the DS set at the parent differs from the expectations or is gone
-	RuleGone                         // the parent says that the domain does not exist
+	RuleInvalidFile    Rule = iota + 1 // the expectations file is not valid
+	RuleNotCovered                     // no expectation covers the check
+	RuleZone                           // the set was served by another zone than the file declares
+	RuleNameServers                    // the parent delegates the domain to other name servers
+	RuleRecordSet                      // a server gives another record set than expected
+	RuleCheckFailing                   // the check has had no usable answer for too long
+	RuleZoneChanged                    // the serial of the zone moved and no watched record differs
+	RuleGlue                           // a glue address at the parent differs from the expectations
+	RuleDS                             // the DS set at the parent differs from the expectations or is gone
+	RuleGone                           // the parent says that the domain does not exist
+	RuleDisagree                       // two servers give different sets and no other finding explains it
+	RuleAliasTarget                    // the target of an alias does not exist
+	RuleNameServerHost                 // a name server host does not exist
+	RuleMailTarget                     // a mail target does not exist
+	RuleChallenge                      // a certificate-challenge record exists where the file expects none
+	RuleWildcard                       // a random name under a zone answers where the file expects no wildcard
 )
 
 var ruleWords = map[Rule]string{
@@ -44,6 +50,13 @@ var ruleWords = map[Rule]string{
 	RuleGlue:         "glue",
 	RuleDS:           "ds",
 	RuleGone:         "gone",
+
+	RuleDisagree:       "disagree",
+	RuleAliasTarget:    "alias-target",
+	RuleNameServerHost: "nameserver-host",
+	RuleMailTarget:     "mail-target",
+	RuleChallenge:      "challenge",
+	RuleWildcard:       "wildcard",
 }
 
 func (r Rule) String() string { return word(ruleWords, r, "rule") }
@@ -103,6 +116,13 @@ var severities = map[Rule]Severity{
 	RuleGlue:         SeverityCritical,
 	RuleDS:           SeverityHigh,
 	RuleGone:         SeverityCritical,
+
+	RuleDisagree:       SeverityMedium,
+	RuleAliasTarget:    SeverityHigh,
+	RuleNameServerHost: SeverityCritical,
+	RuleMailTarget:     SeverityHigh,
+	RuleChallenge:      SeverityHigh,
+	RuleWildcard:       SeverityMedium,
 }
 
 var highTypes = map[dnswire.Type]bool{
@@ -152,6 +172,12 @@ type Input struct {
 	// check of the observed domain. It raises a ds finding, and the caller
 	// reads it from the store because Open holds findings of this check only.
 	NameServersOpen bool
+
+	// DisagreeLong: the servers have given different sets, each one steadily,
+	// for long enough to report. DisagreeOver: the split has been absent for
+	// long enough to end an open alert. The schedule judges both.
+	DisagreeLong bool
+	DisagreeOver bool
 }
 
 // Findings judges o against f, in Rule order. A failed answer is unknown: it
@@ -167,9 +193,17 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 	case obs.KindDS:
 		found = judge(o, e, ok, RuleDS)
 	case obs.KindRecords:
-		found = append(zone(f, o), judge(o, e, ok, RuleRecordSet)...)
+		found = zone(f, o)
+		t, probe := target(f, o)
+		// A probe of a target has no line of its own to be covered by.
+		if ok || !probe {
+			found = append(found, judge(o, e, ok, recordRule(f, e, ok))...)
+		}
+		if probe {
+			found = append(found, targetFindings(o, t)...)
+		}
 	case obs.KindWildcard:
-		// No line of the file is about a random name.
+		found = wildcard(f, o)
 	case obs.KindSerial:
 		// No line of the file is about the serial.
 	}
@@ -184,6 +218,16 @@ func expectation(f *expect.File, k obs.Key) (expect.Expectation, bool) {
 		return expect.Expectation{}, false
 	}
 	return f.Find(k.Name, k.Type)
+}
+
+// recordRule is challenge for a line that says no certificate-challenge record
+// exists, and record-set for every other line: an alias that hands the
+// challenge to another zone lets whoever controls it obtain a certificate.
+func recordRule(f *expect.File, e expect.Expectation, ok bool) Rule {
+	if ok && e.Form == expect.FormNone && IsChallenge(f.Domain, e.Name) {
+		return RuleChallenge
+	}
+	return RuleRecordSet
 }
 
 // judge gives not-covered when there is no expectation, else a finding of
@@ -309,6 +353,9 @@ func Decide(in Input) []Change {
 		found = append(found, f)
 	}
 	open := firstOpen(in.Open, o.Key.String())
+	if f, ok := disagree(in, found, open); ok {
+		found = append(found, f)
+	}
 	raiseDS(found, open, in.NameServersOpen)
 	changes := openOrUpdate(found, open, in.Now)
 	for _, was := range open {
@@ -328,9 +375,10 @@ func Decide(in Input) []Change {
 
 // inForce gives the open finding of a resolve with the line now in the file as
 // Expected, so the resolve shows what the servers match and not the old line.
+// These rules are the ones whose resolve view shows Expected as the state now.
 // A finding of another rule, or with no line now, stays as it is.
 func inForce(was Finding, in Input) Finding {
-	if was.Rule == RuleNameServers || was.Rule == RuleRecordSet || was.Rule == RuleDS {
+	if was.Rule == RuleNameServers || was.Rule == RuleRecordSet || was.Rule == RuleDS || was.Rule == RuleChallenge {
 		if e, ok := expectation(in.Expect, in.Observation.Key); ok {
 			was.Expected = e.FormText()
 		}
@@ -412,6 +460,11 @@ func changed(was, f Finding) bool {
 	} else if was.Expected != f.Expected {
 		return true
 	}
+	// Servers that give different sets by design rotate their answers, so a
+	// new value would send an update at almost every run.
+	if f.Rule == RuleDisagree {
+		return false
+	}
 	old := lines(was.Value)
 	return slices.ContainsFunc(lines(f.Value), func(l string) bool { return !slices.Contains(old, l) })
 }
@@ -433,7 +486,10 @@ func lines(v string) []string {
 // every answer failed, so the run saw nothing; a failure with no address
 // (the walk or a host lookup failed); or a failure at a server that showed
 // the problem. Any other failure does not block, so an address that this
-// machine cannot reach does not keep an alert open for good.
+// machine cannot reach does not keep an alert open for good. A disagree
+// alert is not blocked by a failure at a server that it shows: the schedule
+// already keeps the split while a known server fails, and its end must not
+// wait for a server that is gone.
 func blocked(f Finding, o obs.Observation) bool {
 	if Failed(o) {
 		return true
@@ -443,7 +499,7 @@ func blocked(f Finding, o obs.Observation) bool {
 			continue
 		}
 		showed := func(s Seen) bool { return s.Answer.Server.Addr == a.Server.Addr }
-		if !a.Server.Addr.IsValid() || slices.ContainsFunc(f.Seen, showed) {
+		if !a.Server.Addr.IsValid() || (f.Rule != RuleDisagree && slices.ContainsFunc(f.Seen, showed)) {
 			return true
 		}
 	}

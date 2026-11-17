@@ -316,7 +316,7 @@ func TestAcceptRefusesWhatItCannotAcceptAndChangesNothing(t *testing.T) {
 	for _, c := range []struct{ name, want string }{
 		{"ns-covered", "the file has a line for corp.test. NS now"},
 		{"zone", cannot + "zone alert: add or remove the NS pair of the subzone by hand"},
-		{"invalid-file", cannot + "invalid-file alert: fix the file"},
+		{"invalid-file", "accept cannot change the file for an invalid-file alert: fix the file"},
 		{"check-failing", cannot + "check-failing alert: nothing to accept: no server answers"},
 		{"zone-changed", cannot + "zone-changed alert: nothing to accept: no watched record differs"},
 		{"disagree", "the servers disagree: 10.53.0.98; 10.53.0.99; edit the file by hand"},
@@ -774,6 +774,52 @@ func TestAcceptRefusesGlueAndGoneAlerts(t *testing.T) {
 			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(c.id, 10))...)
 			if code != 1 || out != "" || errOut != c.want {
 				t.Errorf("accept %q of %s: exit code %d, output %q, errors %q; want 1, nothing and %q", args, c.name, code, out, errOut, c.want)
+			}
+		}
+	}
+	if cliRead(t, w.corp) != cliCorpFile {
+		t.Error("a refused accept changed the file")
+	}
+}
+
+// The rules of the probes, the wildcard check and the series of answers
+// name no line that accept could write: each is refused, with and without
+// --write, and the file stays.
+func TestAcceptRefusesTheDanglingRules(t *testing.T) {
+	w := cliNewWorld(t, false)
+	rec := func(name string, typ dnswire.Type) obs.Key { return cliRecordsKey("corp.test.", name, typ) }
+	cases := []struct {
+		rule     decide.Rule
+		sev      decide.Severity
+		key      obs.Key
+		expected string
+		text     string
+		want     string
+	}{
+		{decide.RuleDisagree, decide.SeverityMedium, rec("www.corp.test.", dnswire.TypeA), "in 10.53.0.0/24", "10.53.0.81",
+			"osk: accept cannot change the file for a disagree alert: nothing to accept: the servers give different sets; find the server that is wrong\n"},
+		{decide.RuleAliasTarget, decide.SeverityHigh, rec("edge.dnshost.test.", dnswire.TypeA), "cdn.corp.test. CNAME edge.dnshost.test.", "no such name",
+			"osk: accept cannot change the file for an alias-target alert: nothing to accept: the name does not exist; change or remove the line that points at it\n"},
+		{decide.RuleNameServerHost, decide.SeverityCritical, rec("ns3.dnshost.test.", dnswire.TypeA), "corp.test. NS ns3.dnshost.test.", "no such name",
+			"osk: accept cannot change the file for a nameserver-host alert: nothing to accept: the nameserver does not exist; change the delegation and the NS line\n"},
+		{decide.RuleMailTarget, decide.SeverityHigh, rec("mx.dnshost.test.", dnswire.TypeA), "corp.test. MX mx.dnshost.test.", "no such name",
+			"osk: accept cannot change the file for a mail-target alert: nothing to accept: the name does not exist; change or remove the line that points at it\n"},
+		{decide.RuleChallenge, decide.SeverityHigh, rec("_acme-challenge.corp.test.", dnswire.TypeTXT), "none", `"t0ken1"`,
+			"osk: accept cannot change the file for a challenge alert: a challenge record changes with each certificate request; remove the line by hand if you use DNS challenges\n"},
+		{decide.RuleWildcard, decide.SeverityMedium, rec("corp.test.", dnswire.TypeA), "none", "10.53.0.66",
+			"osk: accept cannot change the file for a wildcard alert: write the lines of the wildcard by hand\n"},
+	}
+	ids := make([]int64, len(cases))
+	cliStore(t, w.state, func(s *store.Store) {
+		for i, c := range cases {
+			ids[i] = cliOpen(t, s, cliT0, cliAlert(c.rule, c.sev, c.key, c.expected, cliT0, c.text))[0].ID
+		}
+	})
+	for i, c := range cases {
+		for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
+			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(ids[i], 10))...)
+			if code != 1 || out != "" || errOut != c.want {
+				t.Errorf("accept %q of %s: exit code %d, output %q, errors %q; want 1, nothing and %q", args, c.rule, code, out, errOut, c.want)
 			}
 		}
 	}

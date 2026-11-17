@@ -64,7 +64,17 @@ func TestInitAsksAgainForAFieldWithAnOtherOctetWithoutAskingTheServers(t *testin
 						t.Errorf("the output asks again %d times; want once", n)
 					}
 				}
-				stfNoField(t, out, bad)
+				re := strings.Index(out, stfBadChars)
+				if re < 0 {
+					t.Fatalf("the output holds no fixed re-ask text:\n%q", out)
+				}
+				// A line of the good domain may hold text like a refused field, such as
+				// the line of a wildcard name: the field must not be in the output up to
+				// the re-ask, and its secret in none.
+				stfNoField(t, out[:re+len(stfBadChars)], bad)
+				if strings.Contains(out, iniMark) {
+					t.Errorf("the output holds the secret of the URL:\n%q", out)
+				}
 				moments := s.in.seen()
 				for i, m := range moments[:min(3, len(moments))] {
 					if m.checks != 0 {

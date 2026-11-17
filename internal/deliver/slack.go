@@ -91,6 +91,41 @@ var wordings = map[decide.Rule]wording{
 		action:   "Contact your registrar now: the registration may have expired, been deleted or been transferred.",
 		now:      "the domain exists again",
 	},
+	decide.RuleDisagree: {
+		phrase:   "the nameservers of {D} give different answers for {NT}",
+		resolved: "the nameservers of {D} agree on {NT} again",
+		action:   "Find out why one nameserver of {D} answers otherwise: it may be out of date, or not yours.",
+		now:      "the servers agree",
+	},
+	decide.RuleAliasTarget: {
+		phrase:   "{N} does not exist, and an alias in {D} points at it",
+		resolved: "{N}, which an alias in {D} points at, exists again",
+		action:   "Change or remove the alias now: whoever creates {N} receives its traffic.",
+		now:      "the name exists again: check that it is yours",
+	},
+	decide.RuleNameServerHost: {
+		phrase:   "nameserver {N} of {D} does not exist",
+		resolved: "nameserver {N} of {D} exists again",
+		action:   "Replace {N} at your registrar now, or restore it: whoever creates it can answer for {D}.",
+		now:      "the name exists again: check that it is yours",
+	},
+	decide.RuleMailTarget: {
+		phrase:   "{N} does not exist, and the mail records of {D} point at it",
+		resolved: "{N}, which the mail records of {D} point at, exists again",
+		action:   "Change the MX or SPF record that names {N} now: whoever creates it can receive or send mail as {D}.",
+		now:      "the name exists again: check that it is yours",
+	},
+	decide.RuleChallenge: {
+		phrase:   "a certificate-challenge record appeared at {NT}",
+		resolved: "the certificate-challenge record at {NT} is gone",
+		action:   "If you did not ask for a certificate for this name, find out who changed your DNS, and look for the certificate in the certificate logs.",
+	},
+	decide.RuleWildcard: {
+		phrase:   "a wildcard answers for names under {N} that do not exist",
+		resolved: "no wildcard answers under {N} again",
+		action:   "If you did not add a wildcard under {N}, remove it at your DNS provider and find out who added it.",
+		now:      "no wildcard",
+	},
 	decide.RuleRecordSet: {
 		phrase:   "{NT} changed",
 		resolved: "{NT} is as expected again",
@@ -317,9 +352,10 @@ func view(e alert.Event, resolvedNow string) []string {
 	case decide.RuleZoneChanged:
 		// Each line of Value is one move; the alert has no server lines.
 		return moveLines(strings.Split(a.Value, "\n"))
-	case decide.RuleGlue:
-		// Expected holds one part for each host and type that differs, joined by
-		// "; ". A part may hold " | ", so it is not split as a record list.
+	case decide.RuleGlue, decide.RuleAliasTarget, decide.RuleNameServerHost, decide.RuleMailTarget:
+		// Expected holds one part for each host and type that differs, or for each
+		// line that points at the name, joined by "; ". A part may hold " | ", so
+		// it is not split as a record list.
 		var rows []row
 		for i, part := range strings.Split(a.Expected, "; ") {
 			label := ""
@@ -330,7 +366,7 @@ func view(e alert.Event, resolvedNow string) []string {
 		}
 		return append(recordLines(rows), seenLines(a.Lines)...)
 	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered,
-		decide.RuleDS, decide.RuleGone:
+		decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard:
 	}
 	return append(recordLines(expectedRows(labelExpected, a.Expected)), seenLines(a.Lines)...)
 }

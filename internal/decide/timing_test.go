@@ -620,7 +620,7 @@ func timGeneral(in Input) []Change {
 	}
 	for _, was := range open {
 		if !slices.ContainsFunc(found, func(f Finding) bool { return f.Rule == was.Rule }) && !timBlocks(was, in.Observation.Answers) {
-			changes = append(changes, Change{Op: OpResolve, Finding: was, At: in.Now})
+			changes = append(changes, Change{Op: OpResolve, Finding: rsvLineInForce(in.Expect, in.Observation.Key, was), At: in.Now})
 		}
 	}
 	return changes

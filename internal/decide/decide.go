@@ -318,10 +318,22 @@ func Decide(in Input) []Change {
 			ends = !Failed(o)
 		}
 		if ends {
-			changes = append(changes, Change{Op: OpResolve, Finding: was, At: in.Now})
+			changes = append(changes, Change{Op: OpResolve, Finding: inForce(was, in), At: in.Now})
 		}
 	}
 	return changes
+}
+
+// inForce gives the open finding of a resolve with the line now in the file as
+// Expected, so the resolve shows what the servers match and not the old line.
+// A finding of another rule, or with no line now, stays as it is.
+func inForce(was Finding, in Input) Finding {
+	if was.Rule == RuleNameServers || was.Rule == RuleRecordSet || was.Rule == RuleDS {
+		if e, ok := expectation(in.Expect, in.Observation.Key); ok {
+			was.Expected = e.FormText()
+		}
+	}
+	return was
 }
 
 // FileChanges opens or updates the invalid-file alert of the domain while

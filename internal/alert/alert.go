@@ -163,7 +163,7 @@ func onChange(c decide.Change, open []Alert, in Input) (Event, bool) {
 		if i < 0 {
 			return Event{}, false
 		}
-		return resolved(open[i], in.Now), true
+		return resolved(open[i], c.Finding.Expected, in.Now), true
 	}
 	return Event{}, false
 }
@@ -189,8 +189,10 @@ func updated(a Alert, f decide.Finding, now time.Time) Event {
 	return Event{Kind: kind, Alert: a, Was: was, At: now}
 }
 
-func resolved(a Alert, now time.Time) Event {
+// resolved takes Expected from the change: the line in force when it resolves.
+func resolved(a Alert, expected string, now time.Time) Event {
 	a.Open = false
+	a.Expected = expected
 	a.Resolved = now
 	return Event{Kind: EventResolve, Alert: a, Was: a.Severity, At: now}
 }

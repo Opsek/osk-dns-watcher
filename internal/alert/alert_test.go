@@ -475,13 +475,13 @@ func TestChangeOfOpenAlertUpdatesOrEscalates(t *testing.T) {
 
 func TestResolveClosesAlertWithItsOwnFields(t *testing.T) {
 	a := alrStored(t, decide.SeverityHigh, decide.SeverityCritical)
-	// The finding of the change says other things than the alert; the
-	// notice of the end must still show what the alert said.
+	// The finding of the change says other things than the alert; the notice
+	// of the end shows what the alert said, but the line now in force.
 	f := alrNews(t, decide.SeverityLow)
 	out := Transition(Input{Open: []Alert{a}, Changes: []decide.Change{{Op: decide.OpResolve, Finding: f, At: alrT0}},
 		LastClean: alrT0.Add(-time.Minute), Now: alrNow})
 	b := a
-	b.Open, b.Resolved = false, alrNow
+	b.Open, b.Resolved, b.Expected = false, alrNow, f.Expected
 	alrSame(t, "resolve", out.Events, []Event{{Kind: EventResolve, Alert: b, Was: decide.SeverityHigh, At: alrNow}})
 	if !out.Clean {
 		t.Errorf("not Clean after the only alert resolved")

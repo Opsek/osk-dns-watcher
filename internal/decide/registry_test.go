@@ -788,7 +788,7 @@ func TestGlueAlertOpensUpdatesAndResolves(t *testing.T) {
 		{"both stay", other, []Finding{nsF, glueF}, both, false, nil},
 		{"both stay, in the other order", other, []Finding{glueF, nsF}, both, false, nil},
 		{"the glue is right again", other, []Finding{nsF, glueF}, glueFine, false, []Change{change(OpResolve, glueF)}},
-		{"the nameservers are right again", f, []Finding{nsF, glueF}, both, false, []Change{change(OpResolve, nsF)}},
+		{"the nameservers are right again", f, []Finding{nsF, glueF}, both, false, []Change{change(OpResolve, regWith(nsF, func(x *Finding) { x.Expected = decFormText(t, f, "corp.test.", dnswire.TypeNS) }))}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			regChanges(t, Decide(Input{Expect: c.f, Open: c.open, Observation: c.o, Now: now}), c.want)
@@ -1197,7 +1197,7 @@ func regOutcomeOf(in Input, or regOracle, r Rule) regOutcome {
 	case was == nil:
 		out.noResolve = true
 	case regNoFailure(in.Observation):
-		out.resolve = &Change{Op: OpResolve, Finding: *was, At: in.Now}
+		out.resolve = &Change{Op: OpResolve, Finding: rsvLineInForce(in.Expect, key, *was), At: in.Now}
 	case !slices.ContainsFunc(in.Observation.Answers, func(a obs.Answer) bool { _, failed := regSetOf(a); return !failed }):
 		out.noResolve = true
 	}

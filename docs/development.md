@@ -79,6 +79,7 @@ too):
 | `LAB_ID` | `0` | The lab that the checks use (0 to 9). It also labels the containers of the checks. |
 | `HOST_LAB_A`, `HOST_LAB_B` | `8`, `9` | Two more labs that the lab phase starts for a short time. |
 | `FUZZTIME` | `20s` | How long each fuzz test runs. |
+| `SELFTEST` | `run` | `skip` leaves out the selftest phase: the gate says so and writes `selftest skipped` to `out/gate.log` instead of `selftest ok`. Any other value stops the gate before the first phase. |
 
 Only one `make check` runs in a checkout at a time. If one was killed, remove
 `out/lock` before the next. Two checkouts can run `make check` at the same

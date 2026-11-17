@@ -18,9 +18,20 @@
 # several words each, so they stay unquoted. DOCKER_SOCK (default
 # /var/run/docker.sock) is the path of the Docker socket as the daemon sees
 # it: the daemon mounts it into the container of the quickstart phase.
+# SELFTEST (default run) is run or skip. With skip the selftest phase does not
+# run, and out/gate.log gets the line "selftest skipped" in place of
+# "selftest ok". Any other value stops the gate before the first phase.
 # shellcheck disable=SC2086
 set -u
 
+SELFTEST=${SELFTEST:-run}
+case $SELFTEST in
+run | skip) ;;
+*)
+	echo "FAIL setting: SELFTEST must be run or skip, not '$SELFTEST'" >&2
+	exit 2
+	;;
+esac
 DOCKER=${DOCKER:-docker}
 BUILD_FLAGS=${BUILD_FLAGS:-}
 LAB_ID=${LAB_ID:-0}
@@ -119,6 +130,11 @@ mutate_phase() {
 }
 
 selftest_phase() {
+	if [ "$SELFTEST" = skip ]; then
+		echo "selftest skipped: the setting SELFTEST=skip is set"
+		echo 'selftest skipped' >>out/gate.log
+		return
+	fi
 	box "$image" gate/selftest/run.sh || fail selftest "gate/selftest/run.sh failed (lines above)"
 	passed selftest
 }

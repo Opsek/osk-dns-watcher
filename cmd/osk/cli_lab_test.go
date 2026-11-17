@@ -1008,6 +1008,14 @@ func TestAcceptPrintsThenWrites(t *testing.T) {
 		})
 	})
 
+	// The resolve shows the line that the servers match now: the accepted value.
+	cliLabUntil(t, "the Slack message of the resolve", deadline, 200*time.Millisecond, func() bool {
+		return slices.ContainsFunc(cliLabSlackTexts(t, w), func(s string) bool {
+			return strings.HasPrefix(s, ":white_check_mark: *RESOLVED*") && strings.Contains(s, "www.corp.test.") &&
+				slices.Contains(strings.Split(s, "\n"), "now        "+n+"99") && !strings.Contains(s, n+"81")
+		})
+	})
+
 	code, out, errOut = cliLabOsk("accept", "--config", w.config, id)
 	if want := "osk: alert " + id + " is not open\n"; code != 1 || out != "" || errOut != want {
 		t.Errorf("accept of the resolved alert: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)

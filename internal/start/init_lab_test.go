@@ -71,7 +71,10 @@ func iniLabLines(n string) []string {
 		"corp.test. AAAA " + aaaa,
 		"corp.test. DS none",
 		`corp.test. CAA 0 issue "ca.test"`,
+		"*.corp.test. A none",
+		"_acme-challenge.corp.test. TXT none",
 		"www.corp.test. A " + n + "81",
+		"_acme-challenge.www.corp.test. TXT none",
 	}
 }
 
@@ -216,8 +219,8 @@ func TestInitSetupChecksWithoutFindings(t *testing.T) {
 				keys = append(keys, obs.RecordsKey(f.Domain, e.Name, e.Type))
 			}
 		}
-		if len(keys) != 9 {
-			t.Errorf("%s gives %d checks; want 9", dom.Expect, len(keys))
+		if len(keys) != 12 {
+			t.Errorf("%s gives %d checks; want 12", dom.Expect, len(keys))
 		}
 		for _, k := range keys {
 			ob, err := o.Run(t.Context(), observe.Check{Key: k, Interval: time.Minute})
@@ -254,7 +257,7 @@ func TestInitShowsAServerThatDisagreesInTheLab(t *testing.T) {
 	url, _ := iniLabURL()
 	d := "corp.test."
 	lines := iniLabLines(n)
-	lines = lines[:len(lines)-1]
+	lines = slices.DeleteFunc(lines, func(l string) bool { return strings.HasPrefix(l, "www.corp.test. ") })
 	skip := "www.corp.test. A: servers disagree: " + n + "11:53 ns1.corp.test. gives " + n + "81; " + n + "12:53 ns2.corp.test. gives " + n + "99"
 	s := iniLabNew(t, n, n+"2", "corp.test", url, "yes")
 	code, out := s.run()

@@ -286,6 +286,10 @@ func (j judge) build(name, overlay, bin string) (bool, []byte, error) {
 // was stopped. An error means that the binary never ran, so nothing can be
 // judged from it.
 func (j judge) test(name, bin string, limit time.Duration, args ...string) (passed, late bool, err error) {
+	// The start is taken before the context and the binary start, so the
+	// binary's own -test.timeout, which counts from its start, can never
+	// end the run before the limit has passed on this clock.
+	start := time.Now()
 	ctx := context.Background()
 	if limit > 0 {
 		var cancel context.CancelFunc
@@ -308,7 +312,12 @@ func (j judge) test(name, bin string, limit time.Duration, args ...string) (pass
 		// binary ended.
 		return true, false, nil
 	}
-	return false, ctx.Err() != nil, nil
+	// Whether the run was late is read from the clock, not from ctx.Err:
+	// when the binary's timeout and the context expire within a moment of
+	// each other, a loaded machine can let Wait return before the context
+	// has marked itself done, and the same hang would then count as
+	// killed only.
+	return false, limit > 0 && time.Since(start) >= limit, nil
 }
 
 // each calls do with 0 to n-1 on j.workers goroutines.

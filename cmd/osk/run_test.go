@@ -1384,7 +1384,9 @@ func TestRunOutputThatNobodyReadsHoldsNoCheck(t *testing.T) {
 	if err := w.SetWriteDeadline(time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	args := svcTwo(t, s, file, expFile(t, svcOtherFile), state, runIntervals("5s", "5s", "5s", "5s"))
+	// The interval is long, so that a run ends well before the next starts,
+	// also on a slow machine.
+	args := svcTwo(t, s, file, expFile(t, svcOtherFile), state, runIntervals("10s", "10s", "10s", "10s"))
 	before := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	errOut := &runBuffer{}
@@ -1407,13 +1409,30 @@ func TestRunOutputThatNobodyReadsHoldsNoCheck(t *testing.T) {
 		_ = w.Close()
 	})
 
-	time.Sleep(time.Second)
-	firstCorp, firstOther := corp.Load(), other.Load()
-	time.Sleep(5500 * time.Millisecond)
-	if laterCorp, laterOther := corp.Load()-firstCorp, other.Load()-firstOther; firstCorp == 0 || firstOther == 0 || laterCorp == 0 || laterOther == 0 {
-		t.Errorf("with a full output the checks of corp.test. and other.test. sent %d and %d queries in the first second and %d and %d in the 5.5 s after; want some of each in each",
-			firstCorp, firstOther, laterCorp, laterOther)
+	// The checks are waited for, not timed: a loaded machine delays the
+	// first queries by seconds. The first run of both domains must come;
+	// once its queries stop, a later run must send more while the output
+	// stays full. A service held in a write sends nothing after its first
+	// run, and the second wait ends at its deadline.
+	const patience = 60 * time.Second
+	waitCounts := func(what string, ok func() bool) {
+		t.Helper()
+		for end := time.Now().Add(patience); !ok(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(end) {
+				t.Fatalf("with a full output, %s within %v; corp.test. sent %d queries, other.test. %d", what, patience, corp.Load(), other.Load())
+			}
+		}
 	}
+	waitCounts("the checks of corp.test. and other.test. did not both send queries", func() bool { return corp.Load() > 0 && other.Load() > 0 })
+	var firstCorp, firstOther int64
+	var changed time.Time
+	waitCounts("the first run did not end", func() bool {
+		if c, o := corp.Load(), other.Load(); c != firstCorp || o != firstOther || changed.IsZero() {
+			firstCorp, firstOther, changed = c, o, time.Now()
+		}
+		return time.Since(changed) >= time.Second
+	})
+	waitCounts("the checks of corp.test. and other.test. sent no query after the first run", func() bool { return corp.Load() > firstCorp && other.Load() > firstOther })
 	cancel()
 	select {
 	case <-returned:

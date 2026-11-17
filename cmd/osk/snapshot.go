@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"strings"
 
@@ -25,9 +26,10 @@ func snapshot(args []string, stdout, stderr io.Writer) int {
 		return snapshotWrongUse(stderr, err.Error())
 	}
 	domain := a.keys[0].Domain
-	f, skips := expect.Snapshot(domain, runChecks(o, snapshotKeys(domain, a.keys)))
+	observations := runChecks(o, snapshotKeys(domain, a.keys))
+	f, skips := expect.Snapshot(domain, observations)
 	out := &lines{json: a.json}
-	formatSnapshot(out, domain, f, skips)
+	formatSnapshot(out, domain, f, skips, len(expect.Unreached(observations)))
 	if code := output(stdout, stderr, out.String()); code != 0 || len(skips) == 0 {
 		return code
 	}
@@ -66,11 +68,19 @@ type snapshotSkip struct {
 
 // formatSnapshot gives the file under a header that marks it for review, and
 // a comment line for each set that it leaves out, so the output stays a valid
-// file. The JSON lines hold the lines of the file and the sets left out.
-func formatSnapshot(out *lines, domain dnswire.Name, f *expect.File, skips []expect.Skip) {
+// file. One more comment counts the IPv6 addresses that the lines do not
+// rest on, when there are any. The JSON lines hold the lines of the file and
+// the sets left out.
+func formatSnapshot(out *lines, domain dnswire.Name, f *expect.File, skips []expect.Skip, unreached int) {
 	if !out.json {
 		out.add("# Snapshot of "+domain.Lower().String()+" as seen now. Review every line: "+
 			"nothing in it is trusted until you pass this file to osk check --expect.", nil)
+		switch {
+		case unreached == 1:
+			out.add("# not asked: 1 IPv6 address of the servers, which this machine cannot reach", nil)
+		case unreached > 1:
+			out.add(fmt.Sprintf("# not asked: %d IPv6 addresses of the servers, which this machine cannot reach", unreached), nil)
+		}
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(f.String(), "\n"), "\n") {
 		out.add(line, snapshotLine{"line", line})

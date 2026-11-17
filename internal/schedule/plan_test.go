@@ -161,7 +161,8 @@ func schWildcardZones(f *expect.File) []dnswire.Name {
 // (none for DS, and none for a wildcard line whose zone has a wildcard
 // check), a records check of type A for each target that no line already
 // checks, and a wildcard check for each wildcard zone, which is a check of
-// the zone when the zone of the domain holds it.
+// the zone when the zone of the domain holds it. A CAA records check follows
+// for each name that caaModelNames gives and that has no CAA line.
 func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	t.Helper()
 	d := f.Domain
@@ -187,6 +188,7 @@ func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Interval
 		plan = append(plan, Check{Key: obs.WildcardKey(d, zone), Tier: TierOther, Interval: iv.Other,
 			Zone: zone.IsSubdomainOf(d) && f.Zone(zone).Equal(d)})
 	}
+	plan = append(plan, caaModelProbes(f, fast, iv)...)
 	return plan
 }
 
@@ -318,6 +320,8 @@ func TestPlanFastTiers(t *testing.T) {
 		"corp.test. A":                       fastTier + " zone true",
 		"corp.test. AAAA":                    fastTier + " zone true",
 		"corp.test. CAA":                     fastTier + " zone true",
+		"mail.corp.test. CAA":                fastTier + " zone true", // a probe of a name under the apex line
+		"www.corp.test. CAA":                 other + " zone true",
 		"corp.test. MX":                      fastTier + " zone true",
 		"corp.test. TXT":                     other + " zone true",
 		"corp.test. NS":                      other + " zone true",

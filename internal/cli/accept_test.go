@@ -827,3 +827,155 @@ func TestAcceptRefusesTheDanglingRules(t *testing.T) {
 		t.Error("a refused accept changed the file")
 	}
 }
+
+// caaFile has a CAA line with an owner in capitals and columns of blanks:
+// accept keeps every octet but those of one line. Line 6 is the CAA line.
+const caaFile = "# corp.test. policy\n" +
+	"domain corp.test.\n" +
+	"\n" +
+	"corp.test.   NS   ns1.corp.test. | ns2.corp.test.\n" +
+	"corp.test. DS none\n" +
+	"Corp.Test.   CAA   0 issue \"ca.test\"\n" +
+	"www.corp.test. A 10.53.0.81\n"
+
+const (
+	caaApexLine  = `Corp.Test.   CAA   0 issue "ca.test"`
+	caaStrict    = `0 issue "ca.test"`
+	caaWeakened  = `0 issue "ca.test" | 0 issue "evil.test"`
+	caaNoSuchSet = "none"
+)
+
+// caaNotValid is the refusal of a new line that the parser rejects.
+func caaNotValid(t *testing.T, text string) string {
+	t.Helper()
+	var bad *expect.Error
+	if _, err := expect.Parse([]byte(text)); !errors.As(err, &bad) {
+		t.Fatalf("the new file parses: %v\n%s", err, text)
+	}
+	return fmt.Sprintf("the new line is not valid: line %d: %s; edit the file by hand", bad.Problems[0].Line, bad.Problems[0].Text)
+}
+
+// A caa alert changes the CAA line of its name, or appends one for a name
+// that has none, with the one set that the servers show; the dry run prints
+// the change, --write makes it, and the next run sees that the file differs
+// from what the alert expected.
+func TestAcceptEditsOrAppendsTheCAALine(t *testing.T) {
+	for _, c := range []struct {
+		name, file, check, expected string
+		seen                        []string
+		line                        int // the line that changes, or the line that is appended
+		old, new                    string
+	}{
+		{"weakened apex", caaFile, "corp.test.", caaStrict, []string{caaWeakened, caaWeakened},
+			6, caaApexLine, "corp.test. CAA " + caaWeakened},
+		{"removed set", caaFile, "corp.test.", caaStrict, []string{caaNoSuchSet, caaNoSuchSet},
+			6, caaApexLine, "corp.test. CAA none"},
+		{"probe", caaFile, "www.corp.test.", caaStrict, []string{`0 issue "evil.test"`, `0 issue "evil.test"`},
+			8, "", `www.corp.test. CAA 0 issue "evil.test"`},
+		{"probe of a name below a name", caaFile, "a.www.corp.test.", caaStrict, []string{`0 issue "evil.test"`},
+			8, "", `a.www.corp.test. CAA 0 issue "evil.test"`},
+		{"a none line at the name", caaFile + "www.corp.test. CAA none\n", "www.corp.test.", caaStrict, []string{`0 issue "evil.test"`, `0 issue "evil.test"`},
+			8, "www.corp.test. CAA none", `www.corp.test. CAA 0 issue "evil.test"`},
+		{"alternatives", cliReplaced(caaFile, 6, `corp.test. CAA 0 issue "ca.test" || 0 issue "other.test"`), "corp.test.",
+			`0 issue "ca.test" || 0 issue "other.test"`, []string{`0 issue "evil.test"`},
+			6, `corp.test. CAA 0 issue "ca.test" || 0 issue "other.test"`, `corp.test. CAA 0 issue "evil.test"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			cliWriteFile(t, w.corp, c.file)
+			var id int64
+			cliStore(t, w.state, func(s *store.Store) {
+				id = cliOpen(t, s, cliT0, cliAlert(decide.RuleCAA, decide.SeverityHigh, cliRecordsKey("corp.test.", c.check, dnswire.TypeCAA),
+					c.expected, cliT0, c.seen...))[0].ID
+			})
+			idText := strconv.FormatInt(id, 10)
+			want := []string{w.corp + ":" + strconv.Itoa(c.line)}
+			if c.old != "" {
+				want = append(want, "- "+c.old)
+			}
+			want = append(want, "+ "+c.new)
+
+			code, out, errOut := cliAccept(w, idText)
+			if code != 0 || errOut != "" {
+				t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "accept", out, append(want, cliToWrite(w, id, w.corp, c.old, c.new))...)
+			if cliRead(t, w.corp) != c.file {
+				t.Error("accept without --write changed the file")
+			}
+
+			code, out, errOut = cliAccept(w, "--write", cliChangeCode(id, w.corp, c.old, c.new), idText)
+			if code != 0 || errOut != "" {
+				t.Errorf("--write: exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "accept --write", out, append(want, "written")...)
+			wantFile := cliReplaced(c.file, c.line, c.new)
+			if c.old == "" {
+				wantFile = c.file + c.new + "\n"
+			}
+			got := cliRead(t, w.corp)
+			if got != wantFile {
+				t.Errorf("the file after accept --write:\n%s\nwant:\n%s", got, wantFile)
+			}
+			_, form, _ := strings.Cut(c.new, " CAA ")
+			cliFinds(t, got, c.check, dnswire.TypeCAA, form)
+
+			// The file now holds the set that the servers show, not the one that
+			// the alert expected.
+			code, out, errOut = cliAccept(w, idText)
+			wantErr := "osk: the file changed since this alert: the CAA policy for " + c.check + " is now " + form + "\n"
+			if code != 1 || out != "" || errOut != wantErr {
+				t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, wantErr)
+			}
+		})
+	}
+}
+
+// Each refusal is an error with exit 1, also with --write, and the file stays.
+func TestAcceptRefusesACAAAlertThatItCannotChange(t *testing.T) {
+	noCAA := cliReplaced(caaFile, 6, "ftp.corp.test. A 10.53.0.85")
+	noPolicy := cliReplaced(caaFile, 6, "corp.test. CAA none")
+	for _, c := range []struct {
+		name, file, check, expected string
+		seen                        []string
+		want                        string
+	}{
+		{"the line changed", caaFile, "corp.test.", `0 issue "other.test"`, []string{caaWeakened},
+			`the file changed since this alert: the CAA policy for corp.test. is now 0 issue "ca.test"`},
+		{"the line of the probe changed", caaFile, "www.corp.test.", `0 issue "other.test"`, []string{`0 issue "evil.test"`},
+			`the file changed since this alert: the CAA policy for www.corp.test. is now 0 issue "ca.test"`},
+		{"the name has a line now", caaFile + "www.corp.test. CAA 0 issue \"x.test\"\n", "www.corp.test.", caaStrict, []string{`0 issue "evil.test"`},
+			`the file changed since this alert: the CAA policy for www.corp.test. is now 0 issue "x.test"`},
+		{"the file has no CAA line", noCAA, "corp.test.", caaStrict, []string{caaWeakened},
+			"the file changed since this alert: the CAA policy for corp.test. is now none"},
+		{"the file has no CAA line, a probe", noCAA, "www.corp.test.", caaStrict, []string{`0 issue "evil.test"`},
+			"the file changed since this alert: the CAA policy for www.corp.test. is now none"},
+		{"the line is none", noPolicy, "corp.test.", caaStrict, []string{caaWeakened},
+			"the file changed since this alert: the CAA policy for corp.test. is now none"},
+		{"the servers disagree", caaFile, "corp.test.", caaStrict, []string{caaStrict, caaWeakened},
+			"the servers disagree: " + caaStrict + "; " + caaWeakened + "; edit the file by hand"},
+		{"an alias at the name", caaFile, "corp.test.", caaStrict, []string{"CNAME evil.test.", "CNAME evil.test."},
+			caaNotValid(t, cliReplaced(caaFile, 6, "corp.test. CAA CNAME evil.test."))},
+		{"an alias at a probe", caaFile, "www.corp.test.", caaStrict, []string{"CNAME evil.test."},
+			caaNotValid(t, caaFile+"www.corp.test. CAA CNAME evil.test.\n")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			cliWriteFile(t, w.corp, c.file)
+			var id int64
+			cliStore(t, w.state, func(s *store.Store) {
+				id = cliOpen(t, s, cliT0, cliAlert(decide.RuleCAA, decide.SeverityHigh, cliRecordsKey("corp.test.", c.check, dnswire.TypeCAA),
+					c.expected, cliT0, c.seen...))[0].ID
+			})
+			for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
+				code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
+				if want := "osk: " + c.want + "\n"; code != 1 || out != "" || errOut != want {
+					t.Errorf("accept %q: exit code %d, output %q, errors %q; want 1, nothing and %q", args, code, out, errOut, want)
+				}
+			}
+			if cliRead(t, w.corp) != c.file {
+				t.Error("a refused accept changed the file")
+			}
+		})
+	}
+}

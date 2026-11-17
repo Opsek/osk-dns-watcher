@@ -140,7 +140,7 @@ func article(word string) string {
 // servers show.
 func refusal(r decide.Rule) string {
 	switch r {
-	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered, decide.RuleDS:
+	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered, decide.RuleDS, decide.RuleCAA:
 		return ""
 	case decide.RuleGlue:
 		return "edit the address line of each nameserver host that differs"
@@ -220,6 +220,17 @@ func editFile(path string, data []byte, f *expect.File, a alert.Alert, text stri
 		return change{}, fmt.Errorf("the file has a line for %s now", set)
 	case a.Rule == decide.RuleNotCovered:
 		ch = appendLine(path, string(data), line)
+	case a.Rule == decide.RuleCAA:
+		// The alert names the name that was checked; the line that governs it
+		// may be at a name above it, so the file is judged by the climb.
+		if err := caaUnchanged(f, name, a.Expected); err != nil {
+			return change{}, err
+		}
+		if found {
+			ch = replaceLine(path, string(data), e.Line, line)
+		} else {
+			ch = appendLine(path, string(data), line)
+		}
 	case !found:
 		return change{}, fmt.Errorf("the file changed since this alert: it has no line for %s", set)
 	case e.FormText() != a.Expected:
@@ -231,6 +242,20 @@ func editFile(path string, data []byte, f *expect.File, a alert.Alert, text stri
 		return change{}, fmt.Errorf("the new line is not valid: %v; edit the file by hand", err)
 	}
 	return ch, nil
+}
+
+// caaUnchanged checks that the CAA line that governs name is still the one
+// that the alert expected.
+func caaUnchanged(f *expect.File, name dnswire.Name, expected string) error {
+	_, line, ok := decide.CAAPolicy(f, name)
+	if ok && line.FormText() == expected {
+		return nil
+	}
+	now := "none"
+	if ok {
+		now = line.FormText()
+	}
+	return fmt.Errorf("the file changed since this alert: the CAA policy for %s is now %s", name.Lower(), now)
 }
 
 // ownerField writes a leading # with a backslash, as the file's canonical

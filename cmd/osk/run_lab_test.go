@@ -275,7 +275,8 @@ func TestParentCheckedEveryInterval(t *testing.T) {
 
 // The fixed fast set at the domain, the ACME challenge name and the fast
 // names of the config run every fast interval; a fast name that owns no
-// line is reported at the start.
+// line is reported at the start. Each name below the CAA line that has no CAA
+// line of its own gets a CAA check, in the tier of the name.
 func TestFastNamesEveryInterval(t *testing.T) {
 	n, state := runLab(t)
 	file := slkLabFile(t, "corp.test. A "+n+"80", "corp.test. AAAA fd53:0:0:"+os.Getenv("LAB_ID")+"::80",
@@ -283,11 +284,13 @@ func TestFastNamesEveryInterval(t *testing.T) {
 		"_acme-challenge.corp.test. TXT none", "www.corp.test. A "+n+"81", "mail.corp.test. A "+n+"82")
 	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("1h", "1h", "5s", "1h"), "mail.corp.test.", "nothere.corp.test.")...)
 	fast := []string{runRecords("corp.test.", "A"), runRecords("corp.test.", "AAAA"), runRecords("corp.test.", "MX"),
-		runRecords("corp.test.", "CAA"), runRecords("_acme-challenge.corp.test.", "TXT"), runRecords("mail.corp.test.", "A")}
+		runRecords("corp.test.", "CAA"), runRecords("_acme-challenge.corp.test.", "TXT"), runRecords("mail.corp.test.", "A"),
+		runRecords("mail.corp.test.", "CAA")}
 	runs, lines := runFor(t, svc, fast[0], 12*time.Second)
-	runSameHead(t, lines, runPlan("corp.test.", state, 12, [4]string{"1h0m0s 1", "1h0m0s 2", "5s 6", "1h0m0s 3"}, "nothere.corp.test."))
+	runSameHead(t, lines, runPlan("corp.test.", state, 14, [4]string{"1h0m0s 1", "1h0m0s 2", "5s 7", "1h0m0s 4"}, "nothere.corp.test."))
 	runCount(t, runs, "fast", 3, fast...)
-	runCount(t, runs, "other", 1, runRecords("corp.test.", "NS"), runRecords("corp.test.", "TXT"), runRecords("www.corp.test.", "A"))
+	runCount(t, runs, "other", 1, runRecords("corp.test.", "NS"), runRecords("corp.test.", "TXT"), runRecords("www.corp.test.", "A"),
+		runRecords("www.corp.test.", "CAA"))
 	for _, k := range fast {
 		runGaps(t, k, runs[k], 5*time.Second)
 	}

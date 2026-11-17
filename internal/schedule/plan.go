@@ -97,7 +97,8 @@ var fastTypes = []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeCAA,
 // Plan gives the checks of f: the serial, delegation and DS checks of its
 // domain, a records check for each expectation in file order, an address
 // check for each name that a line points at, and a wildcard check for each
-// zone that the file says has no wildcard.
+// zone that the file says has no wildcard, and a CAA check for each name whose
+// CAA policy the file states only through a parent.
 func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	d := f.Domain
 	checks := []Check{
@@ -146,6 +147,30 @@ func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 			Tier:     TierOther,
 			Interval: iv.Of(TierOther),
 			Zone:     z.IsSubdomainOf(d) && f.Zone(z).Equal(d),
+		})
+	}
+	// A CAA set is inherited down the tree, so a name with no CAA line of its
+	// own is still read: a policy added or removed there changes what a
+	// certificate authority may issue for it.
+	hasCAALine := map[string]bool{} // Name.Key() of each owner of a CAA line
+	for _, e := range f.Expectations {
+		if e.Type == dnswire.TypeCAA {
+			hasCAALine[e.Name.Key()] = true
+		}
+	}
+	for _, n := range decide.CAANames(f) {
+		if hasCAALine[n.Key()] {
+			continue
+		}
+		tier := TierOther
+		if slices.ContainsFunc(fast, n.Equal) {
+			tier = TierFast
+		}
+		checks = append(checks, Check{
+			Key:      obs.RecordsKey(d, n, dnswire.TypeCAA),
+			Tier:     tier,
+			Interval: iv.Of(tier),
+			Zone:     f.Zone(n).Equal(d),
 		})
 	}
 	return checks

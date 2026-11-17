@@ -126,6 +126,12 @@ var wordings = map[decide.Rule]wording{
 		action:   "If you did not add a wildcard under {N}, remove it at your DNS provider and find out who added it.",
 		now:      "no wildcard",
 	},
+	decide.RuleCAA: {
+		phrase:   "the CAA policy for {N} is weaker than expected",
+		resolved: "the CAA policy for {N} is as strict as expected again",
+		action:   "If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for {N} that you did not ask for.",
+		now:      "as strict as expected",
+	},
 	decide.RuleRecordSet: {
 		phrase:   "{NT} changed",
 		resolved: "{NT} is as expected again",
@@ -366,7 +372,8 @@ func view(e alert.Event, resolvedNow string) []string {
 		}
 		return append(recordLines(rows), seenLines(a.Lines)...)
 	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered,
-		decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard:
+		decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard,
+		decide.RuleCAA:
 	}
 	return append(recordLines(expectedRows(labelExpected, a.Expected)), seenLines(a.Lines)...)
 }

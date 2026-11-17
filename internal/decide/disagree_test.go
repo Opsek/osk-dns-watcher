@@ -237,8 +237,8 @@ func TestDisagreeRuleWordsNumbersAndSeverities(t *testing.T) {
 			}
 		}
 	}
-	if got := Rule(17).String(); got != "rule17" {
-		t.Errorf("Rule(17).String() is %q, want rule17", got)
+	if got := Rule(18).String(); got != "rule18" {
+		t.Errorf("Rule(18).String() is %q, want rule18", got)
 	}
 	if got := Rule(10).String(); got != "gone" {
 		t.Errorf("Rule(10).String() is %q, want gone", got)
@@ -986,7 +986,7 @@ func dngSeverity(r Rule, typ dnswire.Type) Severity {
 			return SeverityHigh
 		}
 	case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleCheckFailing, RuleZoneChanged, RuleGlue, RuleDS, RuleGone,
-		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleWildcard:
+		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleWildcard, RuleCAA:
 		// The oracle gives only these three rules; the others weigh medium here.
 	}
 	return SeverityMedium

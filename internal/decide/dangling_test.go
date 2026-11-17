@@ -182,7 +182,7 @@ func dngpSeverity(r Rule) Severity {
 	case RuleWildcard:
 		return SeverityMedium
 	case RuleInvalidFile, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
-		RuleGlue, RuleDS, RuleGone, RuleDisagree, RuleAliasTarget, RuleMailTarget, RuleChallenge:
+		RuleGlue, RuleDS, RuleGone, RuleDisagree, RuleAliasTarget, RuleMailTarget, RuleChallenge, RuleCAA:
 	}
 	return SeverityHigh
 }

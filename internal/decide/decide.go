@@ -37,6 +37,7 @@ const (
 	RuleMailTarget                     // a mail target does not exist
 	RuleChallenge                      // a certificate-challenge record exists where the file expects none
 	RuleWildcard                       // a random name under a zone answers where the file expects no wildcard
+	RuleCAA                            // the CAA policy for a name permits more than the file allows
 )
 
 var ruleWords = map[Rule]string{
@@ -57,6 +58,7 @@ var ruleWords = map[Rule]string{
 	RuleMailTarget:     "mail-target",
 	RuleChallenge:      "challenge",
 	RuleWildcard:       "wildcard",
+	RuleCAA:            "caa",
 }
 
 func (r Rule) String() string { return word(ruleWords, r, "rule") }
@@ -123,6 +125,7 @@ var severities = map[Rule]Severity{
 	RuleMailTarget:     SeverityHigh,
 	RuleChallenge:      SeverityHigh,
 	RuleWildcard:       SeverityMedium,
+	RuleCAA:            SeverityHigh,
 }
 
 var highTypes = map[dnswire.Type]bool{
@@ -195,12 +198,19 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 	case obs.KindRecords:
 		found = zone(f, o)
 		t, probe := target(f, o)
-		// A probe of a target has no line of its own to be covered by.
-		if ok || !probe {
+		judged, weaker := caa(f, o)
+		// A probe of a target or of a CAA policy has no line of its own to be
+		// covered by.
+		if ok || !(probe || judged) {
 			found = append(found, judge(o, e, ok, recordRule(f, e, ok))...)
 		}
 		if probe {
 			found = append(found, targetFindings(o, t)...)
+		}
+		if len(weaker) > 0 {
+			// One weakened policy is one high alert, not also a medium one.
+			found = slices.DeleteFunc(found, func(x Finding) bool { return x.Rule == RuleRecordSet })
+			found = append(found, weaker...)
 		}
 	case obs.KindWildcard:
 		found = wildcard(f, o)
@@ -360,6 +370,11 @@ func Decide(in Input) []Change {
 	changes := openOrUpdate(found, open, in.Now)
 	for _, was := range open {
 		ends := !hasRule(found, was.Rule) && !blocked(was, o)
+		if was.Rule == RuleRecordSet && hasRule(found, RuleCAA) {
+			// caa takes the place of record-set while the set still differs
+			// from the line, so the open record-set alert stays as it is.
+			ends = false
+		}
 		if was.Rule == RuleCheckFailing {
 			// A restart forgets the series, so a failed run may not reach
 			// the limit again; only a usable answer shows that the check

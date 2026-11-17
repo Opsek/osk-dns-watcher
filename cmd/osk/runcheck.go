@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 	"github.com/Opsek/dns-monitoring/internal/schedule"
+	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
@@ -41,6 +43,23 @@ type monitor struct {
 	started  time.Time
 	pruneAt  time.Time // the next deletion of old history
 	asking   bool      // a read of the test request is in flight
+	// certRunning counts the certificate runs among running. certWaiting
+	// holds the certificate checks that a schedule marked running while
+	// maxCertRuns ran, the first taken first.
+	certRunning int
+	certWaiting []taken
+}
+
+// maxCertRuns bounds the certificate runs in flight over all domains. A run
+// may wait on a slow source for three quarters of its interval, and the
+// places of MaxRunning are there for the DNS checks.
+const maxCertRuns = 2
+
+// taken is a check that its schedule marked running and that has not
+// started yet.
+type taken struct {
+	d *watched
+	c schedule.Check
 }
 
 // watched is what the service keeps of one domain of the config.
@@ -58,6 +77,10 @@ type watched struct {
 	since   time.Time            // when next was read first
 	reading time.Time            // when the read in flight started; zero when none
 	stuck   bool                 // the read in flight was reported
+	// certs is used only by the run of the certificates check, never by the
+	// writer: the schedule starts no run of a check while another is in
+	// flight. nil: the certificate logs are not read.
+	certs *certlog.Source
 }
 
 func newWatched(d config.Domain, f *expect.File, iv schedule.Intervals, now time.Time) *watched {
@@ -96,9 +119,10 @@ func (w *watched) scope() obs.Key {
 
 // result is the end of one run of a check of d.
 type result struct {
-	d   *watched
-	o   obs.Observation
-	err error
+	d     *watched
+	o     obs.Observation
+	err   error
+	certs *obs.Certificates // a run of the certificates check, which has no o or err
 }
 
 // watch runs the delivery loops, the heartbeat and the writer until ctx ends
@@ -146,6 +170,9 @@ func (m *monitor) watch(ctx context.Context) error {
 		case r := <-results:
 			m.running--
 			r.d.running--
+			if r.certs != nil {
+				m.certRunning--
+			}
 			// A run that the stop cut short shows nothing of the zone.
 			if ctx.Err() == nil {
 				err = m.judge(r)
@@ -171,20 +198,38 @@ func (m *monitor) watch(ctx context.Context) error {
 
 // startChecks starts due checks while fewer than MaxRunning run over all
 // domains, because the domains share observe's limit for each address of
-// their parent and their DNS provider.
+// their parent and their DNS provider. A certificate check taken while
+// maxCertRuns run waits for a free one, and the checks due behind it start.
 func (m *monitor) startChecks(ctx context.Context, wg *sync.WaitGroup, results chan<- result) {
 	now := time.Now()
 	for m.running < schedule.MaxRunning {
+		if len(m.certWaiting) > 0 && m.certRunning < maxCertRuns {
+			t := m.certWaiting[0]
+			m.certWaiting = m.certWaiting[1:]
+			m.startCheck(ctx, wg, results, t.d, t.c)
+			continue
+		}
 		d := m.pick(now)
 		if d == nil {
 			return
 		}
 		for _, c := range d.sched.Take(now, 1) {
-			m.running++
-			d.running++
-			wg.Go(func() { m.check(ctx, d, c, results) })
+			if c.Key.Kind == obs.KindCertificates && m.certRunning >= maxCertRuns {
+				m.certWaiting = append(m.certWaiting, taken{d, c})
+				continue
+			}
+			m.startCheck(ctx, wg, results, d, c)
 		}
 	}
+}
+
+func (m *monitor) startCheck(ctx context.Context, wg *sync.WaitGroup, results chan<- result, d *watched, c schedule.Check) {
+	m.running++
+	d.running++
+	if c.Key.Kind == obs.KindCertificates {
+		m.certRunning++
+	}
+	wg.Go(func() { m.check(ctx, d, c, results) })
 }
 
 // pick gives the domain to start a check of, among those with a check due
@@ -227,16 +272,35 @@ func (m *monitor) next() (next time.Time, ok bool) {
 // check runs one check and hands its result to the writer, unless the
 // service stops first.
 func (m *monitor) check(ctx context.Context, d *watched, c schedule.Check, results chan<- result) {
-	o, err := m.observer.Run(ctx, observe.Check{Key: c.Key, Interval: c.Interval})
+	r := result{d: d}
+	if c.Key.Kind == obs.KindCertificates {
+		r.certs = readCerts(ctx, d.certs, c.Interval)
+	} else {
+		r.o, r.err = m.observer.Run(ctx, observe.Check{Key: c.Key, Interval: c.Interval})
+	}
 	select {
-	case results <- result{d, o, err}:
+	case results <- r:
 	case <-ctx.Done():
 	}
+}
+
+// readCerts runs the source within three quarters of the interval, as
+// observe bounds a DNS check, so that the run ends before the next is due
+// and the late checks keep their meaning. A request that the bound cuts is a
+// timeout.
+func readCerts(ctx context.Context, s *certlog.Source, interval time.Duration) *obs.Certificates {
+	ctx, cancel := context.WithTimeout(ctx, interval-interval/4)
+	defer cancel()
+	c := s.Run(ctx, time.Now())
+	return &c
 }
 
 // judge takes the result of one run. A result whose key left the file is
 // dropped: no line of the file judges it any more.
 func (m *monitor) judge(r result) error {
+	if r.certs != nil {
+		return m.judgeCerts(r.d, *r.certs)
+	}
 	if r.err != nil {
 		return r.err
 	}
@@ -271,6 +335,25 @@ func (m *monitor) judge(r result) error {
 		return nil
 	}
 	return m.zoneChanges(d, moves, now)
+}
+
+// judgeCerts takes one run of the certificates check of d. A run records a
+// clean time only when it asked the source and read the whole list: a run
+// inside a wait or in the middle of a listing has not seen the check clean.
+// The run is no DNS answer, so it plays no part in a zone round.
+func (m *monitor) judgeCerts(d *watched, c obs.Certificates) error {
+	now := time.Now()
+	rep := d.sched.DoneCertificates(c, now)
+	if !rep.Known {
+		return nil
+	}
+	d.judged[c.Key.String()] = now
+	m.out.log(levelInfo, d.label, certsLine(rep.Tier, c))
+	_, err := m.apply(d, c.Key, !c.Usable || !c.Complete || !c.Asked, now, func(open []decide.Finding) []decide.Change {
+		return decide.DecideCertificates(decide.CertInput{Expect: d.file, Open: open, Certificates: c, Now: now,
+			FailingSince: rep.FailingSince, FailLimit: rep.FailLimit})
+	})
+	return err
 }
 
 func (m *monitor) zoneChanges(d *watched, moves []decide.Move, now time.Time) error {
@@ -318,7 +401,7 @@ func (m *monitor) nameServersOpen(d *watched, k obs.Key) (bool, error) {
 // apply is the alert path of check k of d. judge gets the findings of the
 // open alerts of k, so a difference that stands gives no event. The events,
 // their deliveries and the clean time of k are stored in one transaction.
-// failed tells that some answer of the run is a failure.
+// failed tells that the run cannot show k clean, so it records no clean time.
 func (m *monitor) apply(d *watched, k obs.Key, failed bool, now time.Time, judge func(open []decide.Finding) []decide.Change) ([]decide.Change, error) {
 	open, err := m.store.OpenAlerts(k)
 	if err != nil {
@@ -445,6 +528,30 @@ func checkedLine(t schedule.Tier, o obs.Observation) string {
 		}
 	}
 	return head + " failed " + strings.Join(reasons, ",")
+}
+
+// certsLine tells how a run of the certificates check went. A run inside a
+// wait that the source asked for says so: it read nothing new.
+func certsLine(t schedule.Tier, c obs.Certificates) string {
+	head := "checked " + t.String() + " " + c.Key.String() + " " + c.Start.UTC().Format(receivedLayout)
+	if !c.Usable {
+		return head + " failed " + c.Failure
+	}
+	line := head + " ok " + strconv.Itoa(len(c.Issuances)) + " valid"
+	if !c.Complete {
+		line += " (listing)"
+	}
+	unread := 0
+	for _, is := range c.Issuances {
+		unread += is.Unread
+	}
+	if unread > 0 {
+		line += ", " + strconv.Itoa(unread) + " names not read"
+	}
+	if !c.Asked {
+		line += " (not asked: the source said to wait)"
+	}
+	return line
 }
 
 // movedLine names a server as the proof of an alert does: "-" for no

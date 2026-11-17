@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"slices"
+	"strings"
 
 	"github.com/Opsek/dns-monitoring/internal/httpclient"
 )
@@ -73,6 +74,9 @@ type Values struct {
 	WebhookURLs  []string // config order
 	WebhookKeys  [][]byte
 	HeartbeatURL string
+
+	CertificatesURL string // "" when the certificates object is absent
+	CertificatesKey string // "" when it holds no key
 }
 
 func (v Values) String() string { return "[hidden]" }
@@ -108,6 +112,12 @@ func (c *Config) Secrets(lookup func(string) (string, bool)) (Values, []Problem)
 	}
 	if c.Heartbeat != nil {
 		v.HeartbeatURL = read(c.Heartbeat.URL, checkURL)
+	}
+	if c.Certificates != nil {
+		v.CertificatesURL = c.Certificates.URL
+		if c.Certificates.Key != nil {
+			v.CertificatesKey = read(*c.Certificates.Key, checkAPIKey)
+		}
 	}
 	if len(problems) > 0 {
 		return Values{}, problems
@@ -176,11 +186,23 @@ func checkKey(value string) string {
 	return ""
 }
 
+// maxAPIKey bounds the key that goes into an Authorization header.
+const maxAPIKey = 256
+
+// checkAPIKey allows what a header value may hold without a quote or a
+// space: printable ASCII only.
+func checkAPIKey(value string) string {
+	if len(value) > maxAPIKey || strings.ContainsFunc(value, func(r rune) bool { return r < 0x21 || r > 0x7E }) {
+		return "the key holds an octet that is not printable ASCII, or a space"
+	}
+	return ""
+}
+
 // Hosts gives the host of each URL in the form that httpclient.New takes,
-// without repeats: the only hosts that osk may post to.
+// without repeats: the only hosts that osk may post to or read from.
 func (v Values) Hosts() []string {
 	urls := append([]string{v.SlackURL}, v.WebhookURLs...)
-	urls = append(urls, v.HeartbeatURL)
+	urls = append(urls, v.HeartbeatURL, v.CertificatesURL)
 	var hosts []string
 	for _, u := range urls {
 		// The URL of a channel that is not set is empty and has no host.

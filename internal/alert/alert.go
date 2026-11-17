@@ -94,6 +94,10 @@ func (e Event) Label() string {
 	if a.Check.Kind == 0 {
 		return strings.Join(append(words, a.Check.Domain.Lower().String()), " ")
 	}
+	// The certificates check has no name or type of its own.
+	if a.Check.Kind == obs.KindCertificates {
+		return strings.Join(append(words, a.Check.Kind.String(), a.Check.Domain.Lower().String()), " ")
+	}
 	return strings.Join(append(words, a.Check.Kind.String(), a.Check.Name.Lower().String(), a.Check.Type.String()), " ")
 }
 

@@ -171,7 +171,9 @@ func (e Expectation) String() string {
 // File is the expectations of one domain.
 type File struct {
 	Domain       dnswire.Name
-	Expectations []Expectation // canonical order; at most one for each (Name, Type)
+	Issuers      []string       // the names that CAA records use for the authorities to expect: lower case, sorted, unique; nil when there is none
+	CertNames    []dnswire.Name // names that certificates may hold besides the owners of the lines: dnswire.Compare order, unique by Key
+	Expectations []Expectation  // canonical order; at most one for each (Name, Type)
 }
 
 func (f *File) Find(name dnswire.Name, t dnswire.Type) (Expectation, bool) {

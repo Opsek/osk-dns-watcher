@@ -748,3 +748,31 @@ func TestReadingCommandsRefuseFilesThatAreNotRegular(t *testing.T) {
 		t.Errorf("osk validate with /dev/zero as an expectations file: exit code %d, output %q; want 1 and %s %s", o.code, o.out, w.corp, refused)
 	}
 }
+
+// The certificates check has no name and no type of its own: its label and
+// its JSON name the kind and the domain, in lower case, and leave the type
+// empty.
+func TestCheckLabelAndCheckOfNameTheCertificatesCheckByItsDomain(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		key   obs.Key
+		label string
+		json  cliCheck
+	}{
+		{"certificates", obs.CertificatesKey(cliName("Corp.Test.")), "certificates corp.test.",
+			cliCheck{Kind: "certificates", Domain: "corp.test.", Name: "corp.test.", RType: ""}},
+		{"records", cliRecordsKey("corp.test.", "WWW.corp.test.", dnswire.TypeA), "records www.corp.test. A",
+			cliCheck{Kind: "records", Domain: "corp.test.", Name: "www.corp.test.", RType: "A"}},
+		{"whole domain", cliScopeKey("Corp.Test."), "corp.test.",
+			cliCheck{Domain: "corp.test.", Name: "corp.test."}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := checkLabel(c.key); got != c.label {
+				t.Errorf("checkLabel = %q, want %q", got, c.label)
+			}
+			if got := checkOf(c.key); cliCheck(got) != c.json {
+				t.Errorf("checkOf = %+v, want %+v", got, c.json)
+			}
+		})
+	}
+}

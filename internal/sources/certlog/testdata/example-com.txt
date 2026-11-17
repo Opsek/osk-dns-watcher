@@ -1,0 +1,15 @@
+A recorded answer of the certificate source for example.com.
+
+First request, 2026-11-17T12:34:22Z:
+GET https://api.certspotter.com/v1/issuances?domain=example.com&include_subdomains=true&expand=dns_names&expand=issuer&expand=issuer.caa_domains
+Status: 200
+Date: Tue, 17 Nov 2026 12:34:22 GMT
+Retry-After: (none)
+Issuances: 17
+Body: example-com.json, byte for byte
+
+Second request, 2026-11-17T12:34:31Z, the same URL with &after=17893609773:
+Status: 200
+Date: Tue, 17 Nov 2026 12:34:31 GMT
+Retry-After: 3600
+Body: []

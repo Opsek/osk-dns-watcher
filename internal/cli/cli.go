@@ -129,6 +129,9 @@ func checkLabel(k obs.Key) string {
 	if k.Kind == 0 {
 		return k.Domain.Lower().String()
 	}
+	if k.Kind == obs.KindCertificates {
+		return k.Kind.String() + " " + k.Domain.Lower().String()
+	}
 	return k.Kind.String() + " " + k.Name.Lower().String() + " " + k.Type.String()
 }
 
@@ -139,11 +142,15 @@ type checkJSON struct {
 	RType  string `json:"rtype"`
 }
 
-// checkOf gives "" as kind and type for kind 0, which has neither.
+// checkOf gives "" as kind and type for kind 0, which has neither, and ""
+// as type for the certificates check, which has no type.
 func checkOf(k obs.Key) checkJSON {
 	c := checkJSON{Domain: k.Domain.Lower().String(), Name: k.Name.Lower().String()}
 	if k.Kind != 0 {
-		c.Kind, c.RType = k.Kind.String(), k.Type.String()
+		c.Kind = k.Kind.String()
+		if k.Kind != obs.KindCertificates {
+			c.RType = k.Type.String()
+		}
 	}
 	return c
 }

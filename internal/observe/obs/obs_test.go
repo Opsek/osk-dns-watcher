@@ -75,7 +75,8 @@ func TestKindString(t *testing.T) {
 		{obs.KindSerial, 4, "serial"},
 		{0, 0, "kind0"},
 		{obs.KindWildcard, 5, "wildcard"},
-		{6, 6, "kind6"},
+		{obs.KindCertificates, 6, "certificates"},
+		{7, 7, "kind7"},
 		{255, 255, "kind255"},
 	} {
 		if uint8(c.kind) != c.value || c.kind.String() != c.word {
@@ -97,6 +98,7 @@ func TestKeyConstructors(t *testing.T) {
 		{obs.DSKey(domain), obs.KindDS, domain, dnswire.TypeDS},
 		{obs.SerialKey(domain), obs.KindSerial, domain, dnswire.TypeSOA},
 		{obs.RecordsKey(domain, elsewhere, dnswire.TypeMX), obs.KindRecords, elsewhere, dnswire.TypeMX},
+		{obs.CertificatesKey(domain), obs.KindCertificates, domain, 0},
 		{obs.WildcardKey(domain, domain), obs.KindWildcard, domain, dnswire.TypeA},
 		{obs.WildcardKey(domain, elsewhere), obs.KindWildcard, elsewhere, dnswire.TypeA},
 	} {
@@ -124,6 +126,8 @@ func TestKeyString(t *testing.T) {
 		{obs.SerialKey(domain), "serial corp.test. corp.test. SOA"},
 		{obs.WildcardKey(domain, domain), "wildcard corp.test. corp.test. A"},
 		{obs.WildcardKey(domain, dataName(t, "Mail.Shop.TEST.")), "wildcard corp.test. mail.shop.test. A"},
+		{obs.CertificatesKey(domain), "certificates corp.test."},
+		{obs.CertificatesKey(dataName(t, "Shop.Example.COM.")), "certificates shop.example.com."},
 	} {
 		if got := c.key.String(); got != c.want {
 			t.Errorf("key prints %q, want %q", got, c.want)

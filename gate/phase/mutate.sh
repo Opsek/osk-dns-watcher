@@ -19,5 +19,6 @@ trap 'rm -rf "$tmp"' EXIT
 
 go build -buildvcs=false -o "$tmp/mutate" ./gate/mutate || fail mutate "go build ./gate/mutate failed"
 # The folders that hold the judgement of the tool: what differs, when an
-# alert opens, escalates or resolves, and when a check is due.
-"$tmp/mutate" --list gate/mutants.txt internal/decide internal/expect internal/alert internal/schedule || exit 1
+# alert opens, escalates or resolves, when a check is due, and how the
+# certificate source is read.
+"$tmp/mutate" --list gate/mutants.txt internal/decide internal/expect internal/alert internal/schedule internal/sources/certlog || exit 1

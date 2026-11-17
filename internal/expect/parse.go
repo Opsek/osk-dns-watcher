@@ -64,7 +64,7 @@ func Parse(data []byte) (*File, error) {
 	if len(data) > maxFileSize {
 		return nil, &Error{Problems: []Problem{{Text: fmt.Sprintf("the file is larger than %d octets", maxFileSize)}}}
 	}
-	p := parser{seen: map[setKey]int{}}
+	p := parser{seen: map[setKey]int{}, issuerLines: map[string]int{}, certNameLines: map[string]int{}}
 	n := 0
 	for line := range strings.SplitSeq(string(data), "\n") {
 		n++
@@ -83,6 +83,8 @@ func Parse(data []byte) (*File, error) {
 	if len(problems) > 0 {
 		return nil, &Error{Problems: problems[:min(len(problems), maxProblems)]}
 	}
+	slices.Sort(p.file.Issuers)
+	slices.SortFunc(p.file.CertNames, dnswire.Compare)
 	slices.SortFunc(p.file.Expectations, compareExpectations)
 	return &p.file, nil
 }
@@ -100,6 +102,9 @@ type parser struct {
 	count      int // expectation lines
 	seen       map[setKey]int
 	problems   []Problem
+
+	issuerLines   map[string]int // issuer name to its line
+	certNameLines map[string]int // Key of a certname to its line
 }
 
 // readLine reads one line and gives its problem, or "" when it has none.
@@ -115,6 +120,12 @@ func (p *parser) readLine(n int, line string) string {
 		return ""
 	}
 	p.count++
+	switch first {
+	case "issuer":
+		return p.readIssuer(n, rest)
+	case "certname":
+		return p.readCertName(n, rest)
+	}
 	e, text := p.readExpectation(n, first, rest)
 	if text == "" {
 		p.file.Expectations = append(p.file.Expectations, e)
@@ -147,6 +158,66 @@ func (p *parser) readDomain(n int, line, rest string) string {
 	if p.count > 0 {
 		return "the domain line must come before the expectations"
 	}
+	return ""
+}
+
+func (p *parser) readIssuer(n int, rest string) string {
+	fields := splitFields(rest)
+	if len(fields) != 1 {
+		return "an issuer line takes one name"
+	}
+	if !isIssuerName(fields[0]) {
+		return fmt.Sprintf("bad issuer %q: want a name such as letsencrypt.org, with no trailing dot", fields[0])
+	}
+	issuer := strings.ToLower(fields[0])
+	if line, ok := p.issuerLines[issuer]; ok {
+		return fmt.Sprintf("issuer %s is already given on line %d", issuer, line)
+	}
+	p.issuerLines[issuer] = n
+	p.file.Issuers = append(p.file.Issuers, issuer)
+	return ""
+}
+
+// isIssuerName reports whether s is the issuer-domain-name of a CAA value:
+// labels of letters, digits and hyphens, each starting and ending with a
+// letter or digit.
+func isIssuerName(s string) bool {
+	for label := range strings.SplitSeq(s, ".") {
+		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if c != '-' && !('0' <= c && c <= '9') && !('a' <= c && c <= 'z') && !('A' <= c && c <= 'Z') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (p *parser) readCertName(n int, rest string) string {
+	fields := splitFields(rest)
+	if len(fields) != 1 {
+		return "a certname line takes one name"
+	}
+	name, text := parseName(fields[0])
+	if text != "" {
+		return text
+	}
+	if !name.IsSubdomainOf(p.file.Domain) {
+		return fmt.Sprintf("certname %s is not at or under the domain", name.Lower())
+	}
+	for i, label := range name.Labels() {
+		if strings.Contains(label, "*") && (i > 0 || label != "*") {
+			return fmt.Sprintf(`bad certname %q: "*" stands only as the first label`, fields[0])
+		}
+	}
+	if line, ok := p.certNameLines[name.Key()]; ok {
+		return fmt.Sprintf("certname %s is already given on line %d", name.Lower(), line)
+	}
+	p.certNameLines[name.Key()] = n
+	p.file.CertNames = append(p.file.CertNames, name)
 	return ""
 }
 
@@ -406,6 +477,12 @@ func hasTrailingDot(s string) bool {
 func (f *File) String() string {
 	var b strings.Builder
 	b.WriteString("domain " + nameText(f.Domain) + "\n")
+	for _, issuer := range f.Issuers {
+		b.WriteString("issuer " + issuer + "\n")
+	}
+	for _, n := range f.CertNames {
+		b.WriteString("certname " + nameText(n) + "\n")
+	}
 	for _, e := range slices.SortedFunc(slices.Values(f.Expectations), compareExpectations) {
 		b.WriteString(e.String() + "\n")
 	}

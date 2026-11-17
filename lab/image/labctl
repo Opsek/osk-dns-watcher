@@ -22,6 +22,9 @@ usage: labctl set <server> <name> <ttl> <type> <rdata>...
        labctl hooks list | clear | fail <status> <count>
        labctl hooks reply <status> <count> [--header '<Name>: <value>']...
                           [--delay <seconds>] [--body <text>]
+       labctl certs set             (a JSON array of issuances on standard input)
+       labctl certs fail <status> <count> [<retry>]
+       labctl certs clear
        labctl reset | status        (used by lab/bin/lab)
 <server> is ns1, ns2 or both. Each <rdata> is one record in zone file
 format, for example '10 mail.corp.test.' or '"v=spf1 -all"'.
@@ -269,6 +272,17 @@ reply() {
 		--data-urlencode "body=$body" "http://$net.30:8080/reply"
 }
 
+certs_fail() {
+	case $1:$2:${3:-0} in *[!0-9:]* | :* | *::* | *:) usage ;; esac
+	hooks --data-urlencode "status=$1" --data-urlencode "count=$2" \
+		--data-urlencode "retry=${3:-0}" "http://$net.30:8080/issuances/fail"
+}
+
+certs_clear() {
+	echo '[]' | hooks --data-binary @- "http://$net.30:8080/issuances"
+	certs_fail 200 0
+}
+
 lie() {
 	n=$(echo "$1" | tr '[:upper:]' '[:lower:]')
 	n=${n%.}.
@@ -410,6 +424,14 @@ hooks)
 	*) usage ;;
 	esac
 	;;
+certs)
+	case $#:${2:-} in
+	2:set) hooks --data-binary @- "http://$net.30:8080/issuances" ;;
+	2:clear) certs_clear ;;
+	[45]:fail) certs_fail "$3" "$4" "${5:-}" ;;
+	*) usage ;;
+	esac
+	;;
 reset)
 	[ $# -eq 1 ] || usage
 	wait_up
@@ -422,6 +444,7 @@ reset)
 	reload liar
 	hooks -X POST "http://$net.30:8080/clear"
 	reply 200 0
+	certs_clear
 	;;
 status)
 	[ $# -eq 1 ] || usage

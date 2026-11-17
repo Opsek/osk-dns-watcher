@@ -19,7 +19,9 @@ import (
 
 	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/dns-monitoring/internal/httpclient"
 	"github.com/Opsek/dns-monitoring/internal/schedule"
+	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
 )
 
 const (
@@ -35,6 +37,10 @@ const (
 	maxBeat        = time.Hour
 	minRemind      = time.Hour
 	maxRemind      = 720 * time.Hour
+
+	// The source asks for its own gap between two polls; this is the gap
+	// when it asks for none.
+	defaultCertificatesInterval = 10 * time.Minute
 )
 
 type Secret struct {
@@ -66,18 +72,26 @@ type Heartbeat struct {
 	Interval time.Duration
 }
 
+// Certificates is the optional read of the certificate logs.
+type Certificates struct {
+	URL      string
+	Key      *Secret // nil: none
+	Interval time.Duration
+}
+
 type Config struct {
-	Path        string // the config file as given
-	State       string // absolute
-	Domains     []Domain
-	Intervals   schedule.Intervals
-	Slack       *Slack // nil: none
-	Webhooks    []Webhook
-	Heartbeat   *Heartbeat // nil: none
-	HistoryDays int
-	Remind      time.Duration
-	RootServers []netip.AddrPort // port 0: 53
-	ExtraRanges []netip.Prefix
+	Path         string // the config file as given
+	State        string // absolute
+	Domains      []Domain
+	Intervals    schedule.Intervals
+	Slack        *Slack // nil: none
+	Webhooks     []Webhook
+	Heartbeat    *Heartbeat    // nil: none
+	Certificates *Certificates // nil: the certificate logs are not read
+	HistoryDays  int
+	Remind       time.Duration
+	RootServers  []netip.AddrPort // port 0: 53
+	ExtraRanges  []netip.Prefix
 }
 
 type Problem struct {
@@ -200,12 +214,16 @@ func (c *Config) Channels() []string {
 func (w *walker) config() *Config {
 	c := &Config{Path: w.file, Intervals: schedule.Defaults(), HistoryDays: 90}
 	seen, at := w.object("", fields{
-		"state":        func(p string, _ int64) { c.State = w.state(p) },
-		"domains":      func(p string, _ int64) { c.Domains = w.domains(p) },
-		"intervals":    func(p string, _ int64) { w.intervals(p, &c.Intervals) },
-		"slack":        func(p string, _ int64) { c.Slack = w.slack(p) },
-		"webhooks":     func(p string, _ int64) { c.Webhooks = w.webhooks(p) },
-		"heartbeat":    func(p string, _ int64) { c.Heartbeat = w.heartbeat(p) },
+		"state":     func(p string, _ int64) { c.State = w.state(p) },
+		"domains":   func(p string, _ int64) { c.Domains = w.domains(p) },
+		"intervals": func(p string, _ int64) { w.intervals(p, &c.Intervals) },
+		"slack":     func(p string, _ int64) { c.Slack = w.slack(p) },
+		"webhooks":  func(p string, _ int64) { c.Webhooks = w.webhooks(p) },
+		"heartbeat": func(p string, _ int64) { c.Heartbeat = w.heartbeat(p) },
+		"certificates": func(p string, _ int64) {
+			c.Certificates = w.certificates(p)
+			c.Intervals.Certificates = c.Certificates.Interval
+		},
 		"history_days": func(p string, _ int64) { c.HistoryDays = w.days(p) },
 		"remind":       func(p string, _ int64) { c.Remind = w.remind(p) },
 		"network":      func(p string, _ int64) { w.network(p, c) },
@@ -462,6 +480,30 @@ func (w *walker) heartbeat(path string) *Heartbeat {
 		"interval": func(p string, _ int64) { h.Interval = w.interval(p, minBeat, maxBeat) },
 	}, "url")
 	return h
+}
+
+func (w *walker) certificates(path string) *Certificates {
+	c := &Certificates{URL: certlog.DefaultURL, Interval: defaultCertificatesInterval}
+	w.object(path, fields{
+		"url":      func(p string, _ int64) { c.URL = w.certificatesURL(p) },
+		"key":      func(p string, keyAt int64) { k := w.secret(p, keyAt); c.Key = &k },
+		"interval": func(p string, _ int64) { c.Interval = w.interval(p, schedule.Floor, schedule.Ceiling) },
+	})
+	return c
+}
+
+// certificatesURL reads the endpoint of the certificate source. The request
+// adds its own query, so one given here would be sent twice. The text holds
+// no part of the URL.
+func (w *walker) certificatesURL(path string) string {
+	s, at, ok := w.str(path)
+	if !ok {
+		return ""
+	}
+	if _, err := httpclient.HostOf(s); err != nil || strings.ContainsAny(s, "?#") {
+		w.add(at, path, "want an https URL with a host and no query")
+	}
+	return s
 }
 
 func (w *walker) network(path string, c *Config) {

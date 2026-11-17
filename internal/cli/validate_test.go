@@ -259,3 +259,64 @@ func TestValidateDoesNotRepeatAURLGivenAsAPath(t *testing.T) {
 		}
 	}
 }
+
+// A line of the expectations that no check judges is said aloud, once for
+// each domain that holds one, and is no problem: the exit code is 0.
+func TestValidateWarnsOfIssuerAndCertnameLinesWhenCertificatesIsNotSet(t *testing.T) {
+	const text = ": the issuer and certname lines are not judged: certificates is not set in the config"
+	corpIssuer := strings.Replace(cliCorpFile, "domain corp.test.\n", "domain corp.test.\nissuer ca.test\n", 1)
+	shopCertname := strings.Replace(cliShopFile, "domain shop.test.\n", "domain shop.test.\ncertname *.shop.test.\n", 1)
+	for _, c := range []struct {
+		name       string
+		corp, shop string
+		warned     []string
+	}{
+		{"issuer line", corpIssuer, cliShopFile, []string{"corp.test."}},
+		{"certname line", cliCorpFile, shopCertname, []string{"shop.test."}},
+		{"both", corpIssuer, shopCertname, []string{"corp.test.", "shop.test."}},
+		{"none", cliCorpFile, cliShopFile, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			cliSetSecrets(t, w)
+			cliWriteFile(t, w.corp, c.corp)
+			cliWriteFile(t, w.shop, c.shop)
+			var warnings []string
+			for _, d := range c.warned {
+				warnings = append(warnings, d+text)
+			}
+			summary := cliResultJSON{Valid: true, Problems: 0, Domains: 2, Channels: []string{"slack", "siem"}}
+
+			code, out, errOut := cliValidate(w)
+			if code != 0 || errOut != "" {
+				t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "osk validate", out, append(cliPrefixed("warning ", warnings), "valid: 2 domains, channels slack,siem")...)
+
+			code, out, errOut = cliValidate(w, "--json")
+			if code != 0 || errOut != "" {
+				t.Errorf("--json: exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "osk validate --json", out, cliValidateJSON(t, nil, warnings, summary)...)
+		})
+	}
+}
+
+// With certificates set the lines are judged, so no warning names them; the
+// config gives only its own warning.
+func TestValidateDoesNotWarnOfIssuerAndCertnameLinesWhenCertificatesIsSet(t *testing.T) {
+	w := cliNewWorld(t, false)
+	cliSetSecrets(t, w)
+	cliWriteFile(t, w.config, cliConfigText(w.state, `,
+  "certificates": {"url": "https://certs.example.test/v1/issuances", "interval": "10m"}`))
+	cliWriteFile(t, w.corp, strings.Replace(cliCorpFile, "domain corp.test.\n", "domain corp.test.\nissuer ca.test\ncertname *.corp.test.\n", 1))
+	c, problems := config.Read(w.config)
+	if c == nil || len(c.Warnings()) != 1 {
+		t.Fatalf("the config of the test: %v, %v; want it valid with one warning", c, problems)
+	}
+	code, out, errOut := cliValidate(w)
+	if code != 0 || errOut != "" {
+		t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
+	}
+	cliSame(t, "osk validate", out, "warning "+c.Warnings()[0], "valid: 2 domains, channels slack,siem")
+}

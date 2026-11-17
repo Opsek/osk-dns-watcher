@@ -598,6 +598,40 @@ c_hooks_redirect() {
 	same "POST 2 (status|Location)" "200|" "$(hit "/accept/redirect2-$TOKEN" '%{http_code}|%header{location}')"
 	lc hooks clear
 }
+# cget <query>: GET the stand-in of the certificate source, print "status|Retry-After" and leave
+# the body in $TMP/body
+cget() {
+	rm -f "$TMP/body"
+	curl -sS -o "$TMP/body" -w '%{http_code}|%header{retry-after}' --max-time 5 \
+		"https://hooks.lab.test/v1/issuances?$1" 2>&1
+}
+cids() { grep -o '"id":"[0-9]*"' "$TMP/body" | tr -dc '0-9\n' | tr '\n' ' ' | sed 's/ $//'; }
+# cwant <what> <query> <status|Retry-After> <ids>: one lookup; no ids on a 200 means the body [].
+cwant() {
+	cw_got=$(cget "$2")
+	same "$1 (status|Retry-After)" "$3" "$cw_got"
+	same "$1 (ids)" "$4" "$(cids)"
+	[ -n "$4" ] || [ "${cw_got%%|*}" != 200 ] || same "$1 (body)" "[]" "$(tr -d '\n ' <"$TMP/body")"
+}
+c_certs_fake() {
+	cf_set='['
+	for cf_i in 1 2 3 4 5; do
+		cf_set="$cf_set{\"id\":\"$cf_i\",\"dns_names\":[\"www.corp.test\"]},"
+	done
+	cf_set="$cf_set{\"id\":\"6\",\"dns_names\":[\"shop.test\"]}]"
+	printf '%s' "$cf_set" | labctl certs set || echo "labctl certs set: exit $?"
+	cwant "domain=corp.test" "domain=corp.test" "200|" "1 2"
+	cwant "domain=corp.test&after=2" "domain=corp.test&after=2" "200|" "3 4"
+	cwant "domain=corp.test&after=4" "domain=corp.test&after=4" "200|" "5"
+	cwant "domain=corp.test&after=5" "domain=corp.test&after=5" "200|1" ""
+	cwant "domain=shop.test" "domain=shop.test" "200|" "6"
+	lc certs fail 429 1 30
+	cwant "domain=corp.test after certs fail 429 1 30" "domain=corp.test" "429|30" ""
+	cwant "domain=corp.test after the failure" "domain=corp.test" "200|" "1 2"
+	same "stored hook requests after the lookups" "" "$(labctl hooks list 2>&1)"
+	lc certs clear
+	cwant "domain=corp.test after certs clear" "domain=corp.test" "200|1" ""
+}
 c_exit_codes() {
 	ec_serial=$(serial_of "$NS1" corp.test.)
 	same "exit code of labctl serial ns1 corp.test." 0 "$(code serial ns1 corp.test.)"
@@ -918,7 +952,10 @@ EOF
 	lc lie corp.test. MX "10 mail.evil.test."
 	post "/accept/dirty-$TOKEN" >/dev/null
 	lc hooks reply 503 5 --header 'Retry-After: 9' --delay 3 --body pending
+	echo '[{"id":"1","dns_names":["corp.test"]}]' | labctl certs set
+	lc certs fail 503 5
 	lc reset
+	cwant "domain=corp.test after reset" "domain=corp.test" "200|1" ""
 	rq "$RESOLVER" "$rd_new" A
 	[ "$(out | status)" = NXDOMAIN ] || echo "$rd_new A @$RESOLVER after reset: want NXDOMAIN, got $(got)"
 	c_base_root
@@ -1034,6 +1071,7 @@ main() {
 	check labctl-hooks-reply-rate-limit c_hooks_rate_limit
 	check labctl-hooks-reply-delay c_hooks_delay
 	check labctl-hooks-reply-redirect c_hooks_redirect
+	check certs-fake c_certs_fake
 	check labctl-exit-codes c_exit_codes
 
 	check attack-ns-replaced c_ns_replaced

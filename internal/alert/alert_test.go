@@ -264,10 +264,19 @@ func TestLabelNamesKindSeverityRuleAndCheck(t *testing.T) {
 	upper := alrName(t, "Corp.Test.")
 	file := Alert{Rule: decide.RuleInvalidFile, Severity: decide.SeverityMedium, Peak: decide.SeverityMedium,
 		Check: obs.Key{Domain: upper, Name: upper}}
+	// The check of the certificates has the domain as its name and no type;
+	// its label names the kind and the domain alone.
+	issuer := Alert{Rule: decide.RuleIssuer, Severity: decide.SeverityHigh, Peak: decide.SeverityHigh,
+		Check: obs.CertificatesKey(upper)}
+	hosts := Alert{Rule: decide.RuleHostnames, Severity: decide.SeverityLow, Peak: decide.SeverityLow,
+		Check: obs.CertificatesKey(corp)}
 	for _, c := range []struct {
 		e    Event
 		want string
 	}{
+		{Event{Kind: EventOpen, Alert: issuer, Was: decide.SeverityHigh}, "open high issuer certificates corp.test."},
+		{Event{Kind: EventResolve, Alert: issuer, Was: decide.SeverityHigh}, "resolve high issuer certificates corp.test."},
+		{Event{Kind: EventUpdate, Alert: hosts, Was: decide.SeverityLow}, "update low hostnames certificates corp.test."},
 		{Event{Kind: EventOpen, Alert: delegation, Was: decide.SeverityCritical}, "open critical nameservers delegation corp.test. NS"},
 		{Event{Kind: EventResolve, Alert: delegation, Was: decide.SeverityCritical}, "resolve critical nameservers delegation corp.test. NS"},
 		{Event{Kind: EventUpdate, Alert: www, Was: decide.SeverityHigh}, "update high record-set records www.corp.test. A"},

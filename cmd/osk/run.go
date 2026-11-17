@@ -16,12 +16,14 @@ import (
 	"time"
 
 	"github.com/Opsek/dns-monitoring/internal/alert"
+	"github.com/Opsek/dns-monitoring/internal/cli"
 	"github.com/Opsek/dns-monitoring/internal/config"
 	"github.com/Opsek/dns-monitoring/internal/deliver"
 	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/httpclient"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/schedule"
+	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
@@ -50,7 +52,7 @@ const (
 	humanLayout  = "2006-01-02 15:04:05 UTC"
 )
 
-var tiers = []schedule.Tier{schedule.TierSerial, schedule.TierParent, schedule.TierFast, schedule.TierOther}
+var tiers = []schedule.Tier{schedule.TierSerial, schedule.TierParent, schedule.TierFast, schedule.TierOther, schedule.TierCertificates}
 
 // service runs "osk run" until SIGINT or SIGTERM, each a clean stop.
 func service(args []string, stdout, stderr io.Writer) int {
@@ -147,8 +149,8 @@ func prepare(c *config.Config) (values config.Values, o *observe.Observer, files
 
 func newMonitor(c *config.Config, values config.Values, o *observe.Observer, files []*expect.File, s *store.Store, stdout io.Writer) *monitor {
 	now := time.Now()
-	// The one client for every channel and the heartbeat: it posts only to
-	// the hosts of the URLs of the config.
+	// The one client for every channel, the heartbeat and the certificate
+	// source: it asks only the hosts of the URLs of the config.
 	client := httpclient.New(values.Hosts(), nil)
 	m := &monitor{
 		cfg:      c,
@@ -162,7 +164,11 @@ func newMonitor(c *config.Config, values config.Values, o *observe.Observer, fil
 		m.beatTo = &beater{client: client, url: values.HeartbeatURL, every: c.Heartbeat.Interval}
 	}
 	for i, d := range c.Domains {
-		m.domains = append(m.domains, newWatched(d, files[i], c.Intervals, now))
+		w := newWatched(d, files[i], c.Intervals, now)
+		if c.Certificates != nil {
+			w.certs = certlog.New(client, values.CertificatesURL, values.CertificatesKey, d.Name)
+		}
+		m.domains = append(m.domains, w)
 	}
 	return m
 }
@@ -190,6 +196,11 @@ func (m *monitor) start() error {
 		m.out.log(levelWarning, "", "warning "+w)
 	}
 	for _, d := range m.domains {
+		if w := cli.CertLinesWarning(m.cfg, d.file); w != "" {
+			m.out.log(levelWarning, d.label, "warning "+w)
+		}
+	}
+	for _, d := range m.domains {
 		m.printPlan(d)
 	}
 	if err := m.startBeat(now); err != nil {
@@ -210,6 +221,10 @@ func (m *monitor) printPlan(d *watched) {
 	checks := d.sched.Checks()
 	m.out.log(levelInfo, d.label, fmt.Sprintf("start %s %d checks, state %s", d.label, len(checks), m.cfg.State))
 	for _, t := range tiers {
+		// The certificates tier has no interval while the source is off.
+		if m.cfg.Intervals.Of(t) == 0 {
+			continue
+		}
 		n := 0
 		for _, c := range checks {
 			if c.Tier == t {

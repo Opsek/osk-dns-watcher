@@ -38,6 +38,9 @@ const (
 	RuleChallenge                      // a certificate-challenge record exists where the file expects none
 	RuleWildcard                       // a random name under a zone answers where the file expects no wildcard
 	RuleCAA                            // the CAA policy for a name permits more than the file allows
+	RuleIssuer                         // a certificate was issued by an authority that the policy or the file does not allow
+	RuleCertName                       // a wildcard certificate name that the file does not list
+	RuleHostnames                      // a certificate holds a name that the file does not list
 )
 
 var ruleWords = map[Rule]string{
@@ -59,6 +62,9 @@ var ruleWords = map[Rule]string{
 	RuleChallenge:      "challenge",
 	RuleWildcard:       "wildcard",
 	RuleCAA:            "caa",
+	RuleIssuer:         "issuer",
+	RuleCertName:       "certname",
+	RuleHostnames:      "hostnames",
 }
 
 func (r Rule) String() string { return word(ruleWords, r, "rule") }
@@ -126,6 +132,9 @@ var severities = map[Rule]Severity{
 	RuleChallenge:      SeverityHigh,
 	RuleWildcard:       SeverityMedium,
 	RuleCAA:            SeverityHigh,
+	RuleIssuer:         SeverityHigh,
+	RuleCertName:       SeverityHigh,
+	RuleHostnames:      SeverityLow,
 }
 
 var highTypes = map[dnswire.Type]bool{
@@ -216,6 +225,9 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 		found = wildcard(f, o)
 	case obs.KindSerial:
 		// No line of the file is about the serial.
+	case obs.KindCertificates:
+		// A run of the certificate logs is no observation; DecideCertificates
+		// judges it.
 	}
 	slices.SortStableFunc(found, func(a, b Finding) int { return cmp.Compare(a.Rule, b.Rule) })
 	return found
@@ -461,14 +473,14 @@ func openOrUpdate(found, open []Finding, now time.Time) []Change {
 
 // changed reports whether f tells more than was. A line that is gone is no
 // news: a server that fails now and then drops out of Seen and comes back.
-// The same holds for a part of the Expected of a glue finding: a parent
-// server that fails for one run drops its part, and its return must not send
-// "changed again".
+// The same holds for a part of the Expected of a glue or issuer finding: a
+// parent server that fails for one run drops its part, and its return must not
+// send "changed again"; a certificate that expires drops its part.
 func changed(was, f Finding) bool {
 	if was.Severity != f.Severity {
 		return true
 	}
-	if f.Rule == RuleGlue {
+	if f.Rule == RuleGlue || f.Rule == RuleIssuer {
 		if hasNewPart(was.Expected, f.Expected) {
 			return true
 		}
@@ -484,7 +496,7 @@ func changed(was, f Finding) bool {
 	return slices.ContainsFunc(lines(f.Value), func(l string) bool { return !slices.Contains(old, l) })
 }
 
-// hasNewPart reports whether now holds a part of a glue Expected that old does not.
+// hasNewPart reports whether now holds a part of a glue or issuer Expected that old does not.
 func hasNewPart(old, now string) bool {
 	was := strings.Split(old, "; ")
 	return slices.ContainsFunc(strings.Split(now, "; "), func(p string) bool { return !slices.Contains(was, p) })

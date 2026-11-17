@@ -23,13 +23,15 @@ const (
 	TierParent
 	TierFast
 	TierOther
+	TierCertificates
 )
 
 var tierWords = map[Tier]string{
-	TierSerial: "serial",
-	TierParent: "parent",
-	TierFast:   "fast",
-	TierOther:  "other",
+	TierSerial:       "serial",
+	TierParent:       "parent",
+	TierFast:         "fast",
+	TierOther:        "other",
+	TierCertificates: "certificates",
 }
 
 func (t Tier) String() string {
@@ -40,7 +42,8 @@ func (t Tier) String() string {
 }
 
 // Intervals are the times between two starts of a check, one per tier.
-type Intervals struct{ Serial, Parent, Fast, Other time.Duration }
+// Certificates 0 turns the certificate check off.
+type Intervals struct{ Serial, Parent, Fast, Other, Certificates time.Duration }
 
 func Defaults() Intervals {
 	return Intervals{Serial: 15 * time.Second, Parent: time.Minute, Fast: time.Minute, Other: 5 * time.Minute}
@@ -62,6 +65,8 @@ func (iv Intervals) Of(t Tier) time.Duration {
 		return iv.Fast
 	case TierOther:
 		return iv.Other
+	case TierCertificates:
+		return iv.Certificates
 	}
 	return 0
 }
@@ -79,6 +84,8 @@ func (iv Intervals) FailLimit(t Tier) time.Duration {
 		return 5 * iv.Fast
 	case TierOther:
 		return 3 * iv.Other
+	case TierCertificates:
+		return 3 * iv.Certificates
 	}
 	return 0
 }
@@ -97,8 +104,9 @@ var fastTypes = []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeCAA,
 // Plan gives the checks of f: the serial, delegation and DS checks of its
 // domain, a records check for each expectation in file order, an address
 // check for each name that a line points at, and a wildcard check for each
-// zone that the file says has no wildcard, and a CAA check for each name whose
-// CAA policy the file states only through a parent.
+// zone that the file says has no wildcard, a CAA check for each name whose
+// CAA policy the file states only through a parent, and last the certificate
+// check when its interval is set.
 func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	d := f.Domain
 	checks := []Check{
@@ -172,6 +180,9 @@ func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 			Interval: iv.Of(tier),
 			Zone:     f.Zone(n).Equal(d),
 		})
+	}
+	if iv.Certificates > 0 {
+		checks = append(checks, Check{Key: obs.CertificatesKey(d), Tier: TierCertificates, Interval: iv.Certificates})
 	}
 	return checks
 }

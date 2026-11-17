@@ -138,7 +138,7 @@ func WebhookMessage(e alert.Event) []byte {
 		Expected:  Clean(a.Expected, 160),
 		Seen:      seen,
 		More:      more,
-		Value:     cleanLines(value, maxServers),
+		Value:     cleanLines(value, valueLines(a.Rule)),
 		FirstSeen: jsonTime(a.Opened),
 		LastClean: jsonTime(a.LastClean),
 		Resolved:  jsonTime(a.Resolved),
@@ -177,12 +177,26 @@ func jsonTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
+// valueLines is how many lines of Value a body holds. The certificate rules
+// list names, and a receiver wants all of them; every other rule shows what
+// the Slack text shows.
+func valueLines(r decide.Rule) int {
+	if r == decide.RuleIssuer || r == decide.RuleCertName || r == decide.RuleHostnames {
+		return maxBodyLines
+	}
+	return maxServers
+}
+
 // checkOf leaves kind and rtype empty for an alert about a whole domain,
-// whose check has no kind and no type.
+// whose check has no kind and no type, and rtype empty for a check of the
+// certificates, which has no type.
 func checkOf(k obs.Key) checkJSON {
 	c := checkJSON{Domain: Clean(k.Domain.Lower().String(), 100), Name: Clean(k.Name.Lower().String(), 100)}
 	if k.Kind != 0 {
-		c.Kind, c.RType = k.Kind.String(), Clean(k.Type.String(), 20)
+		c.Kind = k.Kind.String()
+		if k.Kind != obs.KindCertificates {
+			c.RType = Clean(k.Type.String(), 20)
+		}
 	}
 	return c
 }

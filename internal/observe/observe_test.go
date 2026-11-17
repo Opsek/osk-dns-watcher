@@ -65,7 +65,8 @@ func TestWalkRunValidation(t *testing.T) {
 		field    string
 	}{
 		{"kind 0", obs.Key{Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
-		{"kind 6", obs.Key{Kind: 6, Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
+		{"kind 7", obs.Key{Kind: 7, Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
+		{"certificates", obs.CertificatesKey(corp), time.Minute, "kind"},
 		{"delegation of the root", obs.DelegationKey(dnswire.Name{}), time.Minute, "domain"},
 		{"records under the root domain", obs.RecordsKey(dnswire.Name{}, www, dnswire.TypeA), time.Minute, "domain"},
 		{"delegation of another name", obs.Key{Kind: obs.KindDelegation, Domain: corp, Name: www, Type: dnswire.TypeNS}, time.Minute, "name"},
@@ -296,5 +297,22 @@ func TestWalkFanOutConcurrent(t *testing.T) {
 	}
 	if len(ob.Answers) != len(addrs) {
 		t.Errorf("%d answers, want %d", len(ob.Answers), len(addrs))
+	}
+}
+
+// The certificate check reads no DNS, so the observer refuses it, and says
+// so whatever else is wrong with the key.
+func TestValidateRefusesCertificates(t *testing.T) {
+	corp := walkName(t, "corp.test.")
+	want := ErrInvalidCheck.Error() + ": kind certificates is not a check of the DNS"
+	for _, c := range []Check{
+		{Key: obs.CertificatesKey(corp), Interval: time.Minute},
+		{Key: obs.CertificatesKey(corp), Interval: 0},
+		{Key: obs.CertificatesKey(dnswire.Name{}), Interval: time.Minute},
+	} {
+		err := c.Validate()
+		if !errors.Is(err, ErrInvalidCheck) || err.Error() != want {
+			t.Errorf("Validate of %v: %v; want %q", c, err, want)
+		}
 	}
 }

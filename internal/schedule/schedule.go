@@ -204,14 +204,11 @@ func (s *Schedule) Next() (next time.Time, ok bool) {
 // Done ends the run that gave o, seen at now.
 func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 	k := o.Key.String()
-	// A key that left the plan still held a place among the running checks.
-	delete(s.running, k)
-	i := slices.Index(s.keys, k)
-	if i < 0 {
-		return Report{}
+	usable := !decide.Failed(o)
+	r := s.finish(k, o.Start, usable)
+	if !r.Known {
+		return r
 	}
-	tier := s.plan[i].Tier
-	r := Report{Known: true, Tier: tier, FailingSince: s.failingSince(k, o), FailLimit: s.iv.FailLimit(tier)}
 	if o.Key.Kind == obs.KindRecords {
 		r.DisagreeLong, r.DisagreeOver = s.disagreeState(k, o, now)
 	}
@@ -220,7 +217,7 @@ func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 		s.serialMoved = len(r.Moves) > 0
 		// Not o.Start: a zone check that started in the same tick saw the
 		// zone at the same moment, so its notice shows no later change.
-		if !decide.Failed(o) && !s.serialMoved {
+		if usable && !s.serialMoved {
 			s.quiet = now
 		}
 	}
@@ -230,14 +227,33 @@ func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 	return r
 }
 
-func (s *Schedule) failingSince(k string, o obs.Observation) time.Time {
-	if !decide.Failed(o) {
+// DoneCertificates ends the run that gave c. A certificate run is no DNS
+// answer: it moves no serial and joins no round.
+func (s *Schedule) DoneCertificates(c obs.Certificates, now time.Time) Report {
+	return s.finish(c.Key.String(), c.Start, c.Usable)
+}
+
+// finish takes the run of key k out of the running set and reports what the
+// schedule knows of its check.
+func (s *Schedule) finish(k string, start time.Time, usable bool) Report {
+	// A key that left the plan still held a place among the running checks.
+	delete(s.running, k)
+	i := slices.Index(s.keys, k)
+	if i < 0 {
+		return Report{}
+	}
+	tier := s.plan[i].Tier
+	return Report{Known: true, Tier: tier, FailingSince: s.failingSince(k, start, usable), FailLimit: s.iv.FailLimit(tier)}
+}
+
+func (s *Schedule) failingSince(k string, start time.Time, usable bool) time.Time {
+	if usable {
 		delete(s.failing, k)
 		return time.Time{}
 	}
 	since, ok := s.failing[k]
 	if !ok {
-		since = o.Start
+		since = start
 		s.failing[k] = since
 	}
 	return since

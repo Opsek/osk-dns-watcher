@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -977,5 +978,173 @@ func TestAcceptRefusesACAAAlertThatItCannotChange(t *testing.T) {
 				t.Error("a refused accept changed the file")
 			}
 		})
+	}
+}
+
+// crtOpenAlert stores an open alert of a certificate rule for domain. Its
+// lines have no server: the source of a certificate names none.
+func crtOpenAlert(t *testing.T, w *cliWorld, rule decide.Rule, sev decide.Severity, domain, expected string, texts ...string) int64 {
+	t.Helper()
+	a := cliAlert(rule, sev, obs.CertificatesKey(cliName(domain)), expected, cliT0)
+	for _, text := range texts {
+		a.Lines = append(a.Lines, alert.Line{Text: text, Received: cliT0})
+	}
+	a.Value = strings.Join(texts, "\n")
+	var id int64
+	cliStore(t, w.state, func(s *store.Store) { id = cliOpen(t, s, cliT0, a)[0].ID })
+	return id
+}
+
+// An issuer alert is judged by the CAA lines and the issuer lines of the
+// file, so no line of the file can be accepted for it.
+func TestAcceptRefusesAnIssuerAlert(t *testing.T) {
+	w := cliNewWorld(t, false)
+	id := crtOpenAlert(t, w, decide.RuleIssuer, decide.SeverityHigh, "corp.test.",
+		`corp.test. CAA 0 issue "ca.test"`, "www.corp.test. from evil.test")
+	const want = "osk: accept cannot change the file for an issuer alert: the CAA lines and the issuer lines of the file decide which authorities may issue; change them by hand, or have the certificate revoked if it is not yours\n"
+	for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
+		code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
+		if code != 1 || out != "" || errOut != want {
+			t.Errorf("accept %q: exit code %d, output %q, errors %q; want 1, nothing and %q", args, code, out, errOut, want)
+		}
+	}
+	if cliRead(t, w.corp) != cliCorpFile {
+		t.Error("a refused accept changed the file")
+	}
+}
+
+// A certname or hostnames alert holds many names by design. One change
+// appends a certname line for each name that the file does not know now, in
+// the canonical order of names, which is not the order of octets: the names
+// of the alert come in the order of octets.
+func TestAcceptAppendsOneCertnameLineForEachUnknownName(t *testing.T) {
+	const gained = "certname *.b.corp.test.\n"
+	for _, c := range []struct {
+		name  string
+		rule  decide.Rule
+		sev   decide.Severity
+		shop  bool     // the alert is of shop.test.
+		file  string   // the file when the alert is accepted
+		texts []string // the lines of the alert
+		lines []string // the lines that accept appends, in order
+	}{
+		{"wildcards", decide.RuleCertName, decide.SeverityHigh, false, cliAcceptCorp,
+			[]string{"*.b.corp.test.", "*.corp.test.", "*.eu.corp.test."},
+			[]string{"certname *.corp.test.", "certname *.b.corp.test.", "certname *.eu.corp.test."}},
+		{"hosts, two that the file knows", decide.RuleHostnames, decide.SeverityLow, false, cliAcceptCorp,
+			[]string{"a.b.corp.test.", "b.a.corp.test.", "ftp.corp.test.", "www.corp.test."},
+			[]string{"certname b.a.corp.test.", "certname a.b.corp.test."}},
+		{"one name", decide.RuleHostnames, decide.SeverityLow, false, cliAcceptCorp,
+			[]string{"api.corp.test."}, []string{"certname api.corp.test."}},
+		{"a name that the file gained since the alert", decide.RuleCertName, decide.SeverityHigh, false, cliAcceptCorp + gained,
+			[]string{"*.b.corp.test.", "*.corp.test.", "*.eu.corp.test."},
+			[]string{"certname *.corp.test.", "certname *.eu.corp.test."}},
+		{"a file that does not end in a line feed", decide.RuleHostnames, decide.SeverityLow, true, cliAcceptShop,
+			[]string{"api.shop.test.", "www.shop.test."}, []string{"certname api.shop.test.", "certname www.shop.test."}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			path, domain := w.corp, "corp.test."
+			if c.shop {
+				path, domain = w.shop, "shop.test."
+			}
+			cliWriteFile(t, path, c.file)
+			id := crtOpenAlert(t, w, c.rule, c.sev, domain, "", c.texts...)
+			idText := strconv.FormatInt(id, 10)
+			newText := strings.Join(c.lines, "\n")
+			wantFile := c.file
+			if !strings.HasSuffix(wantFile, "\n") {
+				wantFile += "\n"
+			}
+			wantFile += newText + "\n"
+
+			code, out, errOut := cliAccept(w, idText)
+			if code != 0 || errOut != "" {
+				t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			got := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+			if len(got) < 1 || !strings.HasPrefix(got[0], path+":") {
+				t.Errorf("accept gave %q; want the file name and a line number first", out)
+			} else {
+				var want []string
+				for _, l := range c.lines {
+					want = append(want, "+ "+l)
+				}
+				want = append(want, cliToWrite(w, id, path, "", newText))
+				if !slices.Equal(got[1:], want) {
+					t.Errorf("accept gave after its first line:\n%q\nwant:\n%q", got[1:], want)
+				}
+			}
+			if cliRead(t, path) != c.file {
+				t.Error("accept without --write changed the file")
+			}
+
+			code, out, errOut = cliAccept(w, "--write", cliChangeCode(id, path, "", newText), idText)
+			if code != 0 || errOut != "" {
+				t.Errorf("--write: exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			got = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+			if len(got) != len(c.lines)+2 || got[len(got)-1] != "written" || !strings.HasPrefix(got[0], path+":") {
+				t.Errorf("accept --write gave %q; want the file name, %d lines that start with + and written", out, len(c.lines))
+			}
+			if file := cliRead(t, path); file != wantFile {
+				t.Errorf("the file after accept --write:\n%q\nwant:\n%q", file, wantFile)
+			} else if _, err := expect.Parse([]byte(file)); err != nil {
+				t.Errorf("the file after accept --write is not valid: %v", err)
+			}
+
+			// The file lists every name now.
+			code, out, errOut = cliAccept(w, idText)
+			if want := "osk: the file lists every name of this alert now\n"; code != 1 || out != "" || errOut != want {
+				t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
+			}
+		})
+	}
+}
+
+// The JSON of the change holds the lines joined by LF as the new text, and no
+// old text: the lines are appended.
+func TestAcceptJSONOfCertnameLines(t *testing.T) {
+	w := cliNewWorld(t, false)
+	id := crtOpenAlert(t, w, decide.RuleHostnames, decide.SeverityLow, "corp.test.", "", "api.corp.test.", "app.corp.test.")
+	var got struct {
+		Type    string `json:"type"`
+		File    string `json:"file"`
+		Old     string `json:"old"`
+		New     string `json:"new"`
+		Written bool   `json:"written"`
+		Code    string `json:"code"`
+	}
+	code, out, errOut := cliAccept(w, "--json", strconv.FormatInt(id, 10))
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit code %d, errors %q; want 0 and none", code, errOut)
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output %q: %v", out, err)
+	}
+	const lines = "certname api.corp.test.\ncertname app.corp.test."
+	if got.Type != "change" || got.File != w.corp || got.Old != "" || got.New != lines || got.Written ||
+		got.Code != cliChangeCode(id, w.corp, "", lines) {
+		t.Errorf("accept --json gave %+v; want a change of %s that appends %q, not written, with its code", got, w.corp, lines)
+	}
+}
+
+// With no name left to list, the alert has nothing to accept, also when the
+// file listed the names by owner lines and by certname lines.
+func TestAcceptSaysThatTheFileListsEveryName(t *testing.T) {
+	w := cliNewWorld(t, false)
+	cliWriteFile(t, w.corp, cliAcceptCorp+"certname *.corp.test.\n")
+	wild := crtOpenAlert(t, w, decide.RuleCertName, decide.SeverityHigh, "corp.test.", "", "*.corp.test.")
+	hosts := crtOpenAlert(t, w, decide.RuleHostnames, decide.SeverityLow, "corp.test.", "", "ftp.corp.test.", "www.corp.test.")
+	for _, id := range []int64{wild, hosts} {
+		for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
+			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
+			if want := "osk: the file lists every name of this alert now\n"; code != 1 || out != "" || errOut != want {
+				t.Errorf("accept %q of alert %d: exit code %d, output %q, errors %q; want 1, nothing and %q", args, id, code, out, errOut, want)
+			}
+		}
+	}
+	if cliRead(t, w.corp) != cliAcceptCorp+"certname *.corp.test.\n" {
+		t.Error("a refused accept changed the file")
 	}
 }

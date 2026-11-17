@@ -179,8 +179,8 @@ func TestRegistryRuleWordsAndNumbers(t *testing.T) {
 			t.Errorf("Rule(%d).String() is %q, want %q", c.num, got, c.word)
 		}
 	}
-	if got := Rule(18).String(); got != "rule18" {
-		t.Errorf("Rule(18).String() is %q, want rule18", got)
+	if got := Rule(21).String(); got != "rule21" {
+		t.Errorf("Rule(21).String() is %q, want rule21", got)
 	}
 }
 
@@ -922,8 +922,8 @@ func (g *regGen) set(kind obs.Kind) []dnswire.Record {
 			set = append(set, decRR(g.t, "www.corp.test.", dnswire.TypeA, regPick(g, regAData...)))
 		case obs.KindSerial:
 			set = append(set, decRR(g.t, "corp.test.", dnswire.TypeSOA, "ns1.corp.test. hostmaster.corp.test. 1 3600 600 604800 300"))
-		case obs.KindWildcard:
-			// The registry rules read no wildcard check.
+		case obs.KindWildcard, obs.KindCertificates:
+			// The registry rules read no wildcard or certificate check.
 		}
 	}
 	return set
@@ -1103,7 +1103,7 @@ func regOracleOf(f *expect.File, o obs.Observation) regOracle {
 				or.ds = &Finding{Rule: RuleDS, Severity: SeverityHigh, Check: key, Expected: line.FormText(), Seen: seen, Value: regValue(seen)}
 				or.rules = append(or.rules, RuleDS)
 			}
-		case obs.KindRecords, obs.KindSerial, obs.KindWildcard:
+		case obs.KindRecords, obs.KindSerial, obs.KindWildcard, obs.KindCertificates:
 			// No registry-level rule reads these checks.
 		}
 	}
@@ -1186,7 +1186,8 @@ func regOutcomeOf(in Input, or regOracle, r Rule) regOutcome {
 			want = &f
 		}
 	case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
-		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard, RuleCAA:
+		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard, RuleCAA,
+		RuleIssuer, RuleCertName, RuleHostnames:
 		// Not registry-level rules: the oracle wants no finding.
 	}
 	switch {
@@ -1299,7 +1300,8 @@ func regCheckFindings(t *testing.T, seed uint64, in Input) {
 		case RuleDS:
 			want = or.ds
 		case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
-			RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard, RuleCAA:
+			RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard, RuleCAA,
+			RuleIssuer, RuleCertName, RuleHostnames:
 			t.Fatalf("seed %d: %v is not a registry-level rule", seed, r)
 		}
 		g := byRule(r)

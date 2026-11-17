@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Opsek/dns-monitoring/internal/config"
+	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
@@ -43,8 +44,9 @@ func Validate(args []string, stdout, stderr io.Writer) int {
 		return validateCommand.wrongUse(stderr, msg)
 	}
 	c, problems := config.Read(o.config)
+	var warnings []string
 	if c != nil {
-		problems = deeperProblems(c)
+		problems, warnings = deeperProblems(c)
 	}
 	p := &printer{w: stdout, json: o.json}
 	for _, pr := range problems {
@@ -52,7 +54,7 @@ func Validate(args []string, stdout, stderr io.Writer) int {
 	}
 	result := resultJSON{Type: "result", Valid: len(problems) == 0, Problems: len(problems), Channels: []string{}}
 	if c != nil {
-		for _, w := range c.Warnings() {
+		for _, w := range append(c.Warnings(), warnings...) {
 			p.print("warning "+w, warningJSON{"warning", w})
 		}
 		result.Domains, result.Channels = len(c.Domains), list(c.Channels())
@@ -64,22 +66,36 @@ func Validate(args []string, stdout, stderr io.Writer) int {
 	return p.done(stderr, 0)
 }
 
-// deeperProblems finds what a valid config file can still get wrong. The
-// secret values are dropped at once: validate only tells whether they work.
-func deeperProblems(c *config.Config) []config.Problem {
-	_, problems := c.Secrets(os.LookupEnv)
+// deeperProblems finds what a valid config file can still get wrong, and the
+// warnings of the expectations files. The secret values are dropped at once:
+// validate only tells whether they work.
+func deeperProblems(c *config.Config) (problems []config.Problem, warnings []string) {
+	_, problems = c.Secrets(os.LookupEnv)
 	for _, d := range c.Domains {
-		_, ps := d.Read()
+		f, ps := d.Read()
 		problems = append(problems, ps...)
+		if w := CertLinesWarning(c, f); w != "" {
+			warnings = append(warnings, w)
+		}
 	}
 	// A missing folder is no problem: osk run makes it.
 	if _, err := os.Stat(c.State); errors.Is(err, fs.ErrNotExist) {
-		return problems
+		return problems, warnings
 	}
 	if err := store.CheckFolder(c.State); err != nil {
 		problems = append(problems, config.Problem{File: c.Path, Path: "state", Text: err.Error()})
 	}
-	return problems
+	return problems, warnings
+}
+
+// CertLinesWarning gives the warning for a file whose issuer and certname
+// lines nothing judges, because the config does not read the certificate
+// logs; "" when there is none, also for a nil file. osk run prints it too.
+func CertLinesWarning(c *config.Config, f *expect.File) string {
+	if c.Certificates != nil || f == nil || len(f.Issuers) == 0 && len(f.CertNames) == 0 {
+		return ""
+	}
+	return f.Domain.Lower().String() + ": the issuer and certname lines are not judged: certificates is not set in the config"
 }
 
 func resultText(r resultJSON) string {

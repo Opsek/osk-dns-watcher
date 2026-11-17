@@ -106,9 +106,15 @@ func changeFor(c *config.Config, a alert.Alert) (change, error) {
 	if hint := refusal(a.Rule); hint != "" {
 		return change{}, fmt.Errorf("accept cannot change the file for %s %s alert: %s", article(a.Rule.String()), a.Rule, hint)
 	}
-	text, err := seenText(a)
-	if err != nil {
-		return change{}, err
+	// The alerts of these rules list many names by design, so the servers
+	// cannot disagree about them.
+	listsNames := a.Rule == decide.RuleCertName || a.Rule == decide.RuleHostnames
+	var text string
+	if !listsNames {
+		var err error
+		if text, err = seenText(a); err != nil {
+			return change{}, err
+		}
 	}
 	i := slices.IndexFunc(c.Domains, func(d config.Domain) bool { return d.Name.Equal(a.Check.Domain) })
 	if i < 0 {
@@ -119,7 +125,12 @@ func changeFor(c *config.Config, a alert.Alert) (change, error) {
 	if err != nil {
 		return change{}, err
 	}
-	ch, err := editFile(path, data, f, a, text)
+	var ch change
+	if listsNames {
+		ch, err = namesChange(path, data, f, a)
+	} else {
+		ch, err = editFile(path, data, f, a, text)
+	}
 	if err != nil {
 		return change{}, err
 	}
@@ -140,8 +151,11 @@ func article(word string) string {
 // servers show.
 func refusal(r decide.Rule) string {
 	switch r {
-	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered, decide.RuleDS, decide.RuleCAA:
+	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered, decide.RuleDS, decide.RuleCAA,
+		decide.RuleCertName, decide.RuleHostnames:
 		return ""
+	case decide.RuleIssuer:
+		return "the CAA lines and the issuer lines of the file decide which authorities may issue; change them by hand, or have the certificate revoked if it is not yours"
 	case decide.RuleGlue:
 		return "edit the address line of each nameserver host that differs"
 	case decide.RuleGone:
@@ -238,10 +252,50 @@ func editFile(path string, data []byte, f *expect.File, a alert.Alert, text stri
 	default:
 		ch = replaceLine(path, string(data), e.Line, line)
 	}
+	return ch, parses(ch)
+}
+
+// parses refuses a change that would leave a file that does not parse.
+func parses(ch change) error {
 	if _, err := expect.Parse(ch.data); err != nil {
-		return change{}, fmt.Errorf("the new line is not valid: %v; edit the file by hand", err)
+		return fmt.Errorf("the new line is not valid: %v; edit the file by hand", err)
 	}
-	return ch, nil
+	return nil
+}
+
+// namesChange appends a certname line for each name of the alert that the
+// file does not list now, in canonical order.
+func namesChange(path string, data []byte, f *expect.File, a alert.Alert) (change, error) {
+	var names []dnswire.Name
+	for _, l := range a.Lines {
+		n, err := dnswire.ParseName(l.Text)
+		if err == nil && !listed(f, n, a.Rule) && !slices.ContainsFunc(names, n.Equal) {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return change{}, errors.New("the file lists every name of this alert now")
+	}
+	slices.SortFunc(names, dnswire.Compare)
+	lines := make([]string, len(names))
+	for i, n := range names {
+		lines[i] = "certname " + n.Lower().String()
+	}
+	ch := appendLine(path, string(data), strings.Join(lines, "\n"))
+	return ch, parses(ch)
+}
+
+// listed tells whether the file accounts for n as the rule judges it: a
+// certname line lists a name for both rules; for hostnames, the domain and
+// the owner of a line list it too.
+func listed(f *expect.File, n dnswire.Name, r decide.Rule) bool {
+	if slices.ContainsFunc(f.CertNames, n.Equal) {
+		return true
+	}
+	if r != decide.RuleHostnames {
+		return false
+	}
+	return n.Equal(f.Domain) || slices.ContainsFunc(f.Expectations, func(e expect.Expectation) bool { return e.Name.Equal(n) })
 }
 
 // caaUnchanged checks that the CAA line that governs name is still the one
@@ -295,7 +349,9 @@ func (ch change) text(config string, id int64) string {
 	if ch.Old != "" {
 		lines = append(lines, "- "+ch.Old)
 	}
-	lines = append(lines, "+ "+ch.New)
+	for _, l := range strings.Split(ch.New, "\n") {
+		lines = append(lines, "+ "+l)
+	}
 	if ch.Written {
 		return strings.Join(append(lines, "written"), "\n")
 	}

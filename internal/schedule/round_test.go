@@ -25,7 +25,7 @@ var rndOps = []decide.Op{decide.OpOpen, decide.OpUpdate, decide.OpResolve}
 // rndOtherRules are all the rules whose change tells nothing of the zone.
 func rndOtherRules() []decide.Rule {
 	var others []decide.Rule
-	for r := decide.RuleInvalidFile; r <= decide.RuleCAA; r++ {
+	for r := decide.RuleInvalidFile; r <= decide.RuleHostnames; r++ {
 		if !slices.Contains(rndRules, r) {
 			others = append(others, r)
 		}

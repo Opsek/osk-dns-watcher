@@ -182,7 +182,8 @@ func dngpSeverity(r Rule) Severity {
 	case RuleWildcard:
 		return SeverityMedium
 	case RuleInvalidFile, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
-		RuleGlue, RuleDS, RuleGone, RuleDisagree, RuleAliasTarget, RuleMailTarget, RuleChallenge, RuleCAA:
+		RuleGlue, RuleDS, RuleGone, RuleDisagree, RuleAliasTarget, RuleMailTarget, RuleChallenge, RuleCAA,
+		RuleIssuer, RuleCertName, RuleHostnames:
 	}
 	return SeverityHigh
 }
@@ -247,7 +248,7 @@ func dngpFindings(f *expect.File, o obs.Observation) []Finding {
 		if len(seen) > 0 {
 			found = append(found, finding(RuleWildcard, "none", seen))
 		}
-	case obs.KindDelegation, obs.KindDS, obs.KindSerial:
+	case obs.KindDelegation, obs.KindDS, obs.KindSerial, obs.KindCertificates:
 	}
 	slices.SortStableFunc(found, func(a, b Finding) int { return int(a.Rule) - int(b.Rule) })
 	return found

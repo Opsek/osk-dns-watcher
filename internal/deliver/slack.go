@@ -132,6 +132,24 @@ var wordings = map[decide.Rule]wording{
 		action:   "If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for {N} that you did not ask for.",
 		now:      "as strict as expected",
 	},
+	decide.RuleIssuer: {
+		phrase:   "a certificate for a name of {D} comes from an authority that the expectations do not permit",
+		resolved: "no valid certificate for a name of {D} comes from an authority that the expectations do not permit",
+		action:   "If you did not ask for this certificate, ask its authority to revoke it, and check your CAA records and your DNS provider account. If you did, allow the authority where the file restricts it: in your CAA records and their lines, and in the issuer lines.",
+		now:      "no such certificate is valid now",
+	},
+	decide.RuleCertName: {
+		phrase:   "a wildcard certificate for {D} holds a name that the expectations do not list",
+		resolved: "no valid certificate for {D} holds an unlisted wildcard",
+		action:   "If you did not ask for it, ask its authority to revoke it: it is valid for every name at its level. If it is yours, run osk accept to list it.",
+		now:      "no such certificate is valid now",
+	},
+	decide.RuleHostnames: {
+		phrase:   "certificates name hosts under {D} that the expectations do not list",
+		resolved: "every host under {D} on a valid certificate is in the expectations",
+		action:   "Check that each host is yours. Run osk accept to list them, or add a line for each host that osk should watch.",
+		now:      "no unlisted host on a valid certificate",
+	},
 	decide.RuleRecordSet: {
 		phrase:   "{NT} changed",
 		resolved: "{NT} is as expected again",
@@ -213,6 +231,11 @@ const (
 // without wording gives empty phrases, never DNS text outside code.
 func SlackText(e alert.Event) string {
 	w := wordings[e.Alert.Rule]
+	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindCertificates {
+		// The words of a DNS check do not fit a certificate source.
+		w.action = "Find out why osk gets no usable answer from the certificate source; the log of osk names the reason. Until it does, a new certificate is not seen."
+		w.now = "the source answers"
+	}
 	phrase, action := w.phrase, w.action
 	if e.Kind == alert.EventResolve {
 		phrase, action = w.resolved, resolvedAction
@@ -242,11 +265,15 @@ func assemble(headline string, view []string, times, action string) string {
 // wording, never what it puts in, so DNS text cannot pose as a placeholder.
 func fields(k obs.Key) *strings.Replacer {
 	name := Clean(k.Name.Lower().String(), 100)
+	nameType := name + " " + Clean(k.Type.String(), 20)
+	if k.Kind == obs.KindCertificates {
+		nameType = name // the check has no type of its own
+	}
 	return strings.NewReplacer(
 		"{K}", k.Kind.String(),
 		"{D}", "`"+Clean(k.Domain.Lower().String(), 100)+"`",
 		"{N}", "`"+name+"`",
-		"{NT}", "`"+name+" "+Clean(k.Type.String(), 20)+"`")
+		"{NT}", "`"+nameType+"`")
 }
 
 // title is the start of a headline; the two asterisks make the word bold.
@@ -345,6 +372,44 @@ func expectedRows(first, text string) []row {
 	return rows
 }
 
+// partLines lists the parts of an Expected text, the first under "expected".
+func partLines(parts []string) []string {
+	var rows []row
+	for i, part := range parts {
+		label := ""
+		if i == 0 {
+			label = labelExpected
+		}
+		rows = append(rows, row{label, part})
+	}
+	return recordLines(rows)
+}
+
+// nameLines lists the distinct texts of lines, which are names of
+// certificates, the first under "now".
+func nameLines(lines []alert.Line) []string {
+	var texts []string
+	seen := map[string]bool{}
+	for _, l := range lines {
+		if !seen[l.Text] {
+			seen[l.Text] = true
+			texts = append(texts, l.Text)
+		}
+	}
+	var out []string
+	for i, t := range texts[:min(len(texts), maxRecords)] {
+		label := ""
+		if i == 0 {
+			label = labelNow
+		}
+		out = append(out, pad(label)+Clean(t, recordWidth))
+	}
+	if more := len(texts) - maxRecords; more > 0 {
+		out = append(out, pad("")+"and "+strconv.Itoa(more)+" more names")
+	}
+	return out
+}
+
 // view gives the lines of the code block. resolvedNow is the now line of a
 // resolve.
 func view(e alert.Event, resolvedNow string) []string {
@@ -362,15 +427,13 @@ func view(e alert.Event, resolvedNow string) []string {
 		// Expected holds one part for each host and type that differs, or for each
 		// line that points at the name, joined by "; ". A part may hold " | ", so
 		// it is not split as a record list.
-		var rows []row
-		for i, part := range strings.Split(a.Expected, "; ") {
-			label := ""
-			if i == 0 {
-				label = labelExpected
-			}
-			rows = append(rows, row{label, part})
-		}
-		return append(recordLines(rows), seenLines(a.Lines)...)
+		return append(partLines(strings.Split(a.Expected, "; ")), seenLines(a.Lines)...)
+	case decide.RuleIssuer:
+		// A part is a CAA line, which may hold "; " inside a quoted value.
+		parts := partLines(splitOutsideQuotes(a.Expected, "; "))
+		return append(append(parts, ""), nameLines(a.Lines)...)
+	case decide.RuleCertName, decide.RuleHostnames:
+		return nameLines(a.Lines)
 	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered,
 		decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard,
 		decide.RuleCAA:

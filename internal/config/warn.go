@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/netip"
+	"net/url"
 	"strings"
 )
 
@@ -29,6 +30,12 @@ func (c *Config) Warnings() []string {
 		}
 		lines = append(lines, "network.extra_ranges is set: data from DNS can now make osk send queries to "+
 			strings.Join(ranges, ", ")+". Use it only in a lab or a private network.")
+	}
+	if c.Certificates != nil {
+		// The URL passed the check of Parse, so it parses.
+		u, _ := url.Parse(c.Certificates.URL)
+		lines = append(lines, "certificates is set: "+
+			"osk sends the name of each watched domain to "+u.Host+", which learns which domains you watch.")
 	}
 	return lines
 }

@@ -11,19 +11,21 @@ import (
 type Kind uint8
 
 const (
-	KindDelegation Kind = iota + 1 // NS set and glue of Domain, at every server of the parent zone
-	KindDS                         // DS set of Domain, at every server of the parent zone
-	KindRecords                    // record set Name/Type, at every server of the zone that holds Name
-	KindSerial                     // SOA of Domain, at every server of Domain
-	KindWildcard                   // A set of a random name just under Name, at every server of the zone that holds Name
+	KindDelegation   Kind = iota + 1 // NS set and glue of Domain, at every server of the parent zone
+	KindDS                           // DS set of Domain, at every server of the parent zone
+	KindRecords                      // record set Name/Type, at every server of the zone that holds Name
+	KindSerial                       // SOA of Domain, at every server of Domain
+	KindWildcard                     // A set of a random name just under Name, at every server of the zone that holds Name
+	KindCertificates                 // the certificates that a certificate log shows for Domain; no DNS check
 )
 
 var kindWords = map[Kind]string{
-	KindDelegation: "delegation",
-	KindDS:         "ds",
-	KindRecords:    "records",
-	KindSerial:     "serial",
-	KindWildcard:   "wildcard",
+	KindDelegation:   "delegation",
+	KindDS:           "ds",
+	KindRecords:      "records",
+	KindSerial:       "serial",
+	KindWildcard:     "wildcard",
+	KindCertificates: "certificates",
 }
 
 func (k Kind) String() string {
@@ -71,9 +73,20 @@ func WildcardKey(domain, name dnswire.Name) Key {
 	return Key{Kind: KindWildcard, Domain: domain, Name: name, Type: dnswire.TypeA}
 }
 
+// CertificatesKey is the key of the check that reads the certificate logs
+// for domain. Name is the domain and Type is 0: the check has no name or
+// type of its own.
+func CertificatesKey(domain dnswire.Name) Key {
+	return Key{Kind: KindCertificates, Domain: domain, Name: domain}
+}
+
 // String gives every field, with the names lowercased, so two keys have the
 // same text exactly when they name the same check: the text serves as a map
-// key, because a Key itself cannot be one.
+// key, because a Key itself cannot be one. A certificates key has no name
+// or type to give.
 func (k Key) String() string {
+	if k.Kind == KindCertificates {
+		return k.Kind.String() + " " + k.Domain.Lower().String()
+	}
 	return k.Kind.String() + " " + k.Domain.Lower().String() + " " + k.Name.Lower().String() + " " + k.Type.String()
 }

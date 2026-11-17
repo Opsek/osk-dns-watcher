@@ -234,6 +234,8 @@ func (c Check) Validate() error {
 		if _, err := childName(strings.Repeat("a", obs.WildcardLabel), k.Name); err != nil {
 			return fmt.Errorf("%w: Name %v leaves no room for a label of %d octets", ErrInvalidCheck, k.Name, obs.WildcardLabel)
 		}
+	case obs.KindCertificates:
+		return fmt.Errorf("%w: kind certificates is not a check of the DNS", ErrInvalidCheck)
 	default:
 		return fmt.Errorf("%w: Kind %v", ErrInvalidCheck, k.Kind)
 	}

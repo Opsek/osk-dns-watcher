@@ -91,6 +91,9 @@ The examples are for lab 0 and run in the runner.
 | `hooks clear` | `labctl hooks clear` | Deletes the stored requests. |
 | `hooks fail <status> <count>` | `labctl hooks fail 503 2` | Answers the next `<count>` requests with this status. |
 | `hooks reply <status> <count> [--header '<Name>: <value>']... [--delay <seconds>] [--body <text>]` | `labctl hooks reply 429 1 --header 'Retry-After: 30' --body 'slow down'` | Answers the next `<count>` requests like this. |
+| `certs set` | `labctl certs set < issuances.json` | Replaces the set that stands in for a certificate source; the JSON array comes on standard input. `GET https://hooks.lab.test/v1/issuances?domain=<name>&after=<id>` answers with the issuances of the set that name the domain or a name below it, at most 2 in a page, in id order; none left gives `[]` with `Retry-After: 1`. These requests are not listed by `hooks list`. |
+| `certs fail <status> <count> [<retry>]` | `labctl certs fail 429 1 30` | Answers the next `<count>` lookups with this status and, when `<retry>` is above 0, `Retry-After: <retry>`. |
+| `certs clear` | `labctl certs clear` | Empties the set and the failures. |
 | `reset` | `labctl reset` | Puts the lab back into its base state; `lab/bin/lab reset` runs it. |
 | `status` | `labctl status` | Prints each host and whether it answers; `lab/bin/lab status` runs it. |
 

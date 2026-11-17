@@ -162,7 +162,8 @@ func schWildcardZones(f *expect.File) []dnswire.Name {
 // check), a records check of type A for each target that no line already
 // checks, and a wildcard check for each wildcard zone, which is a check of
 // the zone when the zone of the domain holds it. A CAA records check follows
-// for each name that caaModelNames gives and that has no CAA line.
+// for each name that caaModelNames gives and that has no CAA line. The check
+// of the certificate logs comes last, and only when its interval is set.
 func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	t.Helper()
 	d := f.Domain
@@ -189,12 +190,15 @@ func schModelPlan(t testing.TB, f *expect.File, fast []dnswire.Name, iv Interval
 			Zone: zone.IsSubdomainOf(d) && f.Zone(zone).Equal(d)})
 	}
 	plan = append(plan, caaModelProbes(f, fast, iv)...)
+	if iv.Certificates > 0 {
+		plan = append(plan, Check{Key: obs.CertificatesKey(d), Tier: TierCertificates, Interval: iv.Certificates})
+	}
 	return plan
 }
 
 func TestTierWordsAndUnknownTier(t *testing.T) {
 	for tier, want := range map[Tier]string{TierSerial: "serial", TierParent: "parent", TierFast: "fast",
-		TierOther: "other", 0: "tier0", 5: "tier5", 255: "tier255"} {
+		TierOther: "other", TierCertificates: "certificates", 0: "tier0", 6: "tier6", 255: "tier255"} {
 		if got := tier.String(); got != want {
 			t.Errorf("Tier(%d).String() = %q, want %q", uint8(tier), got, want)
 		}

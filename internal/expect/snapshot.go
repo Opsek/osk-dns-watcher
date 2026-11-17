@@ -153,7 +153,13 @@ func (g *setGroup) line() (Expectation, []obs.Server, string) {
 	if len(data) > maxRecords {
 		return Expectation{}, nil, fmt.Sprintf("more than %d records", maxRecords)
 	}
-	return Expectation{Name: g.name, Type: g.t, Form: FormSets, Sets: [][]dnswire.RData{data}}, left, ""
+	e := Expectation{Name: g.name, Type: g.t, Form: FormSets, Sets: [][]dnswire.RData{data}}
+	// A record can print in a form that the file parser refuses; a file with
+	// that line would be reported as invalid.
+	if text := readSets(&Expectation{Type: g.t}, e.FormText()); text != "" {
+		return Expectation{}, nil, "holds a record that a line cannot state: " + text
+	}
+	return e, left, ""
 }
 
 // IsChallengeName reports whether name is an ACME challenge name. The record

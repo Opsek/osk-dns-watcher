@@ -74,6 +74,23 @@ var wordings = map[decide.Rule]wording{
 		resolved: "nameservers of {D} are as expected again",
 		action:   "If you did not change the nameservers, contact your registrar now.",
 	},
+	decide.RuleGlue: {
+		phrase:   "nameserver addresses of {D} changed at the parent zone",
+		resolved: "nameserver addresses of {D} are as expected again",
+		action:   "If you did not change the addresses of your nameservers, contact your registrar now.",
+		now:      "as expected again",
+	},
+	decide.RuleDS: {
+		phrase:   "DS of {D} changed at the parent zone",
+		resolved: "DS of {D} is as expected again",
+		action:   "If you did not change your DNSSEC keys, contact your registrar now.",
+	},
+	decide.RuleGone: {
+		phrase:   "{D} does not exist at the parent zone",
+		resolved: "{D} exists at the parent zone again",
+		action:   "Contact your registrar now: the registration may have expired, been deleted or been transferred.",
+		now:      "the domain exists again",
+	},
 	decide.RuleRecordSet: {
 		phrase:   "{NT} changed",
 		resolved: "{NT} is as expected again",
@@ -300,7 +317,20 @@ func view(e alert.Event, resolvedNow string) []string {
 	case decide.RuleZoneChanged:
 		// Each line of Value is one move; the alert has no server lines.
 		return moveLines(strings.Split(a.Value, "\n"))
-	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered:
+	case decide.RuleGlue:
+		// Expected holds one part for each host and type that differs, joined by
+		// "; ". A part may hold " | ", so it is not split as a record list.
+		var rows []row
+		for i, part := range strings.Split(a.Expected, "; ") {
+			label := ""
+			if i == 0 {
+				label = labelExpected
+			}
+			rows = append(rows, row{label, part})
+		}
+		return append(recordLines(rows), seenLines(a.Lines)...)
+	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered,
+		decide.RuleDS, decide.RuleGone:
 	}
 	return append(recordLines(expectedRows(labelExpected, a.Expected)), seenLines(a.Lines)...)
 }

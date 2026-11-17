@@ -251,9 +251,13 @@ func (m *monitor) judge(r result) error {
 		m.out.log(levelInfo, d.label, movedLine(d.name, mv))
 	}
 	failed := slices.ContainsFunc(o.Answers, func(a obs.Answer) bool { return isFailure(a.Result) })
+	nsOpen, err := m.nameServersOpen(d, o.Key)
+	if err != nil {
+		return err
+	}
 	changes, err := m.apply(d, o.Key, failed, now, func(open []decide.Finding) []decide.Change {
 		return decide.Decide(decide.Input{Expect: d.file, Open: open, Observation: o, Now: now,
-			FailingSince: rep.FailingSince, FailLimit: rep.FailLimit})
+			FailingSince: rep.FailingSince, FailLimit: rep.FailLimit, NameServersOpen: nsOpen})
 	})
 	if err != nil {
 		return err
@@ -294,6 +298,20 @@ func (m *monitor) fileChanges(d *watched, problem error, now time.Time) error {
 		return decide.FileChanges(d.name, problem, open, now)
 	})
 	return err
+}
+
+// nameServersOpen tells whether an alert of rule nameservers is open for the
+// domain of d. Only the ds check asks: a new DS next to new nameservers is a
+// takeover, so decide raises the ds alert to critical then.
+func (m *monitor) nameServersOpen(d *watched, k obs.Key) (bool, error) {
+	if k.Kind != obs.KindDS {
+		return false, nil
+	}
+	open, err := m.store.OpenAlerts(obs.DelegationKey(d.name))
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(open, func(a alert.Alert) bool { return a.Rule == decide.RuleNameServers }), nil
 }
 
 // apply is the alert path of check k of d. judge gets the findings of the

@@ -228,7 +228,7 @@ func TestRuleSeverityAndOpWords(t *testing.T) {
 		{Rule(4).String(), "nameservers"},
 		{Rule(5).String(), "record-set"},
 		{Rule(0).String(), "rule0"},
-		{Rule(8).String(), "rule8"},
+		{Rule(11).String(), "rule11"},
 		{Severity(1).String(), "low"},
 		{Severity(2).String(), "medium"},
 		{Severity(3).String(), "high"},
@@ -252,16 +252,17 @@ func TestRuleSeverityAndOpWords(t *testing.T) {
 	}
 }
 
-func TestNoLineGivesOnlyNotCovered(t *testing.T) {
+func TestNoLineGivesNotCoveredAndGoneOnNoSuchName(t *testing.T) {
 	corp, test := decName(t, "corp.test."), decName(t, "test.")
 	files := []struct {
 		name string
 		f    *expect.File
+		gone bool // the file covers the domain, so a no such name is also gone
 	}{
-		{"no line", decFile(t, "domain corp.test.", "mail.corp.test. A 10.53.0.82")},
-		{"no file", nil},
+		{"no line", decFile(t, "domain corp.test.", "mail.corp.test. A 10.53.0.82"), true},
+		{"no file", nil, false},
 		// The lines are for the right names, but the check belongs to another domain.
-		{"file of another domain", decFile(t, "domain shop.test.", "corp.test. NS ns1.corp.test. | ns2.corp.test.", "www.corp.test. A 10.53.0.81")},
+		{"file of another domain", decFile(t, "domain shop.test.", "corp.test. NS ns1.corp.test. | ns2.corp.test.", "www.corp.test. A 10.53.0.81"), false},
 	}
 	delegation := decObservation(obs.DelegationKey(corp), test, nil,
 		decAnswer(t, "a.ns.test.", "10.53.0.3:53", decSet(t, "corp.test.", dnswire.TypeNS, "ns1.corp.test.", "ns2.corp.test.")),
@@ -284,7 +285,11 @@ func TestNoLineGivesOnlyNotCovered(t *testing.T) {
 	for _, file := range files {
 		for _, c := range checks {
 			t.Run(file.name+"/"+c.o.Key.Kind.String(), func(t *testing.T) {
-				decCheck(t, Findings(file.f, c.o), c.o.Key, decWant{RuleNotCovered, SeverityMedium, "", c.seen})
+				want := []decWant{{RuleNotCovered, SeverityMedium, "", c.seen}}
+				if file.gone && c.o.Key.Kind == obs.KindDelegation {
+					want = append(want, decWant{RuleGone, SeverityCritical, "", []Seen{{c.o.Answers[2], "no such name"}}})
+				}
+				decCheck(t, Findings(file.f, c.o), c.o.Key, want...)
 			})
 		}
 	}
@@ -334,27 +339,17 @@ func TestDelegationNameServers(t *testing.T) {
 	t.Run("each server that differs is seen in order", func(t *testing.T) {
 		o := decObservation(key, test, nil, same, other, failed, noName)
 		decCheck(t, Findings(f, o), key, decWant{RuleNameServers, SeverityCritical, expected,
-			[]Seen{{other, "ns1.dnshost.test. | ns2.dnshost.test."}, {noName, "none"}}})
+			[]Seen{{other, "ns1.dnshost.test. | ns2.dnshost.test."}, {noName, "none"}}},
+			decWant{RuleGone, SeverityCritical, "", []Seen{{noName, "no such name"}}})
 	})
 	t.Run("no data and no such name are an empty set", func(t *testing.T) {
 		o := decObservation(key, test, nil, noName, noData)
+		gone := decWant{RuleGone, SeverityCritical, "", []Seen{{noName, "no such name"}}}
 		decCheck(t, Findings(f, o), key, decWant{RuleNameServers, SeverityCritical, expected,
-			[]Seen{{noName, "none"}, {noData, "none"}}})
+			[]Seen{{noName, "none"}, {noData, "none"}}}, gone)
 		none := decFile(t, "domain corp.test.", "corp.test. NS none")
-		decCheck(t, Findings(none, o), key)
+		decCheck(t, Findings(none, o), key, gone)
 	})
-}
-
-// The DS data is not compared: a line only stops the not-covered finding.
-func TestDSLineGivesNothing(t *testing.T) {
-	corp := decName(t, "corp.test.")
-	key := obs.DSKey(corp)
-	o := decObservation(key, decName(t, "test."), nil,
-		decAnswer(t, "a.ns.test.", "10.53.0.3:53", decSet(t, "corp.test.", dnswire.TypeDS, decDS)),
-		decAnswer(t, "b.ns.test.", "10.53.0.4:53", decNoData(t, "test.")))
-	for _, line := range []string{"corp.test. DS none", "corp.test. DS 54321 13 2 " + strings.Repeat("AB", 32)} {
-		decCheck(t, Findings(decFile(t, "domain corp.test.", line), o), key)
-	}
 }
 
 func TestSerialAndOtherKindsGiveNothing(t *testing.T) {

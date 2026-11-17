@@ -132,8 +132,12 @@ func changeFor(c *config.Config, a alert.Alert) (change, error) {
 // servers show.
 func refusal(r decide.Rule) string {
 	switch r {
-	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered:
+	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered, decide.RuleDS:
 		return ""
+	case decide.RuleGlue:
+		return "edit the address line of each nameserver host that differs"
+	case decide.RuleGone:
+		return "nothing to accept: the domain must exist at the parent zone"
 	case decide.RuleZone:
 		return "add or remove the NS pair of the subzone by hand"
 	case decide.RuleInvalidFile:

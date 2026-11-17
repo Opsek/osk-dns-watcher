@@ -28,6 +28,9 @@ const (
 	RuleRecordSet                    // a server gives another record set than expected
 	RuleCheckFailing                 // the check has had no usable answer for too long
 	RuleZoneChanged                  // the serial of the zone moved and no watched record differs
+	RuleGlue                         // a glue address at the parent differs from the expectations
+	RuleDS                           // the DS set at the parent differs from the expectations or is gone
+	RuleGone                         // the parent says that the domain does not exist
 )
 
 var ruleWords = map[Rule]string{
@@ -38,6 +41,9 @@ var ruleWords = map[Rule]string{
 	RuleRecordSet:    "record-set",
 	RuleCheckFailing: "check-failing",
 	RuleZoneChanged:  "zone-changed",
+	RuleGlue:         "glue",
+	RuleDS:           "ds",
+	RuleGone:         "gone",
 }
 
 func (r Rule) String() string { return word(ruleWords, r, "rule") }
@@ -94,6 +100,9 @@ var severities = map[Rule]Severity{
 	RuleRecordSet:    SeverityMedium,
 	RuleCheckFailing: SeverityMedium,
 	RuleZoneChanged:  SeverityLow,
+	RuleGlue:         SeverityCritical,
+	RuleDS:           SeverityHigh,
+	RuleGone:         SeverityCritical,
 }
 
 var highTypes = map[dnswire.Type]bool{
@@ -138,6 +147,11 @@ type Input struct {
 	Now          time.Time
 	FailingSince time.Time     // start of the unbroken series of runs of this check with no usable answer, this one included; zero when this run had one
 	FailLimit    time.Duration // how long such a series may last before check-failing; 0: never
+
+	// NameServersOpen: an alert of rule nameservers is open on the delegation
+	// check of the observed domain. It raises a ds finding, and the caller
+	// reads it from the store because Open holds findings of this check only.
+	NameServersOpen bool
 }
 
 // Findings judges o against f, in Rule order. A failed answer is unknown: it
@@ -148,12 +162,10 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 	var found []Finding
 	switch o.Key.Kind {
 	case obs.KindDelegation:
-		found = judge(o, e, ok, RuleNameServers)
+		found = append(judge(o, e, ok, RuleNameServers), glue(f, o)...)
+		found = append(found, gone(f, o)...)
 	case obs.KindDS:
-		// A DS line covers the check, but the DS data is not compared.
-		if !ok {
-			found = []Finding{notCovered(o)}
-		}
+		found = judge(o, e, ok, RuleDS)
 	case obs.KindRecords:
 		found = append(zone(f, o), judge(o, e, ok, RuleRecordSet)...)
 	case obs.KindSerial:
@@ -295,6 +307,7 @@ func Decide(in Input) []Change {
 		found = append(found, f)
 	}
 	open := firstOpen(in.Open, o.Key.String())
+	raiseDS(found, open, in.NameServersOpen)
 	changes := openOrUpdate(found, open, in.Now)
 	for _, was := range open {
 		ends := !hasRule(found, was.Rule) && !blocked(was, o)
@@ -371,12 +384,28 @@ func openOrUpdate(found, open []Finding, now time.Time) []Change {
 
 // changed reports whether f tells more than was. A line that is gone is no
 // news: a server that fails now and then drops out of Seen and comes back.
+// The same holds for a part of the Expected of a glue finding: a parent
+// server that fails for one run drops its part, and its return must not send
+// "changed again".
 func changed(was, f Finding) bool {
-	if was.Expected != f.Expected || was.Severity != f.Severity {
+	if was.Severity != f.Severity {
+		return true
+	}
+	if f.Rule == RuleGlue {
+		if hasNewPart(was.Expected, f.Expected) {
+			return true
+		}
+	} else if was.Expected != f.Expected {
 		return true
 	}
 	old := lines(was.Value)
 	return slices.ContainsFunc(lines(f.Value), func(l string) bool { return !slices.Contains(old, l) })
+}
+
+// hasNewPart reports whether now holds a part of a glue Expected that old does not.
+func hasNewPart(old, now string) bool {
+	was := strings.Split(old, "; ")
+	return slices.ContainsFunc(strings.Split(now, "; "), func(p string) bool { return !slices.Contains(was, p) })
 }
 
 func lines(v string) []string {

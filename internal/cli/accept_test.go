@@ -708,3 +708,76 @@ func TestAcceptCodeCoversTheWholeChange(t *testing.T) {
 		t.Error("a refused accept --write changed the file")
 	}
 }
+
+const cliDSData = "11111 13 2 ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+
+// The ds key names the DS line, so accept edits that line: the line that
+// holds the records becomes none when the servers show none, and the other
+// way round.
+func TestAcceptEditsTheDSLineOfADSAlert(t *testing.T) {
+	for _, c := range []struct {
+		name, file, expected, seen string
+		old, line                  string
+	}{
+		{"records to none", "domain corp.test.\ncorp.test. NS ns1.corp.test. | ns2.corp.test.\ncorp.test. DS " + cliDSData + "\nwww.corp.test. A 10.53.0.81\n",
+			cliDSData, "none", "corp.test. DS " + cliDSData, "corp.test. DS none"},
+		{"none to records", cliCorpFile, "none", cliDSData, "corp.test. DS none", "corp.test. DS " + cliDSData},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			cliWriteFile(t, w.corp, c.file)
+			var id int64
+			cliStore(t, w.state, func(s *store.Store) {
+				id = cliOpen(t, s, cliT0, cliAlert(decide.RuleDS, decide.SeverityHigh, obs.DSKey(cliName("corp.test.")), c.expected, cliT0, c.seen))[0].ID
+			})
+			code, out, errOut := cliAccept(w, strconv.FormatInt(id, 10))
+			if code != 0 || errOut != "" {
+				t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "accept of a ds alert", out, w.corp+":3", "- "+c.old, "+ "+c.line, cliToWrite(w, id, w.corp, c.old, c.line))
+			if cliRead(t, w.corp) != c.file {
+				t.Error("accept without --write changed the file")
+			}
+
+			code, out, errOut = cliAccept(w, "--write", cliChangeCode(id, w.corp, c.old, c.line), strconv.FormatInt(id, 10))
+			if code != 0 || errOut != "" {
+				t.Errorf("accept --write: exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "accept --write of a ds alert", out, w.corp+":3", "- "+c.old, "+ "+c.line, "written")
+			if got, want := cliRead(t, w.corp), cliReplaced(c.file, 3, c.line); got != want {
+				t.Errorf("the file after accept --write:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+// A glue alert has the key of the delegation but its lines are those of the
+// hosts, and a gone alert has nothing to accept: both are refused, with and
+// without --write, and the file stays.
+func TestAcceptRefusesGlueAndGoneAlerts(t *testing.T) {
+	w := cliNewWorld(t, false)
+	corp := obs.DelegationKey(cliName("corp.test."))
+	var glue, gone int64
+	cliStore(t, w.state, func(s *store.Store) {
+		glue = cliOpen(t, s, cliT0, cliAlert(decide.RuleGlue, decide.SeverityCritical, corp, "ns2.corp.test. A 10.53.0.12", cliT0, "ns2.corp.test. A 10.53.0.11"))[0].ID
+		gone = cliOpen(t, s, cliT0, cliAlert(decide.RuleGone, decide.SeverityCritical, corp, "", cliT0, "no such name"))[0].ID
+	})
+	for _, c := range []struct {
+		name string
+		id   int64
+		want string
+	}{
+		{"glue", glue, "osk: accept cannot change the file for a glue alert: edit the address line of each nameserver host that differs\n"},
+		{"gone", gone, "osk: accept cannot change the file for a gone alert: nothing to accept: the domain must exist at the parent zone\n"},
+	} {
+		for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
+			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(c.id, 10))...)
+			if code != 1 || out != "" || errOut != c.want {
+				t.Errorf("accept %q of %s: exit code %d, output %q, errors %q; want 1, nothing and %q", args, c.name, code, out, errOut, c.want)
+			}
+		}
+	}
+	if cliRead(t, w.corp) != cliCorpFile {
+		t.Error("a refused accept changed the file")
+	}
+}

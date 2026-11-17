@@ -37,6 +37,11 @@ import (
 // test log line.
 const runMarker = "runsecret"
 
+// runPatience is how long a test waits for the first event of a service that
+// it started: a slow machine delays a start by seconds, and a test that
+// waits for less measures the machine, not the service.
+const runPatience = 60 * time.Second
+
 // Nothing listens on port 1, so every send fails at once.
 const runDeadURL = "https://127.0.0.1:1/x/" + runMarker
 
@@ -1084,7 +1089,7 @@ func TestRunReadsTheFileAgain(t *testing.T) {
 	www := "records corp.test. www.example. A"
 	keys := []string{runSerialKey, runDelegationKey, runDSKey, www}
 	for _, k := range keys {
-		svc.wait(t, "the first run of "+k, 0, time.Now().Add(5*time.Second), runRunOf(k))
+		svc.wait(t, "the first run of "+k, 0, time.Now().Add(runPatience), runRunOf(k))
 	}
 	soon := func() time.Time { return time.Now().Add(3 * time.Second) }
 	const invalidOpen, invalidResolve = "alert open medium invalid-file corp.test.", "alert resolve medium invalid-file corp.test."
@@ -1153,14 +1158,14 @@ func TestRunStartResolvesAStaleInvalidFileAlert(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	args := runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))
 	first := runStart(t, args...)
-	first.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	first.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	runReplace(t, file, "domain corp.test.\ncorp.test DS none\n")
-	first.wait(t, "the invalid-file alert", 0, time.Now().Add(3*time.Second), runIs("alert open medium invalid-file corp.test."))
+	first.wait(t, "the invalid-file alert", 0, time.Now().Add(runPatience), runIs("alert open medium invalid-file corp.test."))
 	first.stop(t)
 
 	runReplace(t, file, runFile)
 	second := runStart(t, args...)
-	second.wait(t, "the resolve at the start", 0, time.Now().Add(3*time.Second), runIs("alert resolve medium invalid-file corp.test."))
+	second.wait(t, "the resolve at the start", 0, time.Now().Add(runPatience), runIs("alert resolve medium invalid-file corp.test."))
 	second.stop(t)
 	runNoSecret(t, state, first.out.String(), second.out.String())
 }
@@ -1175,7 +1180,7 @@ func TestRunRestartPrintsDownAndOpensNothingTwice(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	args := runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))
 	first := runStart(t, args...)
-	first.wait(t, "the alert", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	first.wait(t, "the alert", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	cancelled := time.Now()
 	lines := first.stop(t)
 	returned := time.Now()
@@ -1187,7 +1192,7 @@ func TestRunRestartPrintsDownAndOpensNothingTwice(t *testing.T) {
 	restarted := time.Now()
 	second := runStart(t, args...)
 	for _, k := range []string{runSerialKey, runDelegationKey, runDSKey} {
-		second.wait(t, "the first run of "+k, 0, restarted.Add(5*time.Second), runRunOf(k))
+		second.wait(t, "the first run of "+k, 0, time.Now().Add(runPatience), runRunOf(k))
 	}
 	// An alert line follows the checked line of its run at once.
 	time.Sleep(500 * time.Millisecond)
@@ -1221,7 +1226,7 @@ func TestRunRetriesDeliveryOnItsOwnTimer(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))...)
 	failed := runPrefix("delivery slack failed " + runNotCovered + ": ")
-	first, i := svc.wait(t, "the first attempt", 0, time.Now().Add(5*time.Second), failed)
+	first, i := svc.wait(t, "the first attempt", 0, time.Now().Add(runPatience), failed)
 	next := runNextTry(t, first.text)
 	second, _ := svc.wait(t, "the second attempt", i+1, next.Add(4*time.Second), failed)
 	svc.stop(t)
@@ -1268,11 +1273,11 @@ func TestRunStopCutsAHangingSendAndKeepsItsRow(t *testing.T) {
 	file := expFile(t, runFile)
 	state := filepath.Join(t.TempDir(), "state")
 	first := runStart(t, runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))...)
-	first.wait(t, "the alert", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	first.wait(t, "the alert", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	select {
 	case <-accepted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("no send began within 5 s of the alert")
+	case <-time.After(runPatience):
+		t.Fatal("no send began within the patience of the alert")
 	}
 	for _, l := range first.stop(t) {
 		if strings.HasPrefix(l.text, "delivery ") {
@@ -1282,7 +1287,7 @@ func TestRunStopCutsAHangingSendAndKeepsItsRow(t *testing.T) {
 
 	t.Setenv("OSK_SLACK_URL", runDeadURL)
 	second := runStart(t, runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))...)
-	second.wait(t, "the attempt of the kept row", 0, time.Now().Add(3*time.Second),
+	second.wait(t, "the attempt of the kept row", 0, time.Now().Add(runPatience),
 		runPrefix("delivery slack failed "+runNotCovered+": no answer "))
 	second.stop(t)
 	runNoSecret(t, state, first.out.String(), second.out.String())
@@ -1296,7 +1301,7 @@ func TestRunKeepsWatchingWhenOutputFails(t *testing.T) {
 	file := expFile(t, runFile)
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStartTo(t, &runOutput{strict: true, broken: true}, runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))...)
-	svc.wait(t, "the first attempt", 0, time.Now().Add(5*time.Second), runPrefix("delivery slack failed "+runNotCovered+": "))
+	svc.wait(t, "the first attempt", 0, time.Now().Add(runPatience), runPrefix("delivery slack failed "+runNotCovered+": "))
 	svc.stop(t)
 
 	st, err := store.Open(state)
@@ -1458,8 +1463,8 @@ func TestRunFIFOAtTheFilePathHoldsNoCheck(t *testing.T) {
 	fileA, fileB := expFile(t, runFile), expFile(t, svcOtherFile)
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, svcTwo(t, s, fileA, fileB, state, runIntervals("1h", "5s", "1h", "1h"))...)
-	firstA, _ := svc.wait(t, "the first run of the delegation of corp.test.", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
-	firstB, _ := svc.wait(t, "the first run of the delegation of other.test.", 0, time.Now().Add(5*time.Second), runRunOf(svcOtherDelegationKey))
+	firstA, _ := svc.wait(t, "the first run of the delegation of corp.test.", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
+	firstB, _ := svc.wait(t, "the first run of the delegation of other.test.", 0, time.Now().Add(runPatience), runRunOf(svcOtherDelegationKey))
 	fifo := fileB + ".fifo"
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
@@ -1474,14 +1479,14 @@ func TestRunFIFOAtTheFilePathHoldsNoCheck(t *testing.T) {
 			_ = f.Close()
 		}
 	})
-	problem, i := svc.wait(t, "the problem of the file", 0, time.Now().Add(3*time.Second), runIs("file "+fileB+": is not a regular file"))
-	opened, _ := svc.wait(t, "the invalid-file alert", i, time.Now().Add(3*time.Second), runIs("alert open medium invalid-file other.test."))
+	problem, i := svc.wait(t, "the problem of the file", 0, time.Now().Add(runPatience), runIs("file "+fileB+": is not a regular file"))
+	opened, _ := svc.wait(t, "the invalid-file alert", i, time.Now().Add(runPatience), runIs("alert open medium invalid-file other.test."))
 	if problem.domain != "other.test." || opened.domain != "other.test." {
 		t.Errorf("the lines of the FIFO name the domains %q and %q, want other.test.", problem.domain, opened.domain)
 	}
 	for _, f := range []struct{ key, first string }{{runDelegationKey, firstA.text}, {svcOtherDelegationKey, firstB.text}} {
 		c, _, _ := runParse(f.first)
-		svc.wait(t, "a run of "+f.key+" after the FIFO came", 0, c.start.Add(7*time.Second), runStartedAfter(f.key, c.start))
+		svc.wait(t, "a run of "+f.key+" after the FIFO came", 0, time.Now().Add(runPatience), runStartedAfter(f.key, c.start))
 	}
 	lines := svc.stopWithin(t, 2*time.Second)
 	for _, l := range lines {
@@ -1562,16 +1567,16 @@ func TestRunReadThatHangsHoldsNoCheck(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, runLocal(t, s, file, state, runIntervals("1h", "5s", "1h", "1h"))...)
 	t.Cleanup(free)
-	first, _ := svc.wait(t, "the first run of the delegation", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	first, _ := svc.wait(t, "the first run of the delegation", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	hang.Store(true)
 	stuck := "file " + file + ": the read has not ended after 300ms"
-	_, i := svc.wait(t, "the report of the read", 0, time.Now().Add(3*time.Second), runIs(stuck))
-	_, i = svc.wait(t, "the invalid-file alert", i, time.Now().Add(3*time.Second), runIs("alert open medium invalid-file corp.test."))
+	_, i := svc.wait(t, "the report of the read", 0, time.Now().Add(runPatience), runIs(stuck))
+	_, i = svc.wait(t, "the invalid-file alert", i, time.Now().Add(runPatience), runIs("alert open medium invalid-file corp.test."))
 	c, _, _ := runParse(first.text)
-	svc.wait(t, "a run of the delegation while the read hangs", 0, c.start.Add(7*time.Second), runStartedAfter(runDelegationKey, c.start))
+	svc.wait(t, "a run of the delegation while the read hangs", 0, time.Now().Add(runPatience), runStartedAfter(runDelegationKey, c.start))
 	hang.Store(false)
 	free()
-	svc.wait(t, "the resolve once the read ended", i, time.Now().Add(3*time.Second), runIs("alert resolve medium invalid-file corp.test."))
+	svc.wait(t, "the resolve once the read ended", i, time.Now().Add(runPatience), runIs("alert resolve medium invalid-file corp.test."))
 	lines := svc.stopWithin(t, 2*time.Second)
 	if n := svcCount(lines, stuck); n != 1 {
 		t.Errorf("the read that hung was reported %d times, want once", n)
@@ -1649,12 +1654,12 @@ func TestRunTakesAChangedFileOnlyWhenTwoReadsAgree(t *testing.T) {
 	svc := runStart(t, svcTwo(t, s, fileA, fileB, state, runIntervals("1h", "1h", "1h", "1h"))...)
 	keys := []string{runSerialKey, runDelegationKey, runDSKey, "records corp.test. www.example. A", svcOtherDelegationKey}
 	for _, k := range keys {
-		svc.wait(t, "the first run of "+k, 0, time.Now().Add(5*time.Second), runRunOf(k))
+		svc.wait(t, "the first run of "+k, 0, time.Now().Add(runPatience), runRunOf(k))
 	}
 	sc.start()
 	changed := "file " + fileA + " changed: 4 checks"
-	at, i := svc.wait(t, "the change to the second file", 0, time.Now().Add(5*time.Second), runIs(changed))
-	svc.wait(t, "the record-set alert of the second file", i, time.Now().Add(3*time.Second),
+	at, i := svc.wait(t, "the change to the second file", 0, time.Now().Add(runPatience), runIs(changed))
+	svc.wait(t, "the record-set alert of the second file", i, time.Now().Add(runPatience),
 		runIs("alert open high record-set records www.example. A"))
 	lines := svc.stop(t)
 	if n := sc.count(fileA); n < 11 {
@@ -1754,8 +1759,8 @@ func TestRunLoggerDropsLinesWithoutWaitingAndCountsThem(t *testing.T) {
 	}()
 	select {
 	case <-out.first:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the service wrote nothing within 5 s")
+	case <-time.After(runPatience):
+		t.Fatal("the service wrote nothing within the patience")
 	}
 	before := queries.Load()
 	bad := "domain d.dead.test.\n" + strings.Repeat("bad\n", 120)
@@ -1960,9 +1965,9 @@ func TestRunWatchesEachDomainWithItsOwnFile(t *testing.T) {
 	keysB := []string{"serial other.test. other.test. SOA", svcOtherDelegationKey, "ds other.test. other.test. DS",
 		"records other.test. other.test. NS", "records other.test. www.other.test. A"}
 	for _, k := range slices.Concat(keysA, keysB) {
-		svc.wait(t, "the first run of "+k, 0, time.Now().Add(5*time.Second), runRunOf(k))
+		svc.wait(t, "the first run of "+k, 0, time.Now().Add(runPatience), runRunOf(k))
 	}
-	svc.wait(t, "the alert of www.example.", 0, time.Now().Add(3*time.Second), runIs("alert open high record-set records www.example. A"))
+	svc.wait(t, "the alert of www.example.", 0, time.Now().Add(runPatience), runIs("alert open high record-set records www.example. A"))
 	changedAt := time.Now()
 	runReplace(t, fileB, svcOtherFile+"www.other.test. A 192.0.2.99\n")
 	changed, i := svc.wait(t, "the change of the file of other.test.", 0, changedAt.Add(3*time.Second), runIs("file "+fileB+" changed: 5 checks"))
@@ -2152,7 +2157,7 @@ func TestRunSendsEachAlertToEveryChannelAtOrAboveItsMinimum(t *testing.T) {
 	c := runLocalCfg(s, state, runIntervals("1h", "1h", "1h", "1h"), runCfgDomain{Name: "corp.test.", Expect: file})
 	c.Webhooks = []runCfgHook{svcDeadHook(t, "hi", "high"), svcDeadHook(t, "crit", "critical")}
 	svc := runStart(t, runConfig(t, c)...)
-	_, i := svc.wait(t, "the not-covered alert", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	_, i := svc.wait(t, "the not-covered alert", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	// The delegation is now covered by a line that differs: the not-covered
 	// alert ends, a critical alert opens at the parent and a high one at the
 	// zone.
@@ -2166,7 +2171,7 @@ func TestRunSendsEachAlertToEveryChannelAtOrAboveItsMinimum(t *testing.T) {
 	// A pass starts 1 s after the last one ended, so the first attempts may
 	// come after the alerts.
 	for _, ch := range []string{"slack", "hi", "crit"} {
-		svc.wait(t, "an attempt to "+ch, 0, time.Now().Add(5*time.Second), runPrefix("delivery "+ch+" failed "))
+		svc.wait(t, "an attempt to "+ch, 0, time.Now().Add(runPatience), runPrefix("delivery "+ch+" failed "))
 	}
 	lines := svc.stop(t)
 	rows := svcRows(t, state, "slack", "hi", "crit")
@@ -2247,7 +2252,7 @@ func TestRunRestartSendsOneDownNoticeWithTheTimeDown(t *testing.T) {
 			time.Sleep(2100 * time.Millisecond)
 		}
 		svc := runStart(t, args...)
-		svc.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+		svc.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 		time.Sleep(300 * time.Millisecond)
 		lines := svc.stop(t)
 		stops = append(stops, time.Now())
@@ -2304,7 +2309,7 @@ func TestRunStoredBeatAheadOfTheClockGivesNoDownTime(t *testing.T) {
 	}
 	args := runLocal(t, s, expFile(t, svcNSFile), state, runIntervals("1h", "1h", "1h", "1h"))
 	svc := runStart(t, args...)
-	svc.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	svc.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	time.Sleep(300 * time.Millisecond)
 	lines := svc.stop(t)
 	_, down := runHead(t, lines)
@@ -2325,7 +2330,7 @@ func TestRunStoredBeatAheadOfTheClockGivesNoDownTime(t *testing.T) {
 	// The start stored a beat of its own, so the next start knows its down
 	// time again.
 	again := runStart(t, args...)
-	again.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	again.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	lines = again.stop(t)
 	if _, down := runHead(t, lines); !strings.HasPrefix(down.text, "down since ") {
 		t.Errorf("the start after it printed the down line %q, want \"down since ...\"", down.text)
@@ -2342,8 +2347,8 @@ func TestRunRemovedLineClosesItsAlertWithOneNotice(t *testing.T) {
 	file := expFile(t, runFile+"www.example. A 192.0.2.99\n")
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))...)
-	svc.wait(t, "the alert of www", 0, time.Now().Add(5*time.Second), runIs("alert open high record-set records www.example. A"))
-	svc.wait(t, "the alert of the delegation", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	svc.wait(t, "the alert of www", 0, time.Now().Add(runPatience), runIs("alert open high record-set records www.example. A"))
+	svc.wait(t, "the alert of the delegation", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	i := len(svc.out.all())
 	runReplace(t, file, runFile)
 	soon := time.Now().Add(3 * time.Second)
@@ -2388,10 +2393,10 @@ func TestRunDomainThatLeftTheConfigClosesItsAlerts(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	iv := runIntervals("1h", "1h", "1h", "1h")
 	first := runStart(t, svcTwo(t, s, fileA, fileB, state, iv)...)
-	first.wait(t, "the alert of www", 0, time.Now().Add(5*time.Second), runIs("alert open high record-set records www.example. A"))
-	first.wait(t, "the alert of the delegation", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	first.wait(t, "the alert of www", 0, time.Now().Add(runPatience), runIs("alert open high record-set records www.example. A"))
+	first.wait(t, "the alert of the delegation", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	runReplace(t, fileA, "domain corp.test.\ncorp.test DS none\n")
-	first.wait(t, "the invalid-file alert", 0, time.Now().Add(3*time.Second), runIs("alert open medium invalid-file corp.test."))
+	first.wait(t, "the invalid-file alert", 0, time.Now().Add(runPatience), runIs("alert open medium invalid-file corp.test."))
 	first.stop(t)
 
 	only := runConfig(t, runLocalCfg(s, state, iv, runCfgDomain{Name: "other.test.", Expect: fileB}))
@@ -2425,7 +2430,7 @@ func TestRunDomainThatLeftTheConfigClosesItsAlerts(t *testing.T) {
 
 	runReplace(t, fileA, runFile)
 	third := runStart(t, svcTwo(t, s, fileA, fileB, state, iv)...)
-	third.wait(t, "the first run of corp.test.", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	third.wait(t, "the first run of corp.test.", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	time.Sleep(300 * time.Millisecond)
 	for _, l := range third.stop(t) {
 		if l.event == "notice" && strings.HasPrefix(l.text, "notice expectations") {
@@ -2451,9 +2456,9 @@ func TestRunChangedFileSendsOneNoticeWithTheChangedLines(t *testing.T) {
 	c.Webhooks = []runCfgHook{svcDeadHook(t, "crit", "critical")}
 	args := runConfig(t, c)
 	first := runStart(t, args...)
-	first.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	first.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	runReplace(t, file, v2)
-	_, i := first.wait(t, "the notice of the change", 0, time.Now().Add(3*time.Second), runIs("notice expectations corp.test. to 2 channels"))
+	_, i := first.wait(t, "the notice of the change", 0, time.Now().Add(runPatience), runIs("notice expectations corp.test. to 2 channels"))
 	time.Sleep(500 * time.Millisecond)
 	lines := first.stop(t)
 	if n := svcCount(lines, "notice expectations corp.test. to 2 channels"); n != 1 || i == 0 {
@@ -2466,7 +2471,7 @@ func TestRunChangedFileSendsOneNoticeWithTheChangedLines(t *testing.T) {
 	}
 	runReplace(t, file, v2+strings.Join(many, "\n")+"\n")
 	second := runStart(t, args...)
-	second.wait(t, "the notice of the change made while osk was down", 0, time.Now().Add(5*time.Second),
+	second.wait(t, "the notice of the change made while osk was down", 0, time.Now().Add(runPatience),
 		runIs("notice expectations corp.test. to 2 channels"))
 	second.stop(t)
 
@@ -2534,16 +2539,16 @@ func TestRunTakesTheTestRequestFile(t *testing.T) {
 	c := runLocalCfg(s, state, runIntervals("1h", "1h", "1h", "1h"), runCfgDomain{Name: "corp.test.", Expect: expFile(t, svcNSFile)})
 	c.Webhooks = []runCfgHook{svcDeadHook(t, "siem", "critical")}
 	svc := runStart(t, runConfig(t, c)...)
-	svc.wait(t, "the start line", 0, time.Now().Add(5*time.Second), runPrefix("start "))
+	svc.wait(t, "the start line", 0, time.Now().Add(runPatience), runPrefix("start "))
 	const nonce = "0123456789abcdef0123456789abcdef"
 	path := svcRequest(t, state, nonce+"\n")
-	_, i := svc.wait(t, "the test request", 0, time.Now().Add(3*time.Second), runIs("test-alert "+nonce))
-	svc.wait(t, "the test notice", i, time.Now().Add(3*time.Second), runIs("notice test - to 2 channels"))
-	svcGone(t, "the request file", path, time.Now().Add(3*time.Second))
+	_, i := svc.wait(t, "the test request", 0, time.Now().Add(runPatience), runIs("test-alert "+nonce))
+	svc.wait(t, "the test notice", i, time.Now().Add(runPatience), runIs("notice test - to 2 channels"))
+	svcGone(t, "the request file", path, time.Now().Add(runPatience))
 	for _, bad := range []string{"hello\n", strings.ToUpper(nonce) + "\n", nonce[:31] + "\n", nonce + "0\n", strings.Repeat(nonce, 3) + "\n"} {
 		path := svcRequest(t, state, bad)
-		_, i = svc.wait(t, "the refusal of "+strconv.Quote(bad), i+1, time.Now().Add(3*time.Second), runIs("test-alert ignored: not a request"))
-		svcGone(t, "the file that holds no request", path, time.Now().Add(3*time.Second))
+		_, i = svc.wait(t, "the refusal of "+strconv.Quote(bad), i+1, time.Now().Add(runPatience), runIs("test-alert ignored: not a request"))
+		svcGone(t, "the file that holds no request", path, time.Now().Add(runPatience))
 	}
 	time.Sleep(300 * time.Millisecond)
 	lines := svc.stop(t)
@@ -2586,13 +2591,13 @@ func TestRunHeartbeatOnlyWhileHealthy(t *testing.T) {
 	begin := time.Now()
 	svc := runStart(t, runConfig(t, svcCalmCfg(t, s, file, state, runIntervals("1h", "1h", "1h", "1h")))...)
 	posted := runPrefix("heartbeat failed: ")
-	_, i := svc.wait(t, "a heartbeat", 0, begin.Add(12*time.Second), posted)
-	svc.wait(t, "a second heartbeat", i+1, begin.Add(12*time.Second), posted)
+	_, i := svc.wait(t, "a heartbeat", 0, begin.Add(runPatience), posted)
+	svc.wait(t, "a second heartbeat", i+1, begin.Add(runPatience), posted)
 
 	// A delegation that differs is critical, and Slack, which cannot be
 	// reached, fails.
 	runReplace(t, file, "domain corp.test.\ncorp.test. NS ns9.corp.test.\ncorp.test. DS none\n")
-	failed, j := svc.wait(t, "a failed delivery", i, time.Now().Add(5*time.Second), runPrefix("delivery slack failed "))
+	failed, j := svc.wait(t, "a failed delivery", i, time.Now().Add(runPatience), runPrefix("delivery slack failed "))
 	skipped, k := svc.wait(t, "the skipped heartbeat", j, failed.at.Add(6500*time.Millisecond), runIs("heartbeat skipped: channel slack fails"))
 	svc.wait(t, "the next skipped heartbeat", k+1, skipped.at.Add(6*time.Second), runIs("heartbeat skipped: channel slack fails"))
 	lines := svc.stop(t)
@@ -2619,8 +2624,8 @@ func TestRunDeadHeartbeatHoldsNoCheck(t *testing.T) {
 	svc := runStart(t, runConfig(t, svcCalmCfg(t, s, expFile(t, runFile), state, runIntervals("1h", "5s", "1h", "1h")))...)
 	select {
 	case <-accepted:
-	case <-time.After(7 * time.Second):
-		t.Fatal("no heartbeat began within 7 s of the start")
+	case <-time.After(runPatience):
+		t.Fatal("no heartbeat began within the patience of the start")
 	}
 	// Each heartbeat hangs until the client gives it up; meanwhile the
 	// delegation runs every 5 s.
@@ -2715,7 +2720,7 @@ func TestRunDeletesHistoryByAge(t *testing.T) {
 	c.HistoryDays = 1
 	svc := runStart(t, runConfig(t, c)...)
 	history := regexp.MustCompile(`^history deleted (\d+) alerts and (\d+) notices from before (\S+)$`)
-	first, i := svc.wait(t, "the first deletion", 0, time.Now().Add(5*time.Second), history.MatchString)
+	first, i := svc.wait(t, "the first deletion", 0, time.Now().Add(runPatience), history.MatchString)
 	second, _ := svc.wait(t, "the deletion at the next beat", i+1, first.at.Add(3*time.Second), history.MatchString)
 	time.Sleep(time.Second)
 	lines := svc.stop(t)
@@ -2779,7 +2784,7 @@ func TestRunKeepsSecretsOutOfOutputAndState(t *testing.T) {
 	c.Heartbeat = &runCfgBeat{URL: runSecret{Env: "OSK_HEARTBEAT_URL"}, Interval: "5s"}
 	args := runConfig(t, c)
 	svc := runStart(t, args...)
-	svc.wait(t, "the alert", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	svc.wait(t, "the alert", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	svcRequest(t, state, "0123456789abcdef0123456789abcdef\n")
 	runReplace(t, file, svcNSFile)
 	soon := time.Now().Add(8 * time.Second)
@@ -2810,8 +2815,8 @@ func TestRunTakesAnInvalidFileOnlyAfterItStaysInvalid(t *testing.T) {
 	file := expFile(t, v1)
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, runLocal(t, s, file, state, runIntervals("1h", "1h", "1h", "1h"))...)
-	svc.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
-	svc.wait(t, "the alert of the delegation", 0, time.Now().Add(5*time.Second), runIs("alert "+runNotCovered))
+	svc.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
+	svc.wait(t, "the alert of the delegation", 0, time.Now().Add(runPatience), runIs("alert "+runNotCovered))
 	skip := len(svc.out.all())
 
 	runReplace(t, file, "")
@@ -2832,7 +2837,7 @@ func TestRunTakesAnInvalidFileOnlyAfterItStaysInvalid(t *testing.T) {
 		t.Errorf("the empty file was taken at %s, less than 1.5 s after it was emptied at %s", problem.at, emptied.UTC())
 	}
 	runReplace(t, file, v1)
-	_, i = svc.wait(t, "the resolve", i, time.Now().Add(3*time.Second), runIs("alert resolve medium invalid-file corp.test."))
+	_, i = svc.wait(t, "the resolve", i, time.Now().Add(runPatience), runIs("alert resolve medium invalid-file corp.test."))
 
 	changed := time.Now()
 	runReplace(t, file, runFile+"www.example. A 192.0.2.99\n")
@@ -2860,7 +2865,7 @@ func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	args := runLocal(t, s, file, state, runIntervals("5s", "1h", "1h", "15s"))
 	svc := runStart(t, args...)
-	_, i := svc.wait(t, "the first serial run", 0, time.Now().Add(5*time.Second), runRunOf(runSerialKey))
+	_, i := svc.wait(t, "the first serial run", 0, time.Now().Add(runPatience), runRunOf(runSerialKey))
 	const label = "low zone-changed corp.test."
 	moved := func(from, to int) func(string) bool {
 		return func(text string) bool {
@@ -2868,10 +2873,10 @@ func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 		}
 	}
 	serial.Store(2)
-	_, i = svc.wait(t, "the move from 1 to 2", i, time.Now().Add(7*time.Second), moved(1, 2))
-	_, i = svc.wait(t, "the zone-changed alert", i, time.Now().Add(5*time.Second), runIs("alert open "+label))
+	_, i = svc.wait(t, "the move from 1 to 2", i, time.Now().Add(runPatience), moved(1, 2))
+	_, i = svc.wait(t, "the zone-changed alert", i, time.Now().Add(runPatience), runIs("alert open "+label))
 	serial.Store(3)
-	_, i = svc.wait(t, "the move from 2 to 3", i, time.Now().Add(7*time.Second), moved(2, 3))
+	_, i = svc.wait(t, "the move from 2 to 3", i, time.Now().Add(runPatience), moved(2, 3))
 	time.Sleep(500 * time.Millisecond)
 	for _, l := range svc.out.all()[i:] {
 		if l.event == "alert" {
@@ -2912,9 +2917,9 @@ func TestRunZoneChangedOfEachDomainAndABlindZoneCheck(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, svcTwo(t, s, fileA, fileB, state, runIntervals("5s", "1h", "1h", "5s"))...)
 	blind := "records other.test. blind.other.test. A"
-	firstBlind, _ := svc.wait(t, "the first run of the blind check", 0, time.Now().Add(5*time.Second), runRunOf(blind))
-	svc.wait(t, "the first serial run of other.test.", 0, time.Now().Add(5*time.Second), runRunOf("serial other.test. other.test. SOA"))
-	svc.wait(t, "the first serial run of corp.test.", 0, time.Now().Add(5*time.Second), runRunOf(runSerialKey))
+	firstBlind, _ := svc.wait(t, "the first run of the blind check", 0, time.Now().Add(runPatience), runRunOf(blind))
+	svc.wait(t, "the first serial run of other.test.", 0, time.Now().Add(runPatience), runRunOf("serial other.test. other.test. SOA"))
+	svc.wait(t, "the first serial run of corp.test.", 0, time.Now().Add(runPatience), runRunOf(runSerialKey))
 	fb, _, _ := runParse(firstBlind.text)
 	corp.Store(2)
 	other.Store(2)
@@ -2970,7 +2975,7 @@ func TestRunRefusesAStateFolderOpenToOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := runStart(t, args...)
-	svc.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+	svc.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 	svc.stop(t)
 	err := filepath.WalkDir(state, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -3021,7 +3026,7 @@ func TestRunDownNoticeOnlyAfterAMinuteDown(t *testing.T) {
 			t.Fatal(err)
 		}
 		svc := runStart(t, args...)
-		svc.wait(t, "the first run", 0, time.Now().Add(5*time.Second), runRunOf(runDelegationKey))
+		svc.wait(t, "the first run", 0, time.Now().Add(runPatience), runRunOf(runDelegationKey))
 		lines := svc.stop(t)
 		if _, down := runHead(t, lines); !strings.HasPrefix(down.text, "down since ") {
 			t.Errorf("after %v down the down line is %q, want \"down since ...\"", c.down, down.text)

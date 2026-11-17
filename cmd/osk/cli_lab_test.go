@@ -508,7 +508,7 @@ func TestWatchShowsEventsAsTheyHappen(t *testing.T) {
 	}
 	cliLabTime(t, "the time of the notice", "2006-01-02T15:04:05Z", head.FindStringSubmatch(lines[1])[1], asked, time.Now())
 	nonce := cliLabRequest.FindStringSubmatch(lines[2])[1]
-	if !slices.ContainsFunc(cliLabSlackTexts(t, w), func(s string) bool { return strings.Contains(s, "request   "+nonce) }) {
+	if !slices.ContainsFunc(cliLabSlackTexts(t, w), func(s string) bool { return strings.Contains(s, "request    "+nonce) }) {
 		t.Errorf("no Slack message holds the request %s that watch printed", nonce)
 	}
 }
@@ -1003,7 +1003,7 @@ func TestAcceptPrintsThenWrites(t *testing.T) {
 		return slices.ContainsFunc(cliLabSlackTexts(t, w), func(s string) bool {
 			lines := strings.Split(s, "\n")
 			i := slices.Index(lines, "```")
-			return len(lines) > 0 && lines[0] == ":memo: CHANGED: the expectations of `corp.test.` changed" && i >= 0 &&
+			return len(lines) > 0 && lines[0] == ":memo: *CHANGED* · the expectations of `corp.test.` changed" && i >= 0 &&
 				len(lines) > i+len(view)+1 && slices.Equal(lines[i+1:i+1+len(view)], view) && lines[i+1+len(view)] == "```"
 		})
 	})

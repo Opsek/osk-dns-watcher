@@ -37,16 +37,23 @@ func ntcDownFor(n store.Notice) string {
 	if err != nil {
 		return unknown
 	}
-	return started.Sub(beat).Round(time.Second).String()
+	return dlvDuration(started.Sub(beat).Round(time.Second))
+}
+
+// ntcLabels are the labels of the stored lines of each kind of notice; the
+// text pads them from 10 to 11 columns.
+var ntcLabels = map[store.NoticeKind][]string{
+	store.NoticeTest: {"request"},
+	store.NoticeDown: {"last beat", "started"},
 }
 
 func ntcText(n store.Notice) string {
 	words := map[store.NoticeKind][2]string{
-		store.NoticeTest: {":test_tube: TEST: osk can send to this channel",
+		store.NoticeTest: {":test_tube: *TEST* · osk can send to this channel",
 			"Nothing to do: this message only tests the path from osk to this channel."},
-		store.NoticeDown: {":warning: DOWN: osk did not run for " + ntcDownFor(n),
+		store.NoticeDown: {":warning: *DOWN* · osk did not run for " + ntcDownFor(n),
 			"Changes in this time were not seen when they happened. If you did not stop osk, find out who did."},
-		store.NoticeExpectations: {":memo: CHANGED: the expectations of `" + dlvClean(n.Domain, 100) + "` changed",
+		store.NoticeExpectations: {":memo: *CHANGED* · the expectations of `" + dlvClean(n.Domain, 100) + "` changed",
 			"If you did not make this change, find out who did and restore the file."},
 	}[n.Kind]
 	lines := []string{words[0], "", "```"}
@@ -55,9 +62,18 @@ func ntcText(n store.Notice) string {
 			lines = append(lines, fmt.Sprintf("and %d more lines", len(n.Lines)-12))
 			break
 		}
-		lines = append(lines, dlvClean(l, 160))
+		c := dlvClean(l, 160)
+		for _, label := range ntcLabels[n.Kind] {
+			if strings.HasPrefix(c, label+" ") {
+				c = c[:10] + " " + c[10:]
+				break
+			}
+		}
+		lines = append(lines, c)
 	}
-	lines = append(lines, "```", "", ":clock3: "+n.At.UTC().Format(ntcTimeLayout), "", ":point_right: "+words[1])
+	at := n.At.UTC()
+	clock := ":clock3: " + at.Format("15:04:05") + " · " + at.Format("2 Jan 2006") + " UTC"
+	lines = append(lines, "```", "", clock, "", ":point_right: "+words[1])
 	return strings.Join(lines, "\n")
 }
 
@@ -93,17 +109,17 @@ func TestNoticeTextForEachKind(t *testing.T) {
 		n    store.Notice
 		want string
 	}{
-		{ntcTest(), ":test_tube: TEST: osk can send to this channel\n\n" +
-			"```\nrequest   0123456789abcdef0123456789abcdef\n```\n\n" +
-			":clock3: 2026-11-13 10:00:05 UTC\n\n" +
+		{ntcTest(), ":test_tube: *TEST* · osk can send to this channel\n\n" +
+			"```\nrequest    0123456789abcdef0123456789abcdef\n```\n\n" +
+			":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
 			":point_right: Nothing to do: this message only tests the path from osk to this channel."},
-		{ntcDown(time.Date(2026, 11, 13, 7, 59, 0, 0, time.UTC), started), ":warning: DOWN: osk did not run for 2h1m5s\n\n" +
-			"```\nlast beat 2026-11-13 07:59:00 UTC\nstarted   2026-11-13 10:00:05 UTC\n```\n\n" +
-			":clock3: 2026-11-13 10:00:05 UTC\n\n" +
+		{ntcDown(time.Date(2026, 11, 13, 7, 59, 0, 0, time.UTC), started), ":warning: *DOWN* · osk did not run for 2 h 1 min\n\n" +
+			"```\nlast beat  2026-11-13 07:59:00 UTC\nstarted    2026-11-13 10:00:05 UTC\n```\n\n" +
+			":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
 			":point_right: Changes in this time were not seen when they happened. If you did not stop osk, find out who did."},
-		{ntcExpectations(), ":memo: CHANGED: the expectations of `corp.test.` changed\n\n" +
+		{ntcExpectations(), ":memo: *CHANGED* · the expectations of `corp.test.` changed\n\n" +
 			"```\n- www.corp.test. A 10.53.0.81\n+ mail.corp.test. A 10.53.0.82\nclosed high record-set records www.corp.test. A\n```\n\n" +
-			":clock3: 2026-11-13 10:00:05 UTC\n\n" +
+			":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
 			":point_right: If you did not make this change, find out who did and restore the file."},
 	}
 	for _, c := range cases {
@@ -117,22 +133,24 @@ func TestNoticeTextForEachKind(t *testing.T) {
 }
 
 // The headline of a down notice gives the time from the last beat to the
-// start as Go prints a duration.
+// start in its largest unit that is not zero and the next smaller one when
+// that is not zero.
 func TestNoticeTextDownTellsTheTimeAway(t *testing.T) {
 	started := time.Date(2026, 11, 13, 10, 0, 5, 0, time.UTC)
 	for _, c := range []struct {
 		away time.Duration
 		want string
 	}{
-		{0, "0s"},
-		{2 * time.Second, "2s"},
-		{59*time.Minute + 59*time.Second, "59m59s"},
-		{time.Hour, "1h0m0s"},
-		{49*time.Hour + time.Second, "49h0m1s"},
+		{0, "0 s"},
+		{2 * time.Second, "2 s"},
+		{67 * time.Second, "1 min 7 s"},
+		{59*time.Minute + 59*time.Second, "59 min 59 s"},
+		{time.Hour + 5*time.Second, "1 h"},
+		{49*time.Hour + time.Second, "2 d 1 h"},
 	} {
 		n := ntcDown(started.Add(-c.away), started)
 		head, _, _ := strings.Cut(deliver.NoticeText(n), "\n")
-		if want := ":warning: DOWN: osk did not run for " + c.want; head != want {
+		if want := ":warning: *DOWN* · osk did not run for " + c.want; head != want {
 			t.Errorf("down for %v: headline %q, want %q", c.away, head, want)
 		}
 	}
@@ -149,7 +167,7 @@ func TestNoticeTextDownWithoutTimesTellsUnknownTime(t *testing.T) {
 	} {
 		n := store.Notice{Kind: store.NoticeDown, Lines: lines, At: ntcAt}
 		head, _, _ := strings.Cut(deliver.NoticeText(n), "\n")
-		if want := ":warning: DOWN: osk did not run for an unknown time"; head != want {
+		if want := ":warning: *DOWN* · osk did not run for an unknown time"; head != want {
 			t.Errorf("lines %q: headline %q, want %q", lines, head, want)
 		}
 	}
@@ -209,13 +227,13 @@ func TestNoticeTextCleansHostileData(t *testing.T) {
 		"+ <https://x|y> @here *_~",
 		strings.Repeat("x", 200),
 	}}
-	want := ":memo: CHANGED: the expectations of `\\096x\\096&lt;!channel&gt;&amp;.test.` changed\n\n" +
+	want := ":memo: *CHANGED* · the expectations of `\\096x\\096&lt;!channel&gt;&amp;.test.` changed\n\n" +
 		"```\n" +
 		"\"a\"\\010\\096\\096\\096\\010&lt;@U123&gt;\\013\\000\\195\\169\n" +
 		"+ &lt;https://x|y&gt; @here *_~\n" +
 		strings.Repeat("x", 154) + " [cut]\n" +
 		"```\n\n" +
-		":clock3: 2026-11-13 10:00:05 UTC\n\n" +
+		":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
 		":point_right: If you did not make this change, find out who did and restore the file."
 	if got := deliver.NoticeText(n); got != want {
 		t.Errorf("text:\n%s\nwant:\n%s", got, want)
@@ -230,7 +248,7 @@ func ntcHostileNotice(rng *rand.Rand) store.Notice {
 	switch rng.IntN(3) {
 	case 0:
 		n.Kind = store.NoticeTest
-		n.Lines = []string{"request   " + dlvHostileText(rng, 40)}
+		n.Lines = []string{"request   " + dlvHostileText(rng, 30)}
 	case 1:
 		started := time.Unix(n.At.Unix(), 0).In(n.At.Location())
 		n = ntcDown(started.Add(-time.Duration(rng.Int64N(400*24*3600))*time.Second), started)
@@ -252,8 +270,10 @@ func ntcTextFault(n store.Notice) string {
 	if len(text) > 3000 {
 		return fmt.Sprintf("%d octets, more than 3000", len(text))
 	}
-	for i := 0; i < len(text); i++ {
-		if c := text[i]; (c < 0x20 || c > 0x7E) && c != '\n' {
+	// The middle dot is allowed with a space on each side.
+	ascii := strings.ReplaceAll(text, " · ", " . ")
+	for i := 0; i < len(ascii); i++ {
+		if c := ascii[i]; (c < 0x20 || c > 0x7E) && c != '\n' {
 			return fmt.Sprintf("octet %#02x at %d", c, i)
 		}
 	}

@@ -268,10 +268,10 @@ func TestEscalationReachesSlack(t *testing.T) {
 	if len(hooks) != 2 {
 		t.Fatalf("the receiver has %d requests, want 2", len(hooks))
 	}
-	if text, want := dlvText(t, hooks[0]), ":red_circle: HIGH: `www.corp.test. A` changed"; !strings.HasPrefix(text, want+"\n") {
+	if text, want := dlvText(t, hooks[0]), ":red_circle: *HIGH* · `www.corp.test. A` changed"; !strings.HasPrefix(text, want+"\n") {
 		t.Errorf("first text:\n%s\nwant it to start with %q", text, want)
 	}
-	if text, want := dlvText(t, hooks[1]), ":rotating_light: CRITICAL, raised from high: `www.corp.test. A` changed"; !strings.HasPrefix(text, want+"\n") {
+	if text, want := dlvText(t, hooks[1]), ":rotating_light: *CRITICAL*, raised from high · `www.corp.test. A` changed"; !strings.HasPrefix(text, want+"\n") {
 		t.Errorf("second text:\n%s\nwant it to start with %q", text, want)
 	}
 }

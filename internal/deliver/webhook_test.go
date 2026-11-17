@@ -455,10 +455,11 @@ func TestWebhookBodiesOfTheGateExample(t *testing.T) {
 		`"seen":[{"server":"ns.test.","address":"10.53.0.3:53","text":"ns1.dnshost.test. | ns2.dnshost.test.","ttl":300}],` +
 		`"more":0,"value":["10.53.0.3:53 ns.test. ns1.dnshost.test. | ns2.dnshost.test."],` +
 		`"first_seen":"2026-11-11T14:02:07Z","last_clean":"2026-11-11T14:01:07Z","resolved":"",` +
-		"\"text\":\":rotating_light: CRITICAL: nameservers of `corp.test.` changed at the parent zone\\n\\n```\\n" +
-		"expected  ns1.corp.test. | ns2.corp.test.\\n" +
-		"now       ns1.dnshost.test. | ns2.dnshost.test.   at ns.test. (10.53.0.3:53), TTL 300\\n```\\n\\n" +
-		":clock3: First seen 2026-11-11 14:02:07 UTC / Last OK 2026-11-11 14:01:07 UTC\\n\\n" +
+		"\"text\":\":rotating_light: *CRITICAL* · nameservers of `corp.test.` changed at the parent zone\\n\\n```\\n" +
+		"expected   ns1.corp.test.\\n           ns2.corp.test.\\n\\n" +
+		"now        ns1.dnshost.test.\\n           ns2.dnshost.test.\\n" +
+		"seen at    ns.test. (10.53.0.3)   TTL 300\\n```\\n\\n" +
+		":clock3: First seen 14:02:07 · last OK 14:01:07 · 11 Nov 2026 UTC\\n\\n" +
 		":point_right: If you did not change the nameservers, contact your registrar now.\"}"
 	if got := deliver.WebhookMessage(e); string(got) != want {
 		t.Errorf("open body:\n%s\nwant:\n%s", got, want)
@@ -476,9 +477,9 @@ func TestWebhookBodiesOfTheGateExample(t *testing.T) {
 		`"expected":"ns1.corp.test. | ns2.corp.test.","seen":[],` +
 		`"more":0,"value":["10.53.0.3:53 ns.test. ns1.dnshost.test. | ns2.dnshost.test."],` +
 		`"first_seen":"2026-11-11T14:02:07Z","last_clean":"2026-11-11T14:01:07Z","resolved":"2026-11-11T14:09:41Z",` +
-		"\"text\":\":white_check_mark: RESOLVED: nameservers of `corp.test.` are as expected again\\n\\n```\\n" +
-		"expected  ns1.corp.test. | ns2.corp.test.\\nnow       as expected again\\n```\\n\\n" +
-		":clock3: First seen 2026-11-11 14:02:07 UTC / Resolved 2026-11-11 14:09:41 UTC\\n\\n" +
+		"\"text\":\":white_check_mark: *RESOLVED* · nameservers of `corp.test.` are as expected again\\n\\n```\\n" +
+		"now        ns1.corp.test.\\n           ns2.corp.test.\\n```\\n\\n" +
+		":clock3: Open for 7 min 34 s · first seen 14:02:07 · resolved 14:09:41 · 11 Nov 2026 UTC\\n\\n" +
 		":point_right: If you did not make or undo this change yourself, find out who did.\"}"
 	if got := deliver.WebhookMessage(e); string(got) != want {
 		t.Errorf("resolved body:\n%s\nwant:\n%s", got, want)

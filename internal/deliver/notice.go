@@ -9,24 +9,33 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
+// timeLayout is how the lines of a down notice write their times.
+const timeLayout = "2006-01-02 15:04:05 UTC"
+
 // noticeWording is the text of one kind of notice. {d} stands for the time
 // osk was down, {D} for the domain as inline code.
 type noticeWording struct {
-	headline, action string
+	emoji, word, phrase, action string
 }
 
 var noticeWordings = map[store.NoticeKind]noticeWording{
 	store.NoticeTest: {
-		headline: ":test_tube: TEST: osk can send to this channel",
-		action:   "Nothing to do: this message only tests the path from osk to this channel.",
+		emoji:  ":test_tube:",
+		word:   "TEST",
+		phrase: "osk can send to this channel",
+		action: "Nothing to do: this message only tests the path from osk to this channel.",
 	},
 	store.NoticeDown: {
-		headline: ":warning: DOWN: osk did not run for {d}",
-		action:   "Changes in this time were not seen when they happened. If you did not stop osk, find out who did.",
+		emoji:  ":warning:",
+		word:   "DOWN",
+		phrase: "osk did not run for {d}",
+		action: "Changes in this time were not seen when they happened. If you did not stop osk, find out who did.",
 	},
 	store.NoticeExpectations: {
-		headline: ":memo: CHANGED: the expectations of {D} changed",
-		action:   "If you did not make this change, find out who did and restore the file.",
+		emoji:  ":memo:",
+		word:   "CHANGED",
+		phrase: "the expectations of {D} changed",
+		action: "If you did not make this change, find out who did and restore the file.",
 	},
 }
 
@@ -40,10 +49,13 @@ const maxNoticeLines = 12
 func NoticeText(n store.Notice) string {
 	w := noticeWordings[n.Kind]
 	fill := strings.NewReplacer("{d}", downTime(n.Lines), "{D}", "`"+Clean(n.Domain, 100)+"`")
-	lines := []string{fill.Replace(w.headline), "", "```"}
-	lines = append(lines, noticeView(n.Lines)...)
-	lines = append(lines, "```", "", ":clock3: "+n.At.UTC().Format(timeLayout), "", ":point_right: "+w.action)
-	return strings.Join(lines, "\n")
+	at := n.At.UTC()
+	times := ":clock3: " + at.Format(timeOfDay) + dot + at.Format(dateLayout) + " UTC"
+	headline := ""
+	if w.word != "" {
+		headline = title(w.emoji, w.word, "") + dot + fill.Replace(w.phrase)
+	}
+	return compose(headline, noticeView(n), times, w.action)
 }
 
 func (s *Slack) Notice(n store.Notice) []byte {
@@ -54,7 +66,13 @@ func (s *Slack) Notice(n store.Notice) []byte {
 	return body
 }
 
-func noticeView(lines []string) []string {
+func noticeView(n store.Notice) []string {
+	lines := n.Lines
+	switch n.Kind {
+	case store.NoticeTest, store.NoticeDown:
+		lines = widenLabels(lines)
+	case store.NoticeExpectations:
+	}
 	view := cleanLines(lines, maxNoticeLines)
 	if more := len(lines) - maxNoticeLines; more > 0 {
 		view = append(view, "and "+strconv.Itoa(more)+" more lines")
@@ -81,7 +99,7 @@ func downTime(lines []string) string {
 	if !ok || !ok2 {
 		return "an unknown time"
 	}
-	return started.Sub(last).Round(time.Second).String()
+	return openFor(started.Sub(last).Round(time.Second))
 }
 
 func lineTime(lines []string, label string) (time.Time, bool) {
@@ -92,4 +110,21 @@ func lineTime(lines []string, label string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// storedLabelWidth is the width of the labels in the stored lines of a test
+// and a down notice, which the webhook sends as they are.
+const storedLabelWidth = 10
+
+// widenLabels gives the stored lines the label width of the view by one more
+// space after the label.
+func widenLabels(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l
+		if len(l) >= storedLabelWidth && l[storedLabelWidth-1] == ' ' {
+			out[i] = l[:storedLabelWidth] + strings.Repeat(" ", labelWidth-storedLabelWidth) + l[storedLabelWidth:]
+		}
+	}
+	return out
 }

@@ -215,13 +215,13 @@ func TestTestAlertFullPath(t *testing.T) {
 		t.Fatalf("the receiver holds %d Slack messages, want 1", len(texts))
 	}
 	slkSameText(t, texts[0], []string{
-		":test_tube: TEST: osk can send to this channel",
+		":test_tube: *TEST* · osk can send to this channel",
 		"",
 		"```",
-		"request   " + nonce,
+		"request    " + nonce,
 		"```",
 		"",
-		":clock3: <time>",
+		":clock3: <time> · <date> UTC",
 		"",
 		":point_right: Nothing to do: this message only tests the path from osk to this channel.",
 	}, slkRun{start: asked, end: answered})
@@ -450,8 +450,8 @@ func runDownHooksOn(t *testing.T, path string) []time.Duration {
 	var downs []time.Duration
 	for _, text := range svcTexts(t, path) {
 		if m := runDownHeadline.FindStringSubmatch(strings.Split(text, "\n")[0]); m != nil {
-			d, err := time.ParseDuration(m[1])
-			if err != nil {
+			d, ok := runParseDown(m[1])
+			if !ok {
 				t.Errorf("the down message %q", text)
 			}
 			downs = append(downs, d)
@@ -467,7 +467,7 @@ func svcNoticeReached(t *testing.T, w *svcLab, lines []string) {
 	t.Helper()
 	var texts []string
 	for _, text := range svcTexts(t, w.slackPath) {
-		if strings.HasPrefix(text, ":memo: CHANGED: ") {
+		if strings.HasPrefix(text, ":memo: *CHANGED* · ") {
 			texts = append(texts, text)
 		}
 	}
@@ -475,7 +475,7 @@ func svcNoticeReached(t *testing.T, w *svcLab, lines []string) {
 		t.Fatalf("the receiver holds %d Slack messages of a change of the expectations, want 1", len(texts))
 	}
 	head := strings.Split(texts[0], "\n")[0]
-	if want := ":memo: CHANGED: the expectations of `corp.test.` changed"; head != want || !slices.Equal(svcView(texts[0]), lines) {
+	if want := ":memo: *CHANGED* · the expectations of `corp.test.` changed"; head != want || !slices.Equal(svcView(texts[0]), lines) {
 		t.Errorf("the message is:\n%s\nwant the headline %q and the lines:\n%s", texts[0], want, strings.Join(lines, "\n"))
 	}
 	var notices int
@@ -799,8 +799,8 @@ func TestPostWithinFiveSeconds(t *testing.T) {
 		servers      []string
 		event, slack string
 	}{
-		{[]string{"ns1.dnshost.test.", "ns2.dnshost.test."}, "open", ":rotating_light: CRITICAL: "},
-		{[]string{"ns1.corp.test.", "ns2.corp.test."}, "resolve", ":white_check_mark: RESOLVED: "},
+		{[]string{"ns1.dnshost.test.", "ns2.dnshost.test."}, "open", ":rotating_light: *CRITICAL* · "},
+		{[]string{"ns1.corp.test.", "ns2.corp.test."}, "resolve", ":white_check_mark: *RESOLVED* · "},
 	} {
 		expCtl(t, append([]string{"delegate", "corp.test."}, c.servers...)...)
 		_, i := svc.wait(t, "the "+c.event, 0, time.Now().Add(5*time.Second+3750*time.Millisecond+2*time.Second), runIs("alert "+c.event+" "+label))

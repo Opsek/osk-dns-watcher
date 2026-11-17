@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -180,8 +181,8 @@ func runHooks(t *testing.T) []runHook {
 // runNotice reports a message that belongs to no alert: a test, a down
 // time or a change of the expectations.
 func runNotice(text string) bool {
-	return strings.HasPrefix(text, ":test_tube: ") || strings.HasPrefix(text, ":warning: DOWN: ") ||
-		strings.HasPrefix(text, ":memo: CHANGED: ")
+	return strings.HasPrefix(text, ":test_tube: ") || strings.HasPrefix(text, ":warning: *DOWN* · ") ||
+		strings.HasPrefix(text, ":memo: *CHANGED* · ")
 }
 
 // runHookCount checks the number of Slack messages of alerts.
@@ -199,7 +200,23 @@ func runHookCount(t *testing.T, what string, want int) []runHook {
 	return alerts
 }
 
-var runDownHeadline = regexp.MustCompile(`^:warning: DOWN: osk did not run for (\S+)$`)
+var runDownHeadline = regexp.MustCompile(`^:warning: \*DOWN\* · osk did not run for (\d+ (?:d|h|min|s)(?: \d+ (?:h|min|s))?)$`)
+
+// runParseDown reads a time down as the message writes it: one or two
+// numbers, each followed by its unit.
+func runParseDown(s string) (time.Duration, bool) {
+	words := strings.Fields(s)
+	var d time.Duration
+	for i := 0; i+1 < len(words); i += 2 {
+		n, err := strconv.Atoi(words[i])
+		unit, ok := map[string]time.Duration{"d": 24 * time.Hour, "h": time.Hour, "min": time.Minute, "s": time.Second}[words[i+1]]
+		if err != nil || !ok {
+			return 0, false
+		}
+		d += time.Duration(n) * unit
+	}
+	return d, len(words) > 0 && len(words)%2 == 0
+}
 
 // runDownHooks checks that the receiver holds want down messages, and gives
 // the time down that each tells.
@@ -207,7 +224,7 @@ func runDownHooks(t *testing.T, what string, want int) []time.Duration {
 	t.Helper()
 	var downs []time.Duration
 	for _, h := range runHooks(t) {
-		if !strings.HasPrefix(h.text, ":warning: DOWN: ") {
+		if !strings.HasPrefix(h.text, ":warning: *DOWN* · ") {
 			continue
 		}
 		m := runDownHeadline.FindStringSubmatch(strings.Split(h.text, "\n")[0])
@@ -215,8 +232,8 @@ func runDownHooks(t *testing.T, what string, want int) []time.Duration {
 			t.Errorf("%s: the down message %q does not start with the time down", what, h.text)
 			continue
 		}
-		d, err := time.ParseDuration(m[1])
-		if err != nil {
+		d, ok := runParseDown(m[1])
+		if !ok {
 			t.Errorf("%s: the down message %q does not start with the time down", what, h.text)
 		}
 		downs = append(downs, d)
@@ -366,15 +383,17 @@ func TestSerialMoveStartsZoneChecks(t *testing.T) {
 		t.Errorf("the receiver answered %d", hooks[0].status)
 	}
 	slkSameText(t, hooks[0].text, []string{
-		":red_circle: HIGH: `www.corp.test. A` changed",
+		":red_circle: *HIGH* · `www.corp.test. A` changed",
 		"",
 		"```",
-		"expected  " + n + "81",
-		"now       " + n + "99   at ns1.corp.test. (" + n + "11:53), TTL 300",
-		"now       " + n + "99   at ns2.corp.test. (" + n + "12:53), TTL 300",
+		"expected   " + n + "81",
+		"",
+		"now        " + n + "99",
+		"seen at    ns1.corp.test. (" + n + "11)   TTL 300",
+		"           ns2.corp.test. (" + n + "12)   TTL 300",
 		"```",
 		"",
-		":clock3: First seen <time> / Last OK <time>",
+		slkClockOpen,
 		"",
 		":point_right: If you did not make this change, check your DNS provider account now.",
 	}, slkRun{start: set, end: alert.at}, slkRun{start: begin, end: set})
@@ -472,13 +491,12 @@ func TestZoneChangedNotice(t *testing.T) {
 	opened, j := svc.wait(t, "the zone-changed alert", i, setEnd.Add(within+2*time.Second), runIs("alert open "+label))
 	svc.wait(t, "its Slack message", j, opened.at.Add(3*time.Second), runIs("delivery slack sent open "+label))
 	hooks := runHookCount(t, "after the change of an unwatched record", 1)
-	times := runZoneText(t, hooks[0].text, n, ":large_yellow_circle: LOW: the zone `corp.test.` changed, and no watched record differs",
+	times := runZoneText(t, hooks[0].text, n, ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no watched record differs",
 		"1", "2", set, setEnd)
-	if first := slkTimes.FindString(times); !strings.HasPrefix(times, ":clock3: First seen "+first+" / Last OK") {
-		t.Errorf("the times %q do not start with the first seen time", times)
+	if clock, _ := slkClock(t, times); len(clock) != 2 || !strings.HasPrefix(times, ":clock3: First seen ") || !strings.Contains(times, " · last OK ") {
+		t.Errorf("the times %q do not start with the first seen time and then the last OK time", times)
 	} else {
-		at, _ := time.Parse(slkTimeLayout, first)
-		slkWithin(t, "the first seen time", at, set.Truncate(time.Second), opened.at)
+		slkWithin(t, "the first seen time", clock[0], set.Truncate(time.Second), opened.at)
 	}
 
 	// The record goes and comes back between two serial runs: only the
@@ -493,7 +511,7 @@ func TestZoneChangedNotice(t *testing.T) {
 	updated, u := svc.wait(t, "the update of the notice", k, putEnd.Add(within+2*time.Second), runIs("alert update "+label))
 	svc.wait(t, "its Slack message", u, updated.at.Add(3*time.Second), runIs("delivery slack sent update "+label))
 	hooks = runHookCount(t, "after the change put back", 2)
-	runZoneText(t, hooks[1].text, n, ":large_yellow_circle: LOW, changed again: the zone `corp.test.` changed, and no watched record differs",
+	runZoneText(t, hooks[1].text, n, ":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no watched record differs",
 		"2", "4", put, putEnd)
 
 	resolved, r := svc.wait(t, "the resolve of the notice", u, updated.at.Add(20*time.Second), runIs("alert resolve "+label))
@@ -504,14 +522,13 @@ func TestZoneChangedNotice(t *testing.T) {
 	lines := svc.stop(t)
 	hooks = runHookCount(t, "after the quiet time", 3)
 	slkSameText(t, hooks[2].text, []string{
-		":white_check_mark: RESOLVED: the zone `corp.test.` has not changed again for a while",
+		":white_check_mark: *RESOLVED* · the zone `corp.test.` has not changed again for a while",
 		"",
 		"```",
-		"expected  -",
-		"now       no new change of the serial",
+		"now        no new change of the serial",
 		"```",
 		"",
-		":clock3: First seen <time> / Resolved <time>",
+		slkClockClosed,
 		"",
 		":point_right: If you did not make or undo this change yourself, find out who did.",
 	}, slkRun{start: set, end: opened.at}, slkRun{start: updated.at, end: resolved.at})
@@ -560,13 +577,13 @@ func TestFailingCheckReported(t *testing.T) {
 	// The reset below also clears the receiver.
 	hooks := runHookCount(t, "after the failures", 1)
 	slkSameText(t, hooks[0].text, []string{
-		":large_orange_circle: MEDIUM: the records check of `corp.test. A` has had no usable answer for too long",
+		":large_orange_circle: *MEDIUM* · the records check of `corp.test. A` has had no usable answer for too long",
 		"",
 		"```",
-		"problem   no usable answer for 25s",
+		"problem    no usable answer for 25s",
 		"```",
 		"",
-		":clock3: First seen <time> / Last OK <time>",
+		slkClockOpen,
 		"",
 		":point_right: Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen.",
 	}, slkRun{start: fc.start.Add(25 * time.Second), end: opened.at}, slkRun{start: begin, end: dropped})
@@ -578,14 +595,13 @@ func TestFailingCheckReported(t *testing.T) {
 	lines := svc.stop(t)
 	hooks = runHookCount(t, "after the zone came back", 1)
 	slkSameText(t, hooks[0].text, []string{
-		":white_check_mark: RESOLVED: the records check of `corp.test. A` has usable answers again",
+		":white_check_mark: *RESOLVED* · the records check of `corp.test. A` has usable answers again",
 		"",
 		"```",
-		"expected  -",
-		"now       a server answers now",
+		"now        a server answers",
 		"```",
 		"",
-		":clock3: First seen <time> / Resolved <time>",
+		slkClockClosed,
 		"",
 		":point_right: If you did not make or undo this change yourself, find out who did.",
 	}, slkRun{start: fc.start.Add(25 * time.Second), end: opened.at}, slkRun{start: reset, end: resolved.at})
@@ -679,7 +695,7 @@ func TestRestartSendsNothingTwice(t *testing.T) {
 			hooks[0].status, hooks[1].status, hooks[0].text, hooks[1].text)
 	}
 	open := slkNameServersOpen(n)
-	open[7] = ":clock3: First seen <time> / Last OK: no clean check recorded"
+	open[slices.Index(open, slkClockOpen)] = slkClockNoClean
 	slkSameText(t, hooks[1].text, open, slkRun{start: childStart, end: opened.at})
 	if downs := runDownHooks(t, "after the restart", 1); len(downs) == 1 && downs[0] < 2*time.Second {
 		t.Errorf("the down message tells %v, want at least the 2s that the service was down", downs[0])

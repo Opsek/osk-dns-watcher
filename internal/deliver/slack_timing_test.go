@@ -22,9 +22,9 @@ const (
 	timFailingAction = ":point_right: Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen."
 	timChangedAction = ":point_right: If you did not change the zone, find out who did; only a zone transfer shows which record changed."
 	timResolveAction = ":point_right: If you did not make or undo this change yourself, find out who did."
-	timClockOpen     = ":clock3: First seen 2026-11-13 10:00:05 UTC / Last OK 2026-11-13 09:59:05 UTC"
-	timClockNoClean  = ":clock3: First seen 2026-11-13 10:00:05 UTC / Last OK: no clean check recorded"
-	timClockResolved = ":clock3: First seen 2026-11-13 10:00:05 UTC / Resolved 2026-11-13 10:07:41 UTC"
+	timClockOpen     = ":clock3: First seen 10:00:05 · last OK 09:59:05 · 13 Nov 2026 UTC"
+	timClockNoClean  = ":clock3: First seen 10:00:05 · no clean check before · 13 Nov 2026 UTC"
+	timClockResolved = ":clock3: Open for 7 min 36 s · first seen 10:00:05 · resolved 10:07:41 · 13 Nov 2026 UTC"
 )
 
 func timName(t *testing.T, s string) dnswire.Name {
@@ -75,12 +75,12 @@ func TestSlackTextOfCheckFailingForOpenUpdateAndResolve(t *testing.T) {
 		want string
 	}{
 		{"open", timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 25s", true),
-			timText(":large_orange_circle: MEDIUM: "+head, []string{"problem   no usable answer for 25s"}, timClockOpen, timFailingAction)},
+			timText(":large_orange_circle: *MEDIUM* · "+head, []string{"problem    no usable answer for 25s"}, timClockOpen, timFailingAction)},
 		{"update", timEvent(alert.EventUpdate, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 5m0s", false),
-			timText(":large_orange_circle: MEDIUM, changed again: "+head, []string{"problem   no usable answer for 5m0s"}, timClockNoClean, timFailingAction)},
+			timText(":large_orange_circle: *MEDIUM*, changed again · "+head, []string{"problem    no usable answer for 5m0s"}, timClockNoClean, timFailingAction)},
 		{"resolve", timEvent(alert.EventResolve, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 25s", true),
-			timText(":white_check_mark: RESOLVED: the records check of `www.corp.test. A` has usable answers again",
-				[]string{"expected  -", "now       a server answers now"}, timClockResolved, timResolveAction)},
+			timText(":white_check_mark: *RESOLVED* · the records check of `www.corp.test. A` has usable answers again",
+				[]string{"now        a server answers"}, timClockResolved, timResolveAction)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			timSameText(t, SlackText(c.e), c.want)
@@ -100,11 +100,11 @@ func TestSlackTextOfCheckFailingNamesTheKindOfCheck(t *testing.T) {
 	} {
 		t.Run(c.key.Kind.String(), func(t *testing.T) {
 			open := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15m0s", true)
-			timSameText(t, SlackText(open), timText(":large_orange_circle: MEDIUM: "+c.subject+" has had no usable answer for too long",
-				[]string{"problem   no usable answer for 15m0s"}, timClockOpen, timFailingAction))
+			timSameText(t, SlackText(open), timText(":large_orange_circle: *MEDIUM* · "+c.subject+" has had no usable answer for too long",
+				[]string{"problem    no usable answer for 15m0s"}, timClockOpen, timFailingAction))
 			resolve := timEvent(alert.EventResolve, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15m0s", true)
-			timSameText(t, SlackText(resolve), timText(":white_check_mark: RESOLVED: "+c.subject+" has usable answers again",
-				[]string{"expected  -", "now       a server answers now"}, timClockResolved, timResolveAction))
+			timSameText(t, SlackText(resolve), timText(":white_check_mark: *RESOLVED* · "+c.subject+" has usable answers again",
+				[]string{"now        a server answers"}, timClockResolved, timResolveAction))
 		})
 	}
 }
@@ -130,12 +130,12 @@ func TestSlackTextOfZoneChangedForOpenUpdateAndResolve(t *testing.T) {
 		want string
 	}{
 		{"open", timEvent(alert.EventOpen, decide.RuleZoneChanged, decide.SeverityLow, scope, two, false),
-			timText(":large_yellow_circle: LOW: "+head, []string{timLineNS2, timLineNS1}, timClockNoClean, timChangedAction)},
+			timText(":large_yellow_circle: *LOW* · "+head, []string{timLineNS2, timLineNS1}, timClockNoClean, timChangedAction)},
 		{"update", timEvent(alert.EventUpdate, decide.RuleZoneChanged, decide.SeverityLow, scope, timLineAgain, true),
-			timText(":large_yellow_circle: LOW, changed again: "+head, []string{timLineAgain}, timClockOpen, timChangedAction)},
+			timText(":large_yellow_circle: *LOW*, changed again · "+head, []string{timLineAgain}, timClockOpen, timChangedAction)},
 		{"resolve", timEvent(alert.EventResolve, decide.RuleZoneChanged, decide.SeverityLow, scope, two, true),
-			timText(":white_check_mark: RESOLVED: the zone `corp.test.` has not changed again for a while",
-				[]string{"expected  -", "now       no new change of the serial"}, timClockResolved, timResolveAction)},
+			timText(":white_check_mark: *RESOLVED* · the zone `corp.test.` has not changed again for a while",
+				[]string{"now        no new change of the serial"}, timClockResolved, timResolveAction)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			timSameText(t, SlackText(c.e), c.want)
@@ -145,7 +145,7 @@ func TestSlackTextOfZoneChangedForOpenUpdateAndResolve(t *testing.T) {
 
 func TestSlackTextOfZoneChangedShowsAtMostSixServers(t *testing.T) {
 	scope := timScope(t)
-	head := ":large_yellow_circle: LOW: the zone `corp.test.` changed, and no watched record differs"
+	head := ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no watched record differs"
 	var lines []string
 	for i := range 8 {
 		lines = append(lines, "10.53.0."+strconv.Itoa(11+i)+":53 ns"+strconv.Itoa(1+i)+".corp.test. serial 1 until 2026-11-13T10:00:00Z, 2 since 2026-11-13T10:00:15Z")
@@ -174,8 +174,8 @@ func TestSlackTextOfTimingRulesCleansTheValue(t *testing.T) {
 
 	failing := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, www, odd, true)
 	text := SlackText(failing)
-	timSameText(t, text, timText(":large_orange_circle: MEDIUM: the records check of `www.corp.test. A` has had no usable answer for too long",
-		[]string{"problem   " + Clean(odd, 160)}, timClockOpen, timFailingAction))
+	timSameText(t, text, timText(":large_orange_circle: *MEDIUM* · the records check of `www.corp.test. A` has had no usable answer for too long",
+		[]string{"problem    " + Clean(odd, 160)}, timClockOpen, timFailingAction))
 	timPlainText(t, text, 2)
 
 	var value []string
@@ -185,17 +185,19 @@ func TestSlackTextOfTimingRulesCleansTheValue(t *testing.T) {
 	changed := timEvent(alert.EventUpdate, decide.RuleZoneChanged, decide.SeverityLow, timScope(t), strings.Join(value, "\n"), true)
 	text = SlackText(changed)
 	view := []string{Clean(odd, 160), Clean(long, 160), Clean(odd, 160), Clean(long, 160), Clean(odd, 160), Clean(long, 160), "and 12 more servers"}
-	timSameText(t, text, timText(":large_yellow_circle: LOW, changed again: the zone `corp.test.` changed, and no watched record differs",
+	timSameText(t, text, timText(":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no watched record differs",
 		view, timClockOpen, timChangedAction))
 	timPlainText(t, text, 1)
 }
 
 // timPlainText checks what holds for every notice: printable ASCII and LF
-// only, no < or >, the code block and f code spans, at most 3000 octets.
+// only, besides the middle dot with a space on each side, no < or >, the
+// code block and f code spans, at most 3000 octets.
 func timPlainText(t *testing.T, text string, f int) {
 	t.Helper()
-	for i := 0; i < len(text); i++ {
-		if c := text[i]; ((c < 0x20 || c > 0x7e) && c != '\n') || c == '<' || c == '>' {
+	ascii := strings.ReplaceAll(text, " · ", " . ")
+	for i := 0; i < len(ascii); i++ {
+		if c := ascii[i]; ((c < 0x20 || c > 0x7e) && c != '\n') || c == '<' || c == '>' {
 			t.Errorf("octet %#x at %d", c, i)
 		}
 	}

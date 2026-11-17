@@ -3,8 +3,10 @@ package deliver
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Opsek/dns-monitoring/internal/alert"
 	"github.com/Opsek/dns-monitoring/internal/decide"
@@ -60,7 +62,8 @@ func SlackMessage(e alert.Event) []byte {
 // wording is the text of one rule. {D}, {N} and {NT} stand for the domain,
 // the name, and the name with its type, each as inline code; {K} for the
 // kind of the check, a fixed word of the tool. now is the view line of a
-// resolve.
+// resolve; it is empty for the rules that compare a set, whose resolve view
+// lists the expected records.
 type wording struct {
 	phrase, resolved, action, now string
 }
@@ -70,19 +73,17 @@ var wordings = map[decide.Rule]wording{
 		phrase:   "nameservers of {D} changed at the parent zone",
 		resolved: "nameservers of {D} are as expected again",
 		action:   "If you did not change the nameservers, contact your registrar now.",
-		now:      "as expected again",
 	},
 	decide.RuleRecordSet: {
 		phrase:   "{NT} changed",
 		resolved: "{NT} is as expected again",
 		action:   "If you did not make this change, check your DNS provider account now.",
-		now:      "as expected again",
 	},
 	decide.RuleZone: {
 		phrase:   "{N} is answered from an unexpected zone",
 		resolved: "{N} is answered from the expected zone again",
 		action:   "If you did not create this zone, check the delegations under {D} at your DNS provider.",
-		now:      "as expected again",
+		now:      "the expected zone",
 	},
 	decide.RuleNotCovered: {
 		phrase:   "{NT} has no expectation and is not checked",
@@ -100,7 +101,7 @@ var wordings = map[decide.Rule]wording{
 		phrase:   "the {K} check of {NT} has had no usable answer for too long",
 		resolved: "the {K} check of {NT} has usable answers again",
 		action:   "Find out why no server of {D} answers this machine; until one does, a change there is not seen.",
-		now:      "a server answers now",
+		now:      "a server answers",
 	},
 	decide.RuleZoneChanged: {
 		phrase:   "the zone {D} changed, and no watched record differs",
@@ -120,10 +121,34 @@ var emoji = map[decide.Severity]string{
 	decide.SeverityLow:      ":large_yellow_circle:",
 }
 
-// maxServers caps the server lines, which keeps the text within 3000 octets.
-const maxServers = 6
+// The fixed words of the view and the times line.
+const (
+	labelExpected = "expected"
+	labelOr       = "or"
+	labelNow      = "now"
+	labelSeenAt   = "seen at"
+	labelProblem  = "problem"
 
-const timeLayout = "2006-01-02 15:04:05 UTC"
+	// labelWidth makes the values of the code block stand under each other.
+	labelWidth = 11
+
+	dot = " · " // U+00B7, the only octet outside ASCII in a text
+
+	timeOfDay  = "15:04:05"
+	dateLayout = "2 Jan 2006"
+)
+
+// The caps keep the text near 3000 octets: the width of a record, records of
+// one list, texts that servers gave, and server lines in the whole view.
+// maxText is the last guard.
+const (
+	recordWidth = 120
+	maxRecords  = 6
+	maxAnswers  = 3
+	maxServers  = 6
+	maxText     = 3000
+	cutLine     = "[cut]"
+)
 
 // SlackText is the notice of e. Every string that comes from DNS or from the
 // expectations file passes through Clean and stands inside code. A rule
@@ -135,10 +160,24 @@ func SlackText(e alert.Event) string {
 		phrase, action = w.resolved, resolvedAction
 	}
 	fill := fields(e.Alert.Check)
-	lines := []string{headline(e) + ": " + fill.Replace(phrase), "", "```"}
-	lines = append(lines, view(e, w.now)...)
-	lines = append(lines, "```", "", times(e), "", ":point_right: "+fill.Replace(action))
-	return strings.Join(lines, "\n")
+	return compose(headline(e)+dot+fill.Replace(phrase), view(e, w.now), times(e), fill.Replace(action))
+}
+
+// compose joins the four parts, each set apart by one empty line. When the
+// text is over maxText, lines go from the end of the view, which then ends
+// with a cut line; the other parts are never cut.
+func compose(headline string, view []string, times, action string) string {
+	text := assemble(headline, view, times, action)
+	for len(text) > maxText && len(view) > 0 {
+		view = view[:len(view)-1]
+		text = assemble(headline, append(slices.Clone(view), cutLine), times, action)
+	}
+	return text
+}
+
+func assemble(headline string, view []string, times, action string) string {
+	block := strings.Join(slices.Concat([]string{"```"}, view, []string{"```"}), "\n")
+	return strings.Join([]string{headline, block, times, ":point_right: " + action}, "\n\n")
 }
 
 // fields fills the placeholders of a wording. A Replacer scans only the
@@ -152,81 +191,255 @@ func fields(k obs.Key) *strings.Replacer {
 		"{NT}", "`"+name+" "+Clean(k.Type.String(), 20)+"`")
 }
 
+// title is the start of a headline; the two asterisks make the word bold.
+func title(emoji, word, suffix string) string {
+	return emoji + " *" + word + "*" + suffix
+}
+
 func headline(e alert.Event) string {
 	sev := e.Alert.Severity
-	head := emoji[sev] + " " + strings.ToUpper(sev.String())
+	word := strings.ToUpper(sev.String())
 	switch e.Kind {
-	case alert.EventOpen:
-		return head
 	case alert.EventUpdate:
-		return head + ", changed again"
+		return title(emoji[sev], word, ", changed again")
 	case alert.EventEscalate:
-		return head + ", raised from " + e.Was.String()
+		return title(emoji[sev], word, ", raised from "+e.Was.String())
 	case alert.EventReminder:
-		return head + ", still open"
+		return title(emoji[sev], word, ", still open")
 	case alert.EventResolve:
-		return ":white_check_mark: RESOLVED"
+		return title(":white_check_mark:", "RESOLVED", "")
+	case alert.EventOpen:
+		return title(emoji[sev], word, "")
 	}
-	return head
+	return title(emoji[sev], word, "")
 }
 
-// view gives the lines of the code block. Each label takes 10 columns, so the
-// values stand under each other. resolvedNow is the now line of a resolve.
-func view(e alert.Event, resolvedNow string) []string {
-	a := e.Alert
-	resolve := e.Kind == alert.EventResolve
-	if !resolve && (a.Rule == decide.RuleInvalidFile || a.Rule == decide.RuleCheckFailing) {
-		return []string{"problem   " + Clean(a.Value, 160)}
-	}
-	if !resolve && a.Rule == decide.RuleZoneChanged {
-		// This alert has no server lines: each line of Value is one move.
-		var moves []string
-		for _, m := range strings.Split(a.Value, "\n") {
-			moves = append(moves, Clean(m, 160))
+// pad writes a label in the width that all labels share.
+func pad(label string) string {
+	return label + strings.Repeat(" ", labelWidth-len(label))
+}
+
+// row is one line of a record list; label is empty on a line that continues
+// the list.
+type row struct{ label, text string }
+
+// rowsOf gives one row for each record of text, the first under label.
+func rowsOf(label, text string) []row {
+	var rows []row
+	for i, record := range splitOutsideQuotes(text, " | ") {
+		if i > 0 {
+			label = ""
 		}
-		return capped(moves)
+		rows = append(rows, row{label, record})
 	}
-	expected := Clean(a.Expected, 160)
-	if expected == "" {
-		expected = "-"
-	}
-	lines := []string{"expected  " + expected}
-	if resolve {
-		return append(lines, "now       "+resolvedNow)
-	}
-	var servers []string
-	for _, l := range a.Lines {
-		servers = append(servers, nowLine(l))
-	}
-	return append(lines, capped(servers)...)
+	return rows
 }
 
-// capped keeps the first maxServers lines and counts the others.
-func capped(lines []string) []string {
-	if more := len(lines) - maxServers; more > 0 {
-		return append(lines[:maxServers], "and "+strconv.Itoa(more)+" more servers")
+// splitOutsideQuotes cuts s at each sep that stands outside double quotes. A
+// backslash keeps the next octet, as in record data, so a quote or a bar
+// inside a TXT string never cuts the record.
+func splitOutsideQuotes(s, sep string) []string {
+	var parts []string
+	start, quoted := 0, false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '\\':
+			i++
+		case s[i] == '"':
+			quoted = !quoted
+		case !quoted && strings.HasPrefix(s[i:], sep):
+			parts = append(parts, s[start:i])
+			i += len(sep) - 1
+			start = i + 1
+		}
+	}
+	return append(parts, s[start:])
+}
+
+// recordLines writes at most maxRecords rows, then the count of the others.
+// An empty record shows as "-".
+func recordLines(rows []row) []string {
+	var lines []string
+	for _, r := range rows[:min(len(rows), maxRecords)] {
+		text := Clean(r.text, recordWidth)
+		if text == "" {
+			text = "-"
+		}
+		lines = append(lines, pad(r.label)+text)
+	}
+	if more := len(rows) - maxRecords; more > 0 {
+		lines = append(lines, pad("")+"and "+strconv.Itoa(more)+" more records")
 	}
 	return lines
 }
 
-func nowLine(l alert.Line) string {
+// expectedRows lists the expected records under first; each later
+// alternative starts on a line with the label "or".
+func expectedRows(first, text string) []row {
+	var rows []row
+	for i, alt := range splitOutsideQuotes(text, " || ") {
+		label := labelOr
+		if i == 0 {
+			label = first
+		}
+		rows = append(rows, rowsOf(label, alt)...)
+	}
+	return rows
+}
+
+// view gives the lines of the code block. resolvedNow is the now line of a
+// resolve.
+func view(e alert.Event, resolvedNow string) []string {
+	a := e.Alert
+	if e.Kind == alert.EventResolve {
+		return resolveView(a, resolvedNow)
+	}
+	switch a.Rule {
+	case decide.RuleInvalidFile, decide.RuleCheckFailing:
+		return []string{pad(labelProblem) + Clean(a.Value, 160)}
+	case decide.RuleZoneChanged:
+		// Each line of Value is one move; the alert has no server lines.
+		return moveLines(strings.Split(a.Value, "\n"))
+	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered:
+	}
+	return append(recordLines(expectedRows(labelExpected, a.Expected)), seenLines(a.Lines)...)
+}
+
+// resolveView shows the state now. The rules that compare a set have no
+// words of their own: the state now is the expected one.
+func resolveView(a alert.Alert, now string) []string {
+	if now != "" {
+		return []string{pad(labelNow) + now}
+	}
+	return recordLines(expectedRows(labelNow, a.Expected))
+}
+
+// answer is a text that servers gave, with the lines that carry it.
+type answer struct {
+	text    string
+	servers []alert.Line
+}
+
+// answers groups lines by their text, in order of first appearance.
+func answers(lines []alert.Line) []answer {
+	var out []answer
+	for _, l := range lines {
+		i := slices.IndexFunc(out, func(a answer) bool { return a.text == l.Text })
+		if i < 0 {
+			out = append(out, answer{text: l.Text})
+			i = len(out) - 1
+		}
+		out[i].servers = append(out[i].servers, l)
+	}
+	return out
+}
+
+// seenLines gives a block for each of the first maxAnswers distinct texts,
+// with its servers. At most maxServers server lines stand in the whole view;
+// a text that no server line is left for counts as an answer not shown.
+func seenLines(lines []alert.Line) []string {
+	all := answers(lines)
+	var out []string
+	left, more, blocks := maxServers, 0, 0
+	for _, a := range all {
+		if blocks == maxAnswers || left == 0 {
+			break
+		}
+		blocks++
+		shown := a.servers[:min(left, len(a.servers))]
+		left -= len(shown)
+		more += len(a.servers) - len(shown)
+		out = append(out, "")
+		out = append(out, recordLines(rowsOf(labelNow, a.text))...)
+		out = append(out, serverLines(shown)...)
+	}
+	if more > 0 {
+		out = append(out, pad("")+"and "+strconv.Itoa(more)+" more servers")
+	}
+	if hidden := len(all) - blocks; hidden > 0 {
+		out = append(out, pad("")+"and "+strconv.Itoa(hidden)+" more answers")
+	}
+	return out
+}
+
+// moveLines keeps the first maxServers moves and counts the others.
+func moveLines(moves []string) []string {
+	var out []string
+	for _, m := range moves[:min(len(moves), maxServers)] {
+		out = append(out, Clean(m, 160))
+	}
+	if more := len(moves) - maxServers; more > 0 {
+		out = append(out, "and "+strconv.Itoa(more)+" more servers")
+	}
+	return out
+}
+
+func serverLines(lines []alert.Line) []string {
+	var out []string
+	for i, l := range lines {
+		label := ""
+		if i == 0 {
+			label = labelSeenAt
+		}
+		out = append(out, pad(label)+serverText(l))
+	}
+	return out
+}
+
+func serverText(l alert.Line) string {
 	host, addr := "-", "-"
 	if l.Server.Name.LabelCount() > 0 {
 		host = Clean(l.Server.Name.Lower().String(), 64)
 	}
-	if l.Server.Addr.IsValid() {
-		addr = Clean(l.Server.Addr.String(), 64)
+	if a := l.Server.Addr; a.IsValid() {
+		// The port is shown only when it is not the DNS port.
+		shown := a.String()
+		if a.Port() == 53 {
+			shown = a.Addr().String()
+		}
+		addr = Clean(shown, 64)
 	}
-	return "now       " + Clean(l.Text, 160) + "   at " + host + " (" + addr + "), TTL " + strconv.FormatUint(uint64(l.TTL), 10)
+	return host + " (" + addr + ")   TTL " + strconv.FormatUint(uint64(l.TTL), 10)
 }
 
 func times(e alert.Event) string {
-	first := ":clock3: First seen " + e.Alert.Opened.UTC().Format(timeLayout) + " / "
+	a := e.Alert
+	first := a.Opened.UTC()
 	switch {
 	case e.Kind == alert.EventResolve:
-		return first + "Resolved " + e.At.UTC().Format(timeLayout)
-	case e.Alert.LastClean.IsZero():
-		return first + "Last OK: no clean check recorded"
+		end := e.At.UTC()
+		return ":clock3: Open for " + openFor(end.Sub(first)) + dot + span("first seen", "resolved", first, end)
+	case a.LastClean.IsZero():
+		return ":clock3: First seen " + first.Format(timeOfDay) + dot + "no clean check before" + dot + first.Format(dateLayout) + " UTC"
 	}
-	return first + "Last OK " + e.Alert.LastClean.UTC().Format(timeLayout)
+	return ":clock3: " + span("First seen", "last OK", first, a.LastClean.UTC())
+}
+
+// span names two moments; the date stands once when both fall on one day.
+func span(firstWord, secondWord string, first, second time.Time) string {
+	if first.Format(dateLayout) == second.Format(dateLayout) {
+		return firstWord + " " + first.Format(timeOfDay) + dot + secondWord + " " + second.Format(timeOfDay) + dot + first.Format(dateLayout) + " UTC"
+	}
+	return firstWord + " " + first.Format(dateLayout+" "+timeOfDay) + dot + secondWord + " " + second.Format(dateLayout+" "+timeOfDay) + dot + "UTC"
+}
+
+// openFor writes d, cut to whole seconds: its largest unit that is not zero,
+// and the next smaller unit when that one is not zero either.
+func openFor(d time.Duration) string {
+	left := max(int64(d/time.Second), 0)
+	var amounts []int64
+	names := []string{"d", "h", "min", "s"}
+	for _, secs := range []int64{86400, 3600, 60, 1} {
+		amounts = append(amounts, left/secs)
+		left %= secs
+	}
+	i := slices.IndexFunc(amounts, func(n int64) bool { return n > 0 })
+	if i < 0 {
+		return "0 s"
+	}
+	out := strconv.FormatInt(amounts[i], 10) + " " + names[i]
+	if i+1 < len(amounts) && amounts[i+1] > 0 {
+		out += " " + strconv.FormatInt(amounts[i+1], 10) + " " + names[i+1]
+	}
+	return out
 }

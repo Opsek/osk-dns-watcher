@@ -19,9 +19,40 @@ const (
 	slkLabPath = "/slack/T0/B0/" + slkMarker
 )
 
-const slkTimeLayout = "2006-01-02 15:04:05 UTC"
+// The line of times of a message gives each time as 15:04:05 and its date as
+// 2 Jan 2006, once at the end or before each time.
+var (
+	slkClockTime = regexp.MustCompile(`\d{2}:\d{2}:\d{2}`)
+	slkClockDate = regexp.MustCompile(`\d{1,2} [A-Z][a-z]{2} \d{4}`)
+	slkOpenFor   = regexp.MustCompile(`Open for \d+ (?:d|h|min|s)(?: \d+ (?:h|min|s))?`)
+)
 
-var slkTimes = regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC`)
+// slkClock reads the times of a line of times, in the order of the line, and
+// gives the line with each time written <time>, each date <date> and the time
+// open <duration>.
+func slkClock(t *testing.T, line string) ([]time.Time, string) {
+	t.Helper()
+	clocks, dates := slkClockTime.FindAllString(line, -1), slkClockDate.FindAllString(line, -1)
+	if len(dates) != 1 && len(dates) != len(clocks) {
+		t.Errorf("the line of times %q holds %d times and %d dates", line, len(clocks), len(dates))
+		return nil, line
+	}
+	var times []time.Time
+	for i, c := range clocks {
+		date := dates[0]
+		if len(dates) > 1 {
+			date = dates[i]
+		}
+		at, err := time.Parse("2 Jan 2006 15:04:05", date+" "+c)
+		if err != nil {
+			t.Errorf("time %q: %v", date+" "+c, err)
+		}
+		times = append(times, at)
+	}
+	line = slkOpenFor.ReplaceAllString(line, "Open for <duration>")
+	line = slkClockTime.ReplaceAllString(line, "<time>")
+	return times, slkClockDate.ReplaceAllString(line, "<date>")
+}
 
 // slkRun is one run of osk check and the times just before and after it.
 type slkRun struct {
@@ -100,24 +131,25 @@ func slkSlackText(t *testing.T, hook string) string {
 }
 
 // slkSameText compares a message with want, in which each time is written
-// "<time>". The times of the message must lie, in order, in the runs given,
-// and are returned.
-func slkSameText(t *testing.T, got string, want []string, in ...slkRun) []string {
+// "<time>", each date "<date>" and the time open "<duration>". The times of
+// the message must lie, in order, in the runs given, and are returned.
+func slkSameText(t *testing.T, got string, want []string, in ...slkRun) []time.Time {
 	t.Helper()
-	times := slkTimes.FindAllString(got, -1)
+	var times []time.Time
+	lines := strings.Split(got, "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, ":clock3: ") {
+			times, lines[i] = slkClock(t, l)
+		}
+	}
 	if len(times) != len(in) {
 		t.Errorf("the message holds %d times, want %d:\n%s", len(times), len(in), slkShow(got))
 		return times
 	}
-	for i, s := range times {
-		at, err := time.Parse(slkTimeLayout, s)
-		if err != nil {
-			t.Errorf("time %q: %v", s, err)
-			continue
-		}
-		slkWithin(t, "time "+s, at, in[i].start.Truncate(time.Second), in[i].end)
+	for i, at := range times {
+		slkWithin(t, "time "+at.Format("2 Jan 2006 15:04:05"), at, in[i].start.Truncate(time.Second), in[i].end)
 	}
-	if norm := slkTimes.ReplaceAllString(got, "<time>"); norm != strings.Join(want, "\n") {
+	if norm := strings.Join(lines, "\n"); norm != strings.Join(want, "\n") {
 		t.Errorf("message:\n%s\nwant:\n%s", slkShow(got), strings.Join(want, "\n"))
 	}
 	return times
@@ -127,28 +159,38 @@ func slkSameText(t *testing.T, got string, want []string, in ...slkRun) []string
 // the name servers of dnshost.test.
 func slkNameServersOpen(n string) []string {
 	return []string{
-		":rotating_light: CRITICAL: nameservers of `corp.test.` changed at the parent zone",
+		":rotating_light: *CRITICAL* · nameservers of `corp.test.` changed at the parent zone",
 		"",
 		"```",
-		"expected  ns1.corp.test. | ns2.corp.test.",
-		"now       ns1.dnshost.test. | ns2.dnshost.test.   at ns.test. (" + n + "3:53), TTL 300",
+		"expected   ns1.corp.test.",
+		"           ns2.corp.test.",
+		"",
+		"now        ns1.dnshost.test.",
+		"           ns2.dnshost.test.",
+		"seen at    ns.test. (" + n + "3)   TTL 300",
 		"```",
 		"",
-		":clock3: First seen <time> / Last OK <time>",
+		slkClockOpen,
 		"",
 		":point_right: If you did not change the nameservers, contact your registrar now.",
 	}
 }
 
+const (
+	slkClockOpen    = ":clock3: First seen <time> · last OK <time> · <date> UTC"
+	slkClockNoClean = ":clock3: First seen <time> · no clean check before · <date> UTC"
+	slkClockClosed  = ":clock3: Open for <duration> · first seen <time> · resolved <time> · <date> UTC"
+)
+
 var slkNameServersResolved = []string{
-	":white_check_mark: RESOLVED: nameservers of `corp.test.` are as expected again",
+	":white_check_mark: *RESOLVED* · nameservers of `corp.test.` are as expected again",
 	"",
 	"```",
-	"expected  ns1.corp.test. | ns2.corp.test.",
-	"now       as expected again",
+	"now        ns1.corp.test.",
+	"           ns2.corp.test.",
 	"```",
 	"",
-	":clock3: First seen <time> / Resolved <time>",
+	slkClockClosed,
 	"",
 	":point_right: If you did not make or undo this change yourself, find out who did.",
 }
@@ -219,7 +261,7 @@ func TestSlackAlertThenResolved(t *testing.T) {
 		t.Errorf("the first stored request changed:\n%s\nwant:\n%s", slkShow(hooks[0]), slkShow(sent[0]))
 	}
 	resolved := slkSameText(t, slkSlackText(t, hooks[1]), slkNameServersResolved, r2, r4)
-	if len(opened) > 0 && len(resolved) > 0 && resolved[0] != opened[0] {
+	if len(opened) > 0 && len(resolved) > 0 && !resolved[0].Equal(opened[0]) {
 		t.Errorf("the resolved message gives first seen %s, the open one %s", resolved[0], opened[0])
 	}
 }
@@ -244,14 +286,16 @@ func TestAlertCarriesProof(t *testing.T) {
 		"delivery slack sent open high record-set records www.corp.test. A")
 	sent := slkHookCount(t, "after the change", 1)
 	slkSameText(t, slkSlackText(t, sent[0]), []string{
-		":red_circle: HIGH: `www.corp.test. A` changed",
+		":red_circle: *HIGH* · `www.corp.test. A` changed",
 		"",
 		"```",
-		"expected  " + n + "81",
-		"now       " + n + "99   at ns2.corp.test. (" + n + "12:53), TTL 120",
+		"expected   " + n + "81",
+		"",
+		"now        " + n + "99",
+		"seen at    ns2.corp.test. (" + n + "12)   TTL 120",
 		"```",
 		"",
-		":clock3: First seen <time> / Last OK <time>",
+		slkClockOpen,
 		"",
 		":point_right: If you did not make this change, check your DNS provider account now.",
 	}, r2, r1)

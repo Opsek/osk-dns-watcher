@@ -1,7 +1,8 @@
 #!/bin/sh
-# Runs the quality gate: the phases build, static, tests, selftest, lab and
-# clean, in order, stopping at the first failure. Each check prints "ok <name>" or
-# "FAIL <name>: <reason>"; the exit code is 0 only if every check passed.
+# Runs the quality gate: the phases build, static, tests, selftest, lab,
+# quickstart and clean, in order, stopping at the first failure. Each check
+# prints "ok <name>" or "FAIL <name>: <reason>"; the exit code is 0 only if
+# every check passed.
 # "gate/bin/gate build" runs the build phase only.
 #
 # It writes out/gate.log, one line "<phase> ok" for each phase that passed and
@@ -14,13 +15,16 @@
 # lab/accept/host.sh starts. Gates in two checkouts can run at once when no
 # lab number is in both. FUZZTIME (default 20s) is the length of each fuzz
 # run. DOCKER (default docker) and BUILD_FLAGS (default empty) may hold
-# several words each, so they stay unquoted.
+# several words each, so they stay unquoted. DOCKER_SOCK (default
+# /var/run/docker.sock) is the path of the Docker socket as the daemon sees
+# it: the daemon mounts it into the container of the quickstart phase.
 # shellcheck disable=SC2086
 set -u
 
 DOCKER=${DOCKER:-docker}
 BUILD_FLAGS=${BUILD_FLAGS:-}
 LAB_ID=${LAB_ID:-0}
+DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}
 export DOCKER BUILD_FLAGS LAB_ID
 
 cd "$(dirname "$0")/../.." || exit 2
@@ -139,7 +143,9 @@ lab_phase() {
 	ok lab-accept
 	set -- $labtests
 	while [ $# -ge 2 ]; do
-		lab_test "$1" "$2"
+		# The tests of deploy/ drive Docker, not the lab runner: the
+		# quickstart phase runs them.
+		[ "$1" = ./deploy ] || lab_test "$1" "$2"
 		shift 2
 	done
 	[ -f lab/accept/host.sh ] || fail lab-host "lab/accept/host.sh is missing"
@@ -165,13 +171,61 @@ lab_test() {
 	ok "lab-test $2"
 }
 
-# The build cache volume is meant to stay, whatever its labels.
+# The tests of deploy/ run the quick start of README.md in a container that
+# has only git and the Docker CLI, as a new user's machine has. They reach
+# the daemon through its socket, and everything they start belongs to the
+# Compose project oskqs<LAB_ID>. The other architecture builds under
+# emulation, so it skips the update, whose steps do not depend on it.
+quickstart_phase() {
+	bin=$(binary github.com/Opsek/dns-monitoring/deploy)
+	[ -f "$bin" ] || fail quickstart "deploy/ has no lab tests"
+	clean_sum=$(cksum <gate/clean/Dockerfile) || exit 2
+	clean=osk-gate-clean:${clean_sum%% *}
+	log=$($DOCKER buildx build $BUILD_FLAGS -t "$clean" --load gate/clean 2>&1) ||
+		{ echo "$log"; fail clean-image "the build of gate/clean/Dockerfile failed"; }
+	ok clean-image
+	lab_up=1
+	lab/bin/lab up || fail lab-up "lab/bin/lab up failed"
+	ok lab-up
+	native=$($DOCKER version --format '{{.Server.Arch}}') || fail quickstart "docker version failed"
+	case $native in
+	amd64) other=arm64 ;;
+	arm64) other=amd64 ;;
+	*) fail quickstart "the Docker daemon runs on $native, not amd64 or arm64" ;;
+	esac
+	quickstart "$native" '^(TestQuickStartGivesTestAlert|TestImageLooksUpAndCallsHTTPS|TestUpdateKeepsSetup)$'
+	quickstart "$other" '^(TestQuickStartGivesTestAlert|TestImageLooksUpAndCallsHTTPS)$'
+	lab/bin/lab down || fail lab-down "lab/bin/lab down failed"
+	lab_up=
+	ok lab-down
+	passed quickstart
+}
+
+# quickstart <arch> <pattern> runs the tests of deploy/ that match pattern for
+# the platform linux/<arch>.
+quickstart() {
+	$DOCKER run --rm --network none --label "osk.gate=$LAB_ID" \
+		-v "$DOCKER_SOCK":/var/run/docker.sock \
+		-v "$repo":/src:ro -w /src/deploy -e LAB_ID -e QUICKSTART_PLATFORM="linux/$1" \
+		"$clean" "/src/$bin" -test.v=test2json -test.paniconexit0 -test.timeout=90m -test.run "$2" \
+		>"$bin.$1.out" 2>&1
+	status=$?
+	box -i "$image" go tool test2json -t -p github.com/Opsek/dns-monitoring/deploy <"$bin.$1.out" >>out/tests.json ||
+		fail "quickstart-$1" "go tool test2json could not read the test output"
+	[ "$status" -eq 0 ] || { cat "$bin.$1.out"; fail "quickstart-$1" "the quick start tests failed (output above)"; }
+	ok "quickstart-$1"
+}
+
+# The build cache volume is meant to stay, whatever its labels. Compose labels
+# what it makes, the images too, with the name of its project.
 clean_phase() {
-	left=$(for label in "osk.gate=$LAB_ID" "osk.lab=$LAB_ID"; do
+	project=com.docker.compose.project=oskqs$LAB_ID
+	left=$(for label in "osk.gate=$LAB_ID" "osk.lab=$LAB_ID" "$project"; do
 		$DOCKER container ls -a --filter "label=$label" --format '{{.Names}}'
 		$DOCKER network ls --filter "label=$label" --format '{{.Name}}'
 		$DOCKER volume ls --filter "label=$label" --format '{{.Name}}'
-	done | grep -vx osk-gate-gocache)
+	done | grep -vx osk-gate-gocache
+	$DOCKER image ls --filter "label=$project" --format '{{.Repository}}:{{.Tag}}')
 	[ -z "$left" ] || fail clean "left behind: $(echo $left)"
 	passed clean
 }
@@ -206,4 +260,5 @@ static_phase
 tests_phase
 selftest_phase
 lab_phase
+quickstart_phase
 clean_phase

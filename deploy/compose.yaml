@@ -1,0 +1,22 @@
+# osk as a Compose service. Its config, expectations, webhook URL and
+# history live in the volume "data", which updates keep. start.sh sets it up.
+name: osk
+
+x-osk: &osk
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  volumes:
+    - data:/data
+
+services:
+  osk:
+    <<: *osk
+    restart: unless-stopped
+  init:
+    <<: *osk
+    profiles: [setup]
+    command: [init, --config, /data/osk.json]
+
+volumes:
+  data:

@@ -63,10 +63,15 @@ services:
     command: ["unbound", "-d", "-c", "/etc/osklab/liar.conf"]
     networks: {lab: {ipv4_address: "10.53.${LAB_ID}.21"}}
 
+  # The alias lets other containers on the lab network, such as osk started
+  # by Compose, find hooks.lab.test through Docker's DNS.
   receiver:
     <<: *host
     command: ["receiver"]
-    networks: {lab: {ipv4_address: "10.53.${LAB_ID}.30"}}
+    networks:
+      lab:
+        ipv4_address: "10.53.${LAB_ID}.30"
+        aliases: [hooks.lab.test]
 
   runner:
     <<: *host

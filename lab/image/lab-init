@@ -6,7 +6,7 @@ cd /lab
 # A second lab up must keep the keys that the running servers use.
 # lies.conf is the last file written, so its presence means init is done.
 [ -e lies.conf ] && exit 0
-mkdir -p root tld ns1 ns2 unbound
+mkdir -p root tld ns1 ns2 unbound ca
 
 tsig-keygen -a hmac-sha256 xfr-key > xfr.key
 tsig-keygen -a hmac-sha256 ctl-key > ctl.key
@@ -18,6 +18,9 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
 	-subj /CN=hooks.lab.test -CA ca.pem -CAkey ca.key \
 	-addext subjectAltName=DNS:hooks.lab.test -addext basicConstraints=critical,CA:FALSE \
 	-keyout hooks.key -out hooks.pem 2> /dev/null
+# ca/ holds the CA certificate alone: a container that reads every file of
+# a folder, as SSL_CERT_DIR does, then trusts the CA and no key or leaf.
+cp ca.pem ca/
 chmod 644 ./*.key unbound/*
 
 printf '.\t3600000\tNS\troot-ns.\nroot-ns.\t3600000\tA\t10.53.%s.2\n' "$LAB_ID" > root.hints

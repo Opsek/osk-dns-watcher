@@ -1414,6 +1414,20 @@ EOF
 	} | put "$1"
 }
 
+# failing <file> <package>: a test that always fails.
+failing() {
+	{
+		printf "package %s\n\n" "$2"
+		cat <<'EOF'
+import "testing"
+
+func TestZzFault(t *testing.T) {
+	t.Fatal("planted failure")
+}
+EOF
+	} | put "$1"
+}
+
 # A test that fails when it ran before, after one run that leaves its result
 # in the build cache. The test cache does not see files that a test opens
 # through syscall. The test logs a new value on each self-test, or the first
@@ -1681,6 +1695,8 @@ check tlc-false-invariant           broken_model               static 'tlc model
 check phase-clean-tests             none                       tests pass
 check race-plain                    'racy internal/store/zzfault_test.go' tests go-test-race
 check tests-not-cached              second_run_fails           tests go-test-race
+check test-failure-other-package    'failing internal/store/zzfault_test.go store' tests go-test-race
+check test-failure-mutate           'failing gate/mutate/zzfault_test.go main' tests go-test-race
 
 check fuzz-runs                     'fuzz_test internal/store/zzfault_test.go'  fuzz pass
 check fuzz-not-found                "fuzz_test $L lab"         fuzz 'fuzz internal/store FuzzZzFault'

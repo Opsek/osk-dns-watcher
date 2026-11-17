@@ -53,16 +53,36 @@ pick() {
 	esac
 }
 
+# control runs a control command and prints its output. A server that has just
+# reloaded or restarted listens again a moment later, and a busy machine makes
+# that moment long, so a refused connection is tried again, at most 25 times.
+# A refused connection means the command did not run, so a retry cannot repeat
+# a change. Any other failure is final.
+control() {
+	i=0
+	while :; do
+		if out=$("$@" 2>&1); then
+			echo "$out"
+			return 0
+		fi
+		case $out in *[Cc]onnection\ refused*) [ $i -lt 25 ] || break ;; *) break ;; esac
+		sleep 0.2
+		i=$((i + 1))
+	done
+	echo "$out" >&2
+	return 1
+}
+
 ndc() {
 	s=$1
 	shift
-	rndc -s "$(addr "$s")" -k $ctl "$@"
+	control rndc -s "$(addr "$s")" -k $ctl "$@"
 }
 
 ucontrol() {
 	s=$1
 	shift
-	unbound-control -c /etc/osklab/unbound.conf -s "$(addr "$s")@8953" "$@"
+	control unbound-control -c /etc/osklab/unbound.conf -s "$(addr "$s")@8953" "$@"
 }
 
 answers() {
@@ -103,9 +123,10 @@ parent() {
 	} | nsupdate -k $ctl || refused "tld refused the change"
 }
 
+# A zone that does not answer within 10 s on a busy machine counts as not loaded.
 loaded() {
 	i=0
-	while [ $i -lt 50 ]; do
+	while [ $i -lt 100 ]; do
 		out=$(dig +norec +time=1 +tries=1 @"$(addr "$1")" "$2" SOA)
 		case $out in *"status: NOERROR"*"flags: qr aa"*) return 0 ;; esac
 		sleep 0.1
@@ -114,11 +135,43 @@ loaded() {
 	return 1
 }
 
+# gone waits until the server refuses the zone: named takes a zone out of its
+# view when delzone returns, but frees it a little later.
+gone() {
+	i=0
+	while [ $i -lt 50 ]; do
+		out=$(dig +norec +time=1 +tries=1 @"$(addr "$1")" "$2" SOA)
+		case $out in *"status: REFUSED"*) return 0 ;; esac
+		sleep 0.1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# delzone <server> <zone> [-clean] succeeds when the zone is gone, also when
+# it was gone before. The end state is what counts: a zone that
+# _default.nzf lists twice, or that another labctl removed first, is no failure.
+delzone() {
+	err=$(ndc "$1" delzone ${3:-} "$2" 2>&1 > /dev/null) && return 0
+	case $err in *"not found"*) return 0 ;; esac
+	echo "$err" >&2
+	return 1
+}
+
+# add reads the zone file from stdin. A zone that does not come up is removed
+# and added again, up to 3 times: a busy machine can make named late without
+# making the zone wrong. Only the last removal uses -clean, because -clean
+# deletes the zone file, which the next try needs.
 add() {
 	f=$(mktemp "/lab/$1/zone.XXXXXX") && cat > "$f" && chmod 644 "$f" || return 1
-	ndc "$1" delzone -clean "$2" > /dev/null 2>&1
-	ndc "$1" addzone "$2" "{ type primary; file \"$f\"; $3 };" > /dev/null && loaded "$1" "$2" && return 0
-	ndc "$1" delzone -clean "$2" > /dev/null 2>&1
+	delzone "$1" "$2" -clean > /dev/null 2>&1
+	n=0
+	while [ $n -lt 3 ]; do
+		ndc "$1" addzone "$2" "{ type primary; file \"$f\"; $3 };" > /dev/null 2>&1 && loaded "$1" "$2" && return 0
+		delzone "$1" "$2" > /dev/null 2>&1
+		n=$((n + 1))
+	done
+	delzone "$1" "$2" -clean > /dev/null 2>&1
 	rm -f "$f"
 	return 1
 }
@@ -128,11 +181,18 @@ zones() {
 	sed -n 's/^zone "\([^"]*\)".*/\1/p' "/lab/$1/_default.nzf" 2> /dev/null
 }
 
+# base removes every zone that the server has, adds the zones that are given,
+# and checks the end state: a zone that is not given is refused, a given zone
+# answers with authority. sort -u, because the file can list a zone twice.
 base() {
 	s=$1
 	shift
-	for z in $(zones "$s"); do
-		ndc "$s" delzone -clean "$z" > /dev/null || refused "$s did not remove $z"
+	for z in $(zones "$s" | sort -u); do
+		delzone "$s" "$z" -clean || refused "$s did not remove $z"
+		case " $* " in
+		*" $z "*) ;;
+		*) gone "$s" "$z" || refused "$s still serves $z" ;;
+		esac
 	done
 	for z; do
 		file=/etc/osklab/zones/db.${z%.}
@@ -165,12 +225,14 @@ status() {
 	return $rc
 }
 
-# A reload also empties the cache, so no old answer outlives a change.
+# A reload also empties the cache, so no old answer outlives a change. Unbound
+# listens on its control port again only after the reload, so the next
+# reload, which a reset sends right after a lie, waits in ucontrol for it.
 reload() {
 	ucontrol "$1" reload > /dev/null || refused "$1 did not reload"
 	i=0
 	until answers "$1"; do
-		[ $i -lt 50 ] || refused "$1 does not answer after reload"
+		[ $i -lt 100 ] || refused "$1 does not answer after reload"
 		sleep 0.1
 		i=$((i + 1))
 	done

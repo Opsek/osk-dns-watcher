@@ -941,6 +941,35 @@ c_set_after_reset() { # reset makes the base zones open to set again; a second r
 	want_serial ns1 corp.test. 1
 	want_serial ns2 corp.test. 1
 }
+# c_reset_zone_gone: a zone that the file _default.nzf lists but the server no longer has, and a zone
+# that the file lists twice, are no reason for reset to fail
+c_reset_zone_gone() {
+	rg_nzf=/lab/ns2/_default.nzf
+	rndc -s "$NS2" -k /lab/ctl.key delzone -clean corp.test. >/dev/null 2>&1
+	rg_line=$(grep '^zone "shop.test."' "$rg_nzf")
+	printf '%s\n' "$rg_line" >>"$rg_nzf"
+	lc reset
+	c_only_listed
+	want_zone ns2 corp.test.
+	[ "$(grep -c '^zone ' "$rg_nzf")" = 3 ] || echo "$rg_nzf after reset: want 3 zones, got $(grep -c '^zone ' "$rg_nzf")"
+}
+# c_reset_twice: a reset right after a reset, and right after a change of Unbound, gives the base state
+c_reset_twice() {
+	lc lie corp.test. MX "10 mail.evil.test."
+	lc reset
+	lc reset
+	both want_rr www.corp.test. A "$NET.81"
+	c_only_listed
+	c_base_services
+}
+# c_reset_after_failed_load: a load that labctl refuses leaves the zone as it was, and reset still works
+c_reset_after_failed_load() {
+	printf 'not a zone file\n' >"$TMP/broken.zone"
+	same "exit code of labctl load-zone ns1 corp.test. with a broken file" 1 "$(code load-zone ns1 corp.test. "$TMP/broken.zone")"
+	want_zone ns1 corp.test.
+	lc reset
+	c_only_listed
+}
 c_reset() { lc reset; }
 
 check() {
@@ -1030,6 +1059,9 @@ main() {
 	check attack-dnssec-broken c_dnssec_broken
 	check resolver-does-not-validate c_no_validation
 	check reset-from-dirty c_reset_dirty
+	check reset-zone-gone c_reset_zone_gone
+	check reset-twice c_reset_twice
+	check reset-after-failed-load c_reset_after_failed_load
 
 	check end-reset c_reset
 	base_checks end-

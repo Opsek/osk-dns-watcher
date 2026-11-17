@@ -75,6 +75,7 @@ func wireParseSeeds() []wireCase {
 		{"NSEC3PARAM", 51, wireCat([]byte{1, 0}, wireU16(0), []byte{2, 0xAB, 0xCD})},
 		{"SPF", 99, wireCat([]byte{11}, []byte("v=spf1 -all"))},
 		{"CAA", 257, wireCat([]byte{128, 5}, []byte("issue"), []byte("ca.example"))},
+		{"CAA with an odd tag", 257, wireCat([]byte{128, 7}, []byte("bad-tag"), []byte("x"))},
 	}
 	for _, d := range typed {
 		rr := wireRR(example, d.typ, wireClassIN, 3600, d.data)

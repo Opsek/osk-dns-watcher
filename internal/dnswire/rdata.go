@@ -62,7 +62,11 @@ type TXT struct{ Strings []string }
 // SPF has the form of TXT (RFC 7208 section 3.1).
 type SPF struct{ Strings []string }
 
-// CAA holds a tag of 1 to 255 ASCII letters and digits, and a value of raw octets.
+// CAA holds a tag of 1 to 255 octets and a value of raw octets. RFC 8659
+// allows only ASCII letters and digits in a tag, and ParseRData holds to that.
+// A tag read from the wire is kept as it is, other octets too: an authority
+// skips a property that it does not know and reads the rest of the set, so
+// the set must stay readable here as well.
 type CAA struct {
 	Flags      uint8
 	Tag, Value string
@@ -112,8 +116,18 @@ func (d TXT) String() string {
 	return string(b)
 }
 
+// String writes each octet of the tag that is not a letter or digit as \DDD,
+// so that no tag breaks a line of text or a field of it.
 func (d CAA) String() string {
-	return fmt.Sprintf("%d %s %s", d.Flags, d.Tag, appendQuoted(nil, d.Value))
+	tag := make([]byte, 0, len(d.Tag))
+	for i := 0; i < len(d.Tag); i++ {
+		if c := d.Tag[i]; isTagOctet(c) {
+			tag = append(tag, c)
+		} else {
+			tag = append(tag, '\\', '0'+c/100, '0'+c/10%10, '0'+c%10)
+		}
+	}
+	return fmt.Sprintf("%d %s %s", d.Flags, tag, appendQuoted(nil, d.Value))
 }
 
 // String gives the generic form of RFC 3597.
@@ -436,11 +450,11 @@ func decodeCAA(b []byte, off int) (RData, error) {
 	if len(v) < 2 || len(v)-2 < int(v[1]) {
 		return nil, errors.New("data ends inside the tag")
 	}
-	tag := string(v[2 : 2+int(v[1])])
-	if err := checkCAATag(tag); err != nil {
-		return nil, err
+	// RFC 8659 forbids an empty tag, and it has no text form.
+	if v[1] == 0 {
+		return nil, errors.New("empty tag")
 	}
-	return CAA{Flags: v[0], Tag: tag, Value: string(v[2+int(v[1]):])}, nil
+	return CAA{Flags: v[0], Tag: string(v[2 : 2+int(v[1])]), Value: string(v[2+int(v[1]):])}, nil
 }
 
 func checkCAATag(tag string) error {
@@ -448,12 +462,15 @@ func checkCAATag(tag string) error {
 		return fmt.Errorf("CAA tag of %d octets, want 1 to 255", len(tag))
 	}
 	for i := 0; i < len(tag); i++ {
-		c := tag[i]
-		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
+		if !isTagOctet(tag[i]) {
 			return fmt.Errorf("CAA tag octet %d is not an ASCII letter or digit", i+1)
 		}
 	}
 	return nil
+}
+
+func isTagOctet(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
 }
 
 // rdataParsers read the presentation form of each typed type.

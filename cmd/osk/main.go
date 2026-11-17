@@ -12,6 +12,8 @@ import (
 	"syscall"
 
 	"github.com/Opsek/dns-monitoring/internal/cli"
+	// The name start is taken by the function that refuses root.
+	startpkg "github.com/Opsek/dns-monitoring/internal/start"
 	"github.com/Opsek/dns-monitoring/internal/store"
 )
 
@@ -30,6 +32,8 @@ const usage = `usage: osk version [--json]
        osk watch --config <file> [--json]
        osk accept --config <file> [--write <code>] [--json] <alert id>
        osk test-alert --config <file> [--json]
+       osk init --config <file> [--root-server <address>]... [--extra-range <prefix>]...
+       osk doctor --config <file> [--json]
 `
 
 func main() {
@@ -88,8 +92,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return cli.Watch(ctx, rest, stdout, stderr)
 		}
 		return cli.TestAlert(ctx, rest, stdout, stderr)
+	case "init":
+		return setup(rest, stdout, stderr)
+	case "doctor":
+		return doctor(rest, stdout, stderr)
 	}
 	return fail(stderr, 2, usage)
+}
+
+// doctor runs "osk doctor"; Ctrl-C ends its checks.
+func doctor(args []string, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return startpkg.Doctor(ctx, args, stdout, stderr)
 }
 
 func printVersion(asJSON bool, stdout, stderr io.Writer) int {

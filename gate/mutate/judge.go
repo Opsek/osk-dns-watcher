@@ -124,6 +124,15 @@ func (j judge) folder(name string) (folder, error) {
 	j.each(len(ms), func(i int) {
 		f.outcomes[i], errs[i] = j.mutant(name, ms[i], srcs[ms[i].file], i, limit)
 	})
+	// A run that reached the limit may only have been slow, because the
+	// workers share the machine. It is judged again with nothing else of
+	// the tool running, so that the outcome does not depend on the load: a
+	// mutant is timed out only if it hangs alone too.
+	for i, o := range f.outcomes {
+		if o == timedOut && errs[i] == nil {
+			f.outcomes[i], errs[i] = j.mutant(name, ms[i], srcs[ms[i].file], i, limit)
+		}
+	}
 	for _, err := range errs {
 		if err != nil {
 			return f, err

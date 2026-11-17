@@ -734,3 +734,25 @@ func TestWrongUseExitsTwo(t *testing.T) {
 		}
 	}
 }
+
+// A mutant whose first run reaches the limit is judged again alone; when
+// that run ends in time, its result stands and it is not timed out.
+func TestMutantThatIsSlowOnlyOnceIsJudgedAgain(t *testing.T) {
+	t.Parallel()
+	root := mutTestCopy(t, "retry")
+	out, code := mutTestRun(t, root, "", "zz")
+	if code != 0 {
+		t.Errorf("exit code %d, want 0", code)
+	}
+	mutTestCompare(t, out, []string{mutTestSummary("zz", 1, 0, 1, 0, 0, 0, "100.0%"), "ok mutate"}, false)
+}
+
+func TestQuotaCPUs(t *testing.T) {
+	t.Parallel()
+	const none = int(^uint(0) >> 1)
+	for in, want := range map[string]int{"400000 100000\n": 4, "250000 100000": 3, "max 100000\n": none, "": none, "x y": none, "0 100000": none} {
+		if got := quotaCPUs(in); got != want {
+			t.Errorf("quotaCPUs(%q) = %d, want %d", in, got, want)
+		}
+	}
+}

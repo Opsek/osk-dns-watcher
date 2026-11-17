@@ -77,7 +77,7 @@ func parse(args []string) (options, error) {
 	var o options
 	flags.StringVar(&o.root, "root", ".", "")
 	flags.StringVar(&o.list, "list", "", "")
-	flags.IntVar(&o.workers, "workers", runtime.NumCPU(), "")
+	flags.IntVar(&o.workers, "workers", defaultWorkers(), "")
 	if err := flags.Parse(args); err != nil {
 		return o, err
 	}
@@ -180,4 +180,32 @@ func survivedText(n int, list string) string {
 		text += " in " + list
 	}
 	return text
+}
+
+// defaultWorkers is the number of CPUs that this process may use. In a
+// container with a CPU limit, runtime.NumCPU and GOMAXPROCS still count the
+// CPUs of the host, and so many parallel test runs would starve each other.
+func defaultWorkers() int {
+	n := runtime.NumCPU()
+	data, err := os.ReadFile("/sys/fs/cgroup/cpu.max")
+	if err != nil {
+		return n
+	}
+	return min(n, quotaCPUs(string(data)))
+}
+
+// quotaCPUs reads the content of a cgroup v2 cpu.max file, "<quota> <period>"
+// or "max <period>", and returns the CPUs it allows, rounded up; a file that
+// sets no limit gives a number too large to matter.
+func quotaCPUs(s string) int {
+	f := strings.Fields(s)
+	if len(f) != 2 {
+		return int(^uint(0) >> 1)
+	}
+	quota, err1 := strconv.Atoi(f[0])
+	period, err2 := strconv.Atoi(f[1])
+	if err1 != nil || err2 != nil || quota <= 0 || period <= 0 {
+		return int(^uint(0) >> 1)
+	}
+	return (quota + period - 1) / period
 }

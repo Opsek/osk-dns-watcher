@@ -139,7 +139,7 @@ A webhook gets a POST with `Content-Type: application/json` and a body with `"sc
 ```
 
 - `event`: `open`, `update`, `escalate`, `reminder` or `resolve`. `severity` is the severity after the event, `was` the one before.
-- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `invalid-file`, `check-failing` or `zone-changed`.
+- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing` or `zone-changed`.
 - `check.kind` is empty for an alert about the whole domain (`invalid-file`, `zone-changed`).
 - `seen` lists each server whose answer differs, at most 6; `more` counts the servers left out. A resolve has an empty `seen`.
 - `value` holds at most 6 lines. Times are UTC; an empty string means none.

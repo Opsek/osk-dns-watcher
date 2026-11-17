@@ -58,7 +58,7 @@ _acme-challenge.example.com. TXT none
 - `in <prefix>` allows any address in the range; `like *.<name>` allows any name under that name.
 - `none`: the set must not exist.
 - Names end with a dot. A line that starts with `#` is a comment.
-- A `DS` line is accepted, but its data is not compared yet: a changed DS record gives no alert.
+- A `DS` line is compared at the parent: a changed DS record gives an alert. The address line of a nameserver host also checks its glue at the parent, the address that the parent gives with the delegation. Ask for the host pairs in `osk snapshot` to get those lines, for example `osk snapshot example.com. ns1.example.com. A ns1.example.com. AAAA`. Ask for both types: a host with no AAAA gets the line `AAAA none`, and glue of a type with no line is a difference.
 
 To accept the value that an alert reports, run `docker compose exec osk osk accept --config osk.json <alert id>`: it prints the change and a code; add `--write <code>` before the id to make it. To edit a file by hand: `docker compose exec osk vi example.com.expect`. osk reads the files again every 5 seconds, keeps the last valid file when one is not valid (and alerts), and sends a notice with the changed lines.
 
@@ -84,6 +84,9 @@ Run them as `docker compose exec osk osk <command>`. All but the last four take 
 ## What osk detects
 
 - The nameservers of a domain at its parent zone differ from the file: critical.
+- A glue address that the parent gives for a watched nameserver host differs from the file: critical.
+- The DS set at the parent differs from the file or is gone: high; critical when the nameservers alert of the domain is open, and it stays critical until it resolves.
+- The parent says that the domain does not exist: critical.
 - A record set at any nameserver of the domain differs from the file: high for A, AAAA, CNAME, MX and NS, medium for the other types.
 - A name is answered from a zone that the file does not expect.
 - The file has no line for the NS or the DS set of a domain.
@@ -97,7 +100,6 @@ How often osk asks: the zone serial at each nameserver every 15 seconds, and a m
 ## What osk does not detect yet
 
 - A change that is made and undone between two checks can be missed. If the DNS provider moves the zone serial, the serial check reports that the zone changed, but not which record.
-- DS records are not compared, and glue addresses at the parent are not checked.
 - Nameserver addresses that this machine cannot reach are not checked. Docker's default network has no IPv6, so with it no IPv6 address of a nameserver is checked.
 - Registry data (locks, expiry), certificates, names that point at something gone, email policy, DNSSEC validation and the answers of public resolvers.
 

@@ -595,16 +595,14 @@ func TestOtherRulesLeaveTheRoundUnexplained(t *testing.T) {
 	}
 }
 
-func TestChangeOfARunThatStartedBeforeTheMoveExplainsNothing(t *testing.T) {
+func TestChangeOfARunThatStartedAtTheLastQuietSerialVerdictExplainsNothing(t *testing.T) {
 	zone := schZoneKeys(t)
-	s := New(schBase(t), nil, schIv)
-	schSettle(t, s, zone[0])
-	schStart(t, s, schSec(7), schSerialKey(t))
-	schEnd(t, s, schSerialObs(t, schSec(7), 2, 2), schSec(8))
-	schStart(t, s, schSec(8), zone[1], zone[2])
+	s := schMoved(t)
+	// The quiet serial run of the settling was judged at T0+1s; this is the
+	// second run of its check, and it started then.
 	change := decide.Change{Op: decide.OpOpen, Finding: decide.Finding{Rule: decide.RuleRecordSet, Check: zone[0]}, At: schSec(9)}
-	schEnd(t, s, schUsable(t, zone[0], schT0), schSec(9), change)
-	schStart(t, s, schSec(9), zone[0])
+	_, moves, ok := schEnd(t, s, schUsable(t, zone[0], schSec(1)), schSec(9), change)
+	schWantJudged(t, "the run with an old notice", moves, ok, false, nil)
 	for i, k := range zone {
 		_, moves, ok := schEnd(t, s, schUsable(t, k, schSec(9)), schSec(10+i))
 		schWantJudged(t, k.String(), moves, ok, i == 2, map[bool][]string{true: schBothMoved}[i == 2])
@@ -856,25 +854,35 @@ func TestRoundEmptiedByReplaceEndsAtTheNextJudged(t *testing.T) {
 	schWantJudged(t, "the serial run after Replace", moves, ok, true, schBothMoved)
 }
 
-// A second run of a check that already left the round, and a failed run,
-// leave no pending check, so their changes explain nothing.
-func TestOnlyARunThatLeavesThePendingSetExplainsTheRound(t *testing.T) {
+// A failed run gives no notice, so its change explains nothing.
+func TestFailedZoneRunGivesNoNotice(t *testing.T) {
 	zone := schZoneKeys(t)
 	s := schMoved(t)
 	schEnd(t, s, schUsable(t, zone[0], schSec(8)), schSec(9))
-	schStart(t, s, schSec(51), zone[0])
-	change := func(k obs.Key) decide.Change {
-		return decide.Change{Op: decide.OpOpen, Finding: decide.Finding{Rule: decide.RuleRecordSet, Check: k}, At: schSec(52)}
-	}
-	_, moves, ok := schEnd(t, s, schUsable(t, zone[0], schSec(51)), schSec(52), change(zone[0]))
-	schWantJudged(t, "a second run with a change", moves, ok, false, nil)
-	_, moves, ok = schEnd(t, s, schUsable(t, zone[1], schSec(8)), schSec(53))
-	schWantJudged(t, zone[1].String(), moves, ok, false, nil)
-	_, moves, ok = schEnd(t, s, schFailed(t, zone[2], schSec(8)), schSec(53), change(zone[2]))
+	schEnd(t, s, schUsable(t, zone[1], schSec(8)), schSec(9))
+	change := decide.Change{Op: decide.OpOpen, Finding: decide.Finding{Rule: decide.RuleRecordSet, Check: zone[2]}, At: schSec(53)}
+	_, moves, ok := schEnd(t, s, schFailed(t, zone[2], schSec(8)), schSec(53), change)
 	schWantJudged(t, "a failed run with a change", moves, ok, false, nil)
 	schStart(t, s, schSec(308), zone[2]) // its interval after its start at T0+8s
 	_, moves, ok = schEnd(t, s, schUsable(t, zone[2], schSec(308)), schSec(309))
 	schWantJudged(t, "the last pending check", moves, ok, true, schBothMoved)
+}
+
+// A second run of a check that already left the round gives a notice that
+// started after the move, so it explains the round, which then waits for the
+// checks that are still pending.
+func TestSecondRunOfAZoneCheckWithANoticeExplainsTheRound(t *testing.T) {
+	zone := schZoneKeys(t)
+	s := schMoved(t)
+	schEnd(t, s, schUsable(t, zone[0], schSec(8)), schSec(9))
+	schStart(t, s, schSec(51), zone[0])
+	change := decide.Change{Op: decide.OpOpen, Finding: decide.Finding{Rule: decide.RuleRecordSet, Check: zone[0]}, At: schSec(52)}
+	_, moves, ok := schEnd(t, s, schUsable(t, zone[0], schSec(51)), schSec(52), change)
+	schWantJudged(t, "a second run with a change", moves, ok, false, nil)
+	_, moves, ok = schEnd(t, s, schUsable(t, zone[1], schSec(8)), schSec(53))
+	schWantJudged(t, zone[1].String(), moves, ok, false, nil)
+	_, moves, ok = schEnd(t, s, schUsable(t, zone[2], schSec(8)), schSec(53))
+	schWantJudged(t, "the last pending check", moves, ok, false, nil)
 }
 
 // At the instant of a move, a run that starts then is part of the round: it
@@ -1060,9 +1068,9 @@ type schSeen struct {
 }
 
 type schRound struct {
-	pending   map[string]bool
-	explained bool
-	moves     []decide.Move
+	pending map[string]bool
+	moves   []decide.Move
+	since   time.Time // the quiet instant when the round was created
 }
 
 // schModel is the schedule as the rules state it, kept by key text and by
@@ -1078,6 +1086,10 @@ type schModel struct {
 	unsure     map[string]bool // left the plan with a series: kept or dropped
 	serials    map[string]schSeen
 	moved      time.Time
+	quiet      time.Time       // when the last serial run with an answer and no move was judged
+	noticed    time.Time       // the latest start of a run of a zone check with a notice of its own
+	judgedOnce map[string]bool // the keys judged since the plan was made or replaced
+	early      int             // rounds that a notice started before their move explained
 	round      *schRound
 	held       []decide.Move // the moves of unexplained rounds not told yet
 	lastReport time.Time     // when moves were last told
@@ -1085,7 +1097,8 @@ type schModel struct {
 
 func schNewModel(plan []Check, iv Intervals) *schModel {
 	m := &schModel{iv: iv, start: map[string]time.Time{}, running: map[string]time.Time{},
-		series: map[string]time.Time{}, unsure: map[string]bool{}, serials: map[string]schSeen{}}
+		series: map[string]time.Time{}, unsure: map[string]bool{}, serials: map[string]schSeen{},
+		judgedOnce: map[string]bool{}}
 	m.setPlan(plan)
 	return m
 }
@@ -1222,7 +1235,7 @@ func (m *schModel) serialRun(o obs.Observation, now time.Time) []decide.Move {
 	}
 	m.moved = now
 	if m.round == nil {
-		m.round = &schRound{}
+		m.round = &schRound{since: m.quiet}
 	}
 	for _, mv := range moves {
 		i := slices.IndexFunc(m.round.moves, func(x decide.Move) bool { return x.Server.Addr == mv.Server.Addr })
@@ -1274,10 +1287,19 @@ func (m *schModel) judged(o obs.Observation, failed, moved bool, changes []decid
 	if !known {
 		return schVerdict{}
 	}
+	// The first usable run of a check after the plan was made gives no
+	// notice: it may have seen a change that came before the service.
+	first := !m.judgedOnce[k]
+	m.judgedOnce[k] = m.judgedOnce[k] || !failed
+	if c.Zone && !first && !failed && schExplains(changes) && o.Start.After(m.noticed) {
+		m.noticed = o.Start
+	}
+	if o.Key.Kind == obs.KindSerial && !moved && !failed {
+		m.quiet = now
+	}
 	if r := m.round; r != nil {
 		if c.Zone && !o.Start.Before(m.moved) && !failed && r.pending[k] {
 			delete(r.pending, k)
-			r.explained = r.explained || schExplains(changes)
 		}
 		excused := false
 		if since, ok := m.series[k]; r.pending[k] && failed && ok && now.Sub(since) >= m.limit(c.Tier) {
@@ -1288,7 +1310,13 @@ func (m *schModel) judged(o obs.Observation, failed, moved bool, changes []decid
 			return schVerdict{excused: excused}
 		}
 		m.round = nil
-		if r.explained {
+		// A notice that started after the serial was last quiet, before the
+		// round was created, belongs to the change of the round, whether it
+		// came before or after the move.
+		if m.noticed.After(r.since) {
+			if m.noticed.Before(m.moved) {
+				m.early++
+			}
 			return schVerdict{explainedEnded: true, excused: excused}
 		}
 		for _, mv := range r.moves {
@@ -1322,6 +1350,7 @@ func (m *schModel) replace(plan []Check) {
 		}
 	}
 	clear(m.start)
+	clear(m.judgedOnce)
 	if m.round != nil {
 		for k := range m.round.pending {
 			if c, in := m.find(k); !in || !c.Zone {
@@ -1332,7 +1361,7 @@ func (m *schModel) replace(plan []Check) {
 }
 
 type schCounts struct {
-	capped, moves, unexplained, explained, replaced, quiet, series, held, flushed, excused int
+	capped, moves, unexplained, explained, replaced, quiet, series, held, flushed, excused, early int
 }
 
 type schInFlight struct {
@@ -1540,6 +1569,8 @@ func (sim *schSim) finish() {
 		sim.m.series[k] = alt
 	}
 	delete(sim.run, k)
+	sim.n.early += sim.m.early
+	sim.m.early = 0
 	if len(got.Moves) > 0 {
 		sim.moves = append(sim.moves, sim.now)
 		sim.n.moves++
@@ -1640,7 +1671,7 @@ func TestScheduleProperty(t *testing.T) {
 	}
 	t.Logf("seed %d: %+v", schSeed, *n)
 	if n.capped == 0 || n.moves == 0 || n.unexplained == 0 || n.explained == 0 || n.replaced == 0 || n.quiet == 0 || n.series == 0 ||
-		n.held == 0 || n.flushed == 0 || n.excused == 0 {
+		n.held == 0 || n.flushed == 0 || n.excused == 0 || n.early == 0 {
 		t.Fatalf("seed %d: the cases miss a kind of event: %+v", schSeed, *n)
 	}
 }

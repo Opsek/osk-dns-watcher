@@ -21,12 +21,15 @@ type Schedule struct {
 	keys []string // keys[i] is plan[i].Key.String(), kept because every call needs it
 
 	starts      map[string]time.Time // no entry: not started since New or the last Replace
+	judged      map[string]bool      // a usable run of the key was judged since New or the last Replace
 	running     map[string]bool      // also a key that left the plan, until its Done
 	failing     map[string]time.Time // start of the unbroken series of failed runs
 	disagreeing map[string]*series   // the unbroken series of runs with two differing answers
 
 	serials     []sighting // one per address of the domain's servers
 	serialMoved bool       // the last serial run saw a move
+	quiet       time.Time  // when the last serial run with a usable answer and no move was judged
+	noticed     time.Time  // latest start of a run of a zone check that gave a notice of its own
 	moved       time.Time  // when the last move was seen
 	round       *round     // nil when no round is pending
 
@@ -55,9 +58,12 @@ type sighting struct {
 // round is the work that a move of the serial starts: each zone check must
 // give a usable answer once after the move, before the move is judged.
 type round struct {
-	moves     []decide.Move   // one per address, in order of first sight
-	pending   map[string]bool // the zone checks still to run
-	explained bool            // a run of the round gave a notice of its own
+	moves   []decide.Move   // one per address, in order of first sight
+	pending map[string]bool // the zone checks still to run
+	// since is quiet when the round was created: the serial was last seen
+	// quiet before the first move of the round, and a quiet serial run while
+	// a slow check holds the round must not hide a notice of that move.
+	since time.Time
 }
 
 // Report is what the schedule adds to an observation for decide.
@@ -83,6 +89,7 @@ func New(f *expect.File, fast []dnswire.Name, iv Intervals) *Schedule {
 		iv:          iv,
 		fast:        slices.Clone(fast),
 		starts:      map[string]time.Time{},
+		judged:      map[string]bool{},
 		running:     map[string]bool{},
 		failing:     map[string]time.Time{},
 		disagreeing: map[string]*series{},
@@ -107,6 +114,9 @@ func (s *Schedule) Checks() []Check { return slices.Clone(s.plan) }
 func (s *Schedule) Replace(f *expect.File) {
 	s.setPlan(f)
 	clear(s.starts)
+	// The next run of each check is judged against the new lines, so its
+	// notices tell of the file, not of a change of the zone.
+	clear(s.judged)
 	// A line that comes back must start new series, not join old ones.
 	for k := range s.failing {
 		if !slices.Contains(s.keys, k) {
@@ -208,6 +218,11 @@ func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 	if o.Key.Kind == obs.KindSerial {
 		r.Moves = s.serialMoves(o)
 		s.serialMoved = len(r.Moves) > 0
+		// Not o.Start: a zone check that started in the same tick saw the
+		// zone at the same moment, so its notice shows no later change.
+		if !decide.Failed(o) && !s.serialMoved {
+			s.quiet = now
+		}
 	}
 	if len(r.Moves) > 0 {
 		s.startRound(r.Moves, now)
@@ -335,7 +350,7 @@ func soaSerial(r obs.Result) (uint32, bool) {
 func (s *Schedule) startRound(moves []decide.Move, now time.Time) {
 	s.moved = now
 	if s.round == nil {
-		s.round = &round{}
+		s.round = &round{since: s.quiet}
 	}
 	for _, m := range moves {
 		s.round.moves = merge(s.round.moves, m)
@@ -363,18 +378,26 @@ func (s *Schedule) zoneChecks() map[string]bool {
 	return zone
 }
 
-// Judged takes what decide made of o. ok with moves: rounds ended and none
-// of their runs gave a notice of its own, so the caller reports the moves. ok
-// without moves: the serial has been quiet for a while, so the caller ends
-// the notice of earlier moves.
+// Judged takes what decide made of o. ok with moves: rounds ended and no
+// notice of its own came since the serial was last seen quiet, so the caller
+// reports the moves. ok without moves: the serial has been quiet for a while,
+// so the caller ends the notice of earlier moves.
 func (s *Schedule) Judged(o obs.Observation, changes []decide.Change, now time.Time) (moves []decide.Move, ok bool) {
 	k := o.Key.String()
 	i := slices.Index(s.keys, k)
 	if i < 0 {
 		return nil, false
 	}
+	// The first usable run since the plan was made or replaced has no run
+	// before it to differ from, so its notice tells of the state, not of a
+	// change. Runs end out of the order of their starts; the latest start
+	// counts.
+	if s.judged[k] && s.plan[i].Zone && !decide.Failed(o) && o.Start.After(s.noticed) && slices.ContainsFunc(changes, ownNotice) {
+		s.noticed = o.Start
+	}
+	s.judged[k] = s.judged[k] || !decide.Failed(o)
 	if s.round != nil {
-		return s.judgeRound(k, s.plan[i].Tier, o, changes, now)
+		return s.judgeRound(k, s.plan[i].Tier, o, now)
 	}
 	// A run with no usable answer is no evidence that the serial stayed.
 	if o.Key.Kind != obs.KindSerial || decide.Failed(o) || s.serialMoved {
@@ -389,11 +412,10 @@ func (s *Schedule) Judged(o obs.Observation, changes []decide.Change, now time.T
 
 // judgeRound counts o for the round when it started after the last move and
 // gave a usable answer: a failed run is no evidence that nothing differs.
-func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, changes []decide.Change, now time.Time) ([]decide.Move, bool) {
+func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, now time.Time) ([]decide.Move, bool) {
 	r := s.round
 	if r.pending[k] && !o.Start.Before(s.moved) && !decide.Failed(o) {
 		delete(r.pending, k)
-		r.explained = r.explained || slices.ContainsFunc(changes, ownNotice)
 	}
 	// A zone check that has failed past its limit has its check-failing
 	// alert; waiting for its usable answer would mute every later move.
@@ -404,7 +426,10 @@ func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, changes []
 		return nil, false
 	}
 	s.round = nil
-	if r.explained {
+	// A notice from a run that started after the serial was last seen quiet
+	// told the operator of a change in the window in which the serial moved:
+	// the move is that change, or comes with it.
+	if s.noticed.After(r.since) {
 		return nil, false
 	}
 	for _, m := range r.moves {

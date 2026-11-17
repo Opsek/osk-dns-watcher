@@ -40,7 +40,7 @@ When the answer is as expected again, a RESOLVED message follows. Other webhooks
 
 ## The expectations file
 
-One file per domain, one line per record set: the name, the type, and what is expected. `osk init` writes the first version from what the servers give, for the NS, DS, A, AAAA, MX, TXT and CAA sets of the domain and the A set of `www`. Edit it to change what osk trusts or to watch more names:
+One file per domain, one line per record set: the name, the type, and what is expected. `osk init` writes the first version from what the servers give, for the NS, DS, A, AAAA, MX, TXT and CAA sets of the domain and the A set of `www`. It also writes `_acme-challenge.<domain>. TXT none`, `_acme-challenge.www.<domain>. TXT none` and `*.<domain>. A none` where nothing is there. If you use DNS challenges to get certificates, remove the two `_acme-challenge` lines: the challenge alert fires at each certificate request. Edit it to change what osk trusts or to watch more names:
 
 ```
 domain example.com.
@@ -57,6 +57,8 @@ _acme-challenge.example.com. TXT none
 - `|` separates the records of one set; `||` separates sets that are each allowed.
 - `in <prefix>` allows any address in the range; `like *.<name>` allows any name under that name.
 - `none`: the set must not exist.
+- `*.<name>. A none`: no wildcard answers under that name; osk asks a random name under it every 5 minutes; for a name in the domain's own zone, also at once when the serial of the zone moves. Only this line is the wildcard line: any other line with a `*` name is checked at that literal name.
+- `osk snapshot` writes no line for a certificate-challenge record that is there now, because its token changes with each request. Write `none` once it is gone, or no line if you use DNS challenges.
 - Names end with a dot. A line that starts with `#` is a comment.
 - A `DS` line is compared at the parent: a changed DS record gives an alert. The address line of a nameserver host also checks its glue at the parent, the address that the parent gives with the delegation. Ask for the host pairs in `osk snapshot` to get those lines, for example `osk snapshot example.com. ns1.example.com. A ns1.example.com. AAAA`. Ask for both types: a host with no AAAA gets the line `AAAA none`, and glue of a type with no line is a difference.
 
@@ -91,17 +93,27 @@ Run them as `docker compose exec osk osk <command>`. All but the last four take 
 - A name is answered from a zone that the file does not expect.
 - The file has no line for the NS or the DS set of a domain.
 - The zone serial moved and no watched record differs: low. This is a change to a record you do not watch, or one that was undone.
+- The nameservers of a domain give different answers for a watched set, each one steadily, for 10 minutes and 11 checks in a row (up to 50 minutes for a set that is checked every 5 minutes), while the file allows each answer: medium. The alert ends when the split has been absent for 11 checks in a row.
+- A certificate-challenge record (`_acme-challenge`) appears where the file says `none`: high.
+- A name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at does not exist: high, critical for a nameserver. When the domain above that name is gone, the alert names the zone that no longer delegates it. A nameserver that answers "no such name" for a name that only has records of another type (against RFC 8020) gives a false alert for such a target.
+- A random name under `<name>` gets an answer although the file has `*.<name>. A none`: medium.
 - A check gets no usable answer for 5 minutes, or 15 minutes for the checks that run every 5 minutes and for the serial.
 - The expectations file changed, or is not valid.
 - osk was not running for a minute or more: at its next start, a notice says for how long.
 
-How often osk asks: the zone serial at each nameserver every 15 seconds, and a moved serial starts the checks of the zone at once; the nameservers and DS at the parent every 60 seconds; the A, AAAA, CAA and MX sets of each domain and its `_acme-challenge` names every 60 seconds; every other set every 5 minutes. An alert is sent within 5 seconds of the check that sees the change, unless older messages to that channel are still waiting. These intervals are what osk is built for and were tested in a lab; detection times on real domains are not measured yet. The intervals can be changed in the config.
+How often osk asks: the zone serial at each nameserver every 15 seconds, and a moved serial starts the checks of the zone at once; the nameservers and DS at the parent every 60 seconds; the A, AAAA, CAA and MX sets of each domain and its `_acme-challenge` names every 60 seconds; every other set every 5 minutes, and so are the address check of each name that a line points at and the wildcard check. The wildcard check of a name in the domain's own zone also starts at once when the serial of the zone moves. An alert is sent within 5 seconds of the check that sees the change, unless older messages to that channel are still waiting. These intervals are what osk is built for and were tested in a lab; detection times on real domains are not measured yet. The intervals can be changed in the config.
 
 ## What osk does not detect yet
 
 - A change that is made and undone between two checks can be missed. If the DNS provider moves the zone serial, the serial check reports that the zone changed, but not which record.
 - Nameserver addresses that this machine cannot reach are not checked. Docker's default network has no IPv6, so with it no IPv6 address of a nameserver is checked.
-- Registry data (locks, expiry), certificates, names that point at something gone, email policy, DNSSEC validation and the answers of public resolvers.
+- A nameserver that does not answer while another one does.
+- A nameserver that gives another allowed answer only now and then, a steady difference beside a nameserver whose answers change from query to query, and names whose answers change from query to query: a line with `in`, `like` or `||` trusts every answer that it allows. Nameservers that each keep another allowed answer for some minutes can get the alert above again and again.
+- A wildcard that holds no A or CNAME record, for example one with only AAAA, TXT or MX records.
+- A deleted name inside the domain's own zone that an alias or MX record points at, unless it has a line of its own.
+- A name that an alias, MX record or SPF include points at, at a provider that answers for every name: it still exists when nobody owns it.
+- A missing name whose zone answers 'no data' and not 'no such name'.
+- Registry data (locks, expiry), certificates, email policy, DNSSEC validation and the answers of public resolvers.
 
 ## Update, stop, data
 

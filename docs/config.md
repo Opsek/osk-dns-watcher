@@ -72,8 +72,8 @@ An `env` secret needs the variable in the environment of `osk run`. The Compose 
 | `domains[i].fast` | list of strings | `[]` | At most 100 names, each with its trailing dot. Every line of these names is checked at the `fast` interval. |
 | `intervals.serial` | duration | `15s` | The zone serial at each nameserver. 5s to 24h. |
 | `intervals.parent` | duration | `60s` | The NS and DS sets at the parent zone. 5s to 24h. |
-| `intervals.fast` | duration | `60s` | The A, AAAA, CAA and MX sets of the domain, every line of `_acme-challenge.<domain>`, and the `fast` names. 5s to 24h. |
-| `intervals.other` | duration | `5m` | Every other line. 5s to 24h. |
+| `intervals.fast` | duration | `60s` | The A, AAAA, CAA and MX sets of the domain, every line whose first label is `_acme-challenge`, at or under the domain, and the `fast` names. 5s to 24h. |
+| `intervals.other` | duration | `5m` | Every other line; the address check of each name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at; and the wildcard check of each `*.<name>. A none` line (only that line; another line with a `*` name is an ordinary line). A moved serial of the domain's own zone also starts the checks of that zone at once, the wildcard check of a name in it among them. 5s to 24h. |
 | `slack.url` | secret | required in `slack` | An https URL with a host and no user name. |
 | `slack.min_severity` | string | `low` | `low`, `medium`, `high` or `critical`. |
 | `webhooks` | list of objects | `[]` | 0 to 8 webhooks. |
@@ -91,6 +91,7 @@ An `env` secret needs the variable in the environment of `osk run`. The Compose 
 - A duration is written as Go writes it: `90s`, `5m`, `1h`.
 - `slack`, `heartbeat`, `intervals` and `network` are optional objects. The config needs at least one channel: `slack` or one webhook.
 - A check that gets no usable answer from any server opens a medium `check-failing` alert after 5 times its interval (`parent` and `fast`), 3 times (`other`) or 60 times (`serial`). At the default intervals that is 5, 15 and 15 minutes.
+- A `disagree` alert opens when the nameservers give different answers, each one steadily, for 2 times `intervals.other` and for 11 checks in a row. At the default intervals that is 10 minutes for a set checked every 60 seconds and up to 50 minutes for a set checked every 5 minutes. The alert ends when the split has been absent for 11 checks in a row.
 - A channel gets the messages of an alert when the highest severity of that alert reaches the channel's `min_severity`. Notices (TEST, DOWN, and a change of the expectations) go to every channel.
 
 ## Secrets
@@ -139,8 +140,8 @@ A webhook gets a POST with `Content-Type: application/json` and a body with `"sc
 ```
 
 - `event`: `open`, `update`, `escalate`, `reminder` or `resolve`. `severity` is the severity after the event, `was` the one before.
-- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing` or `zone-changed`.
-- `check.kind` is empty for an alert about the whole domain (`invalid-file`, `zone-changed`).
+- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing`, `zone-changed`, `disagree`, `alias-target`, `nameserver-host`, `mail-target`, `challenge` or `wildcard`.
+- `check.kind` is `delegation`, `ds`, `records`, `serial` or `wildcard`; it is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks a random name just under `check.name`, and its `rtype` is `A`.
 - `seen` lists each server whose answer differs, at most 6; `more` counts the servers left out. A resolve has an empty `seen`.
 - `value` holds at most 6 lines. Times are UTC; an empty string means none.
 - `text` is the Slack text, so a receiver that shows Slack text can show it as it is.

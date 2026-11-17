@@ -21,7 +21,8 @@ lab/bin/lab down     # stop the lab and remove its containers, network and volum
 ```
 
 `make lab-up` and `make lab-down` do the same as `up` and `down`. The settings
-`DOCKER` and `BUILD_FLAGS` work as for `make check` (see the main README).
+`DOCKER` and `BUILD_FLAGS` work as for `make check` (see
+[docs/development.md](../docs/development.md)).
 
 `lab/bin/lab run <command...>` runs a command in the runner container and
 exits with its exit code:
@@ -45,14 +46,15 @@ The runner sees the repository read-only at `/src`. Its `/tmp` is writable.
 | ns2 | 10.53.N.12 | The same zones, as its own copy: there is no zone transfer between ns1 and ns2, so they can differ. |
 | resolver | 10.53.N.20 | Recursive resolver that starts at the lab root. It does not validate DNSSEC. |
 | liar | 10.53.N.21 | Like resolver, but `labctl lie` makes it give false answers. |
-| receiver | 10.53.N.30 | HTTPS webhook receiver for `hooks.lab.test`. It stores every request. |
+| receiver | 10.53.N.30 | HTTPS webhook receiver for `hooks.lab.test`. It stores every request. Containers on the lab network find `hooks.lab.test` through Docker's DNS. |
 | runner | 10.53.N.100 | Runs tests and `labctl`. It has `dig`, `delv`, `nsupdate`, `dnssec-keygen`, `dnssec-signzone` and `curl`. |
 
 No host uses 10.53.N.99: delegate to it to get a server that does not answer.
 
-In the runner, `/lab/ca.pem` is the lab CA, which the runner trusts, and
-`/lab/xfr.key` is the TSIG key that zone transfers need
-(`dig -k /lab/xfr.key @10.53.0.11 corp.test. AXFR`).
+In the runner, `/lab/ca.pem` is the lab CA, which the runner trusts. The
+folder `/lab/ca/` holds only a copy of it, `ca.pem`, for a container that must
+trust the lab CA and nothing else. `/lab/xfr.key` is the TSIG key that zone
+transfers need (`dig -k /lab/xfr.key @10.53.0.11 corp.test. AXFR`).
 
 The base zones are in `lab/image/zones/`, where `@N@` stands for the lab
 number. Every zone starts with serial 1, and there is no DS record.

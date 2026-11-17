@@ -61,6 +61,7 @@ _acme-challenge.example.com. TXT none
 - `osk snapshot` writes no line for a certificate-challenge record that is there now, because its token changes with each request. Write `none` once it is gone, or no line if you use DNS challenges.
 - Names end with a dot. A line that starts with `#` is a comment.
 - A `DS` line is compared at the parent: a changed DS record gives an alert. The address line of a nameserver host also checks its glue at the parent, the address that the parent gives with the delegation. Ask for the host pairs in `osk snapshot` to get those lines, for example `osk snapshot example.com. ns1.example.com. A ns1.example.com. AAAA`. Ask for both types: a host with no AAAA gets the line `AAAA none`, and glue of a type with no line is a difference.
+- `issuer <name>` and `certname <name>` lines tell the certificate check (see [Certificates](#certificates)) what is expected. `issuer letsencrypt.org` names a certificate authority as it appears in CAA records (no trailing dot); with at least one such line, a valid certificate from any other authority gives an alert. `certname *.example.com.` allows a wildcard certificate name; it ends with a dot and must be at or under the domain. Write one name on each line.
 
 To accept the value that an alert reports, run `docker compose exec osk osk accept --config osk.json <alert id>`: it prints the change and a code; add `--write <code>` before the id to make it. To edit a file by hand: `docker compose exec osk vi example.com.expect`. osk reads the files again every 5 seconds, keeps the last valid file when one is not valid (and alerts), and sends a notice with the changed lines.
 
@@ -95,13 +96,30 @@ Run them as `docker compose exec osk osk <command>`. All but the last four take 
 - The zone serial moved and no watched record differs: low. This is a change to a record you do not watch, or one that was undone.
 - The nameservers of a domain give different answers for a watched set, each one steadily, for 10 minutes and 11 checks in a row (up to 50 minutes for a set that is checked every 5 minutes), while the file allows each answer: medium. The alert ends when the split has been absent for 11 checks in a row.
 - A certificate-challenge record (`_acme-challenge`) appears where the file says `none`: high.
+- The CAA policy that applies to a name of the file permits more than the CAA lines of the file allow (another certificate authority, any account or validation method, wildcards, or the policy is gone): high. A change of the CAA set that permits nothing more is an ordinary change of the set: medium. A certificate authority can read each of three things strictly or permissively: a critical record with a tag that osk does not know, a repeated or empty `accounturi`, and a repeated or faulty `validationmethods`. osk tries each combination and alerts when one of them permits more than the file allows.
 - A name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at does not exist: high, critical for a nameserver. When the domain above that name is gone, the alert names the zone that no longer delegates it. A nameserver that answers "no such name" for a name that only has records of another type (against RFC 8020) gives a false alert for such a target.
 - A random name under `<name>` gets an answer although the file has `*.<name>. A none`: medium.
+- Only when `certificates` is set in the config: a valid certificate for a name of the domain comes from a certificate authority that the CAA lines or the `issuer` lines of the file do not permit: high.
+- Only when `certificates` is set: a valid wildcard certificate for a name of the domain is not listed by a `certname` line: high.
+- Only when `certificates` is set: valid certificates name hosts under the domain that the file does not list: low. One alert holds the list.
 - A check gets no usable answer for 5 minutes, or 15 minutes for the checks that run every 5 minutes and for the serial.
 - The expectations file changed, or is not valid.
 - osk was not running for a minute or more: at its next start, a notice says for how long.
 
-How often osk asks: the zone serial at each nameserver every 15 seconds, and a moved serial starts the checks of the zone at once; the nameservers and DS at the parent every 60 seconds; the A, AAAA, CAA and MX sets of each domain and its `_acme-challenge` names every 60 seconds; every other set every 5 minutes, and so are the address check of each name that a line points at and the wildcard check. The wildcard check of a name in the domain's own zone also starts at once when the serial of the zone moves. An alert is sent within 5 seconds of the check that sees the change, unless older messages to that channel are still waiting. These intervals are what osk is built for and were tested in a lab; detection times on real domains are not measured yet. The intervals can be changed in the config.
+How often osk asks: the zone serial at each nameserver every 15 seconds, and a moved serial starts the checks of the zone at once; the nameservers and DS at the parent every 60 seconds; the A, AAAA, CAA and MX sets of each domain and its `_acme-challenge` names every 60 seconds; every other set every 5 minutes, and so are the address check of each name that a line points at, the wildcard check, and the CAA set of each other name of the file, which is also checked at once when the serial of the zone moves. The wildcard check of a name in the domain's own zone also starts at once when the serial of the zone moves. An alert is sent within 5 seconds of the check that sees the change, unless older messages to that channel are still waiting. These intervals are what osk is built for and were tested in a lab; detection times on real domains are not measured yet. The intervals can be changed in the config.
+
+## Certificates
+
+osk can also read the public certificate logs, to see certificates that were issued for your domains. This is off until the config has a `certificates` object (see [docs/config.md](docs/config.md)). The source is the Cert Spotter API of SSLMate, `https://api.certspotter.com/v1/issuances`; it works without a key, and a key can be set.
+
+- osk sends the name of each watched domain to that source, which then learns which domains you watch. A check that falls inside a wait that the source asked for sends nothing.
+- A certificate is judged only while it is valid. It leaves the list when it expires, and an alert about it ends then.
+- The source sets the pace. Without a key, on 17 Nov 2026, it allowed 10 requests an hour and, after a list with nothing new, asked for a wait of one hour. osk obeys: it asks again at its first check after that wait, so a new certificate is seen about one hour after the source has it (a little later when `interval` does not divide the hour; when `interval` is longer than the wait, the next read comes one `interval` later), plus the delay of the source behind the issuance, which is not measured yet. `interval` is the gap that osk uses only when the source asks for less. A wait that the source asks for after a `429` is kept whole; a `Retry-After` of more than 24 hours is not read, and osk then asks again at its next check. The limits with a key were not measured.
+- The terms of the source said on 17 Nov 2026 that use without a key is for personal or evaluation purposes. Get a key for any other use.
+- One domain costs one request an hour once osk is running, and at least two when osk starts: the first list, then one more request that finds the end of it. A domain with many certificates needs one request for each page. Once in 24 hours, in one run, osk reads the list again from the beginning, beside its normal work; this never stops the certificate alerts. For a domain whose list does not fit one run (more than 9 pages: 10 pages need 11 requests), the list is not read again until osk starts again, so a fault of the source's position marker is not healed before that. When the daily listing fails, osk tries it again one hour later, and the normal reading of new certificates goes on in between. At most two certificate checks run at one time.
+- More than 10000 valid certificates for a domain, or more than 100000 names on them, make the check fail with "too many". osk asks again after one hour, and the alerts that are open stay judged by the certificates that osk has. A domain that is truly that large fails every hour, which the `check-failing` alert tells.
+- When the source cannot be read (no answer, a rate limit, a status that is not 200, or an answer that osk cannot read), osk never takes it as "no certificates": it judges only the certificates that it has read. An alert can still open from pages read before the failure, and it ends when its certificate expires. After the fail limit, 3 times `interval`, a `check-failing` alert opens.
+- A source that wrongly answers with an empty list right after osk starts ends the open certificate alerts until its next true answer.
 
 ## What osk does not detect yet
 
@@ -110,10 +128,21 @@ How often osk asks: the zone serial at each nameserver every 15 seconds, and a m
 - A nameserver that does not answer while another one does.
 - A nameserver that gives another allowed answer only now and then, a steady difference beside a nameserver whose answers change from query to query, and names whose answers change from query to query: a line with `in`, `like` or `||` trusts every answer that it allows. Nameservers that each keep another allowed answer for some minutes can get the alert above again and again.
 - A wildcard that holds no A or CNAME record, for example one with only AAAA, TXT or MX records.
+- A CAA set at the target of an alias: the certificate authority follows the alias, osk does not. When an alias stands at a name that has no line in the file, above a name of the file, the CAA policy of the names below it comes from the alias target; osk sees only that the zone serial moved.
+- A CAA policy above the watched domain, at its TLD: osk reads it as none.
+- A CAA record at a name with a `_` label: osk compares it as an ordinary set, not as a policy.
+- A CAA line with more than 64 different grants in a class reads as no policy for that class: no CAA alert for it. A method list of more than 16 labels reads as "any method" for its grant.
+- When your own CAA line holds an unusual value (a critical record with a tag that osk does not know, or a repeated or faulty `accounturi` or `validationmethods`), a change to another unusual value of the same kind is not ranked: it gives only the medium alert at that name and none at a name below it.
+- A CAA record whose tag is `issue` with a blank or another odd character added is an unknown tag for osk. A certificate authority that reads such a tag as `issue` would not be seen; none is known.
+- A wildcard CAA record (`*.name`) that permits more than the policy above it gives the CAA alert at each name of the file under it that does not exist.
 - A deleted name inside the domain's own zone that an alias or MX record points at, unless it has a line of its own.
 - A name that an alias, MX record or SPF include points at, at a provider that answers for every name: it still exists when nobody owns it.
 - A missing name whose zone answers 'no data' and not 'no such name'.
-- Registry data (locks, expiry), certificates, email policy, DNSSEC validation and the answers of public resolvers.
+- A certificate that was revoked: its alert ends when the certificate expires.
+- A certificate from an expected authority for a name of the file, for example one that someone obtained by changing DNS for a moment: the logs cannot tell it from your own renewal. The DNS checks and the CAA lines are the defence.
+- A wildcard certificate for a name that is one label above a watched domain.
+- Certificates that were issued before osk started are all new to it: the first run lists every valid certificate, and what the file does not cover gives up to three alerts for each domain.
+- Registry data (locks, expiry), email policy, DNSSEC validation and the answers of public resolvers.
 
 ## Update, stop, data
 

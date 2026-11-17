@@ -73,7 +73,7 @@ An `env` secret needs the variable in the environment of `osk run`. The Compose 
 | `intervals.serial` | duration | `15s` | The zone serial at each nameserver. 5s to 24h. |
 | `intervals.parent` | duration | `60s` | The NS and DS sets at the parent zone. 5s to 24h. |
 | `intervals.fast` | duration | `60s` | The A, AAAA, CAA and MX sets of the domain, every line whose first label is `_acme-challenge`, at or under the domain, and the `fast` names. 5s to 24h. |
-| `intervals.other` | duration | `5m` | Every other line; the address check of each name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at; and the wildcard check of each `*.<name>. A none` line (only that line; another line with a `*` name is an ordinary line). A moved serial of the domain's own zone also starts the checks of that zone at once, the wildcard check of a name in it among them. 5s to 24h. |
+| `intervals.other` | duration | `5m` | Every other line; the address check of each name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at; the wildcard check of each `*.<name>. A none` line (only that line; another line with a `*` name is an ordinary line); and the CAA check of each name of the file that has no CAA line, when a CAA line at the domain or at a name above it sets a policy for that name. A moved serial of the domain's own zone also starts the checks of that zone at once, the wildcard check of a name in it among them. 5s to 24h. |
 | `slack.url` | secret | required in `slack` | An https URL with a host and no user name. |
 | `slack.min_severity` | string | `low` | `low`, `medium`, `high` or `critical`. |
 | `webhooks` | list of objects | `[]` | 0 to 8 webhooks. |
@@ -87,9 +87,12 @@ An `env` secret needs the variable in the environment of `osk run`. The Compose 
 | `remind` | duration | `0s` (off) | `0s`, or 1h to 720h. When set, an alert that stays open is sent again, marked "still open", when this time has passed since its last message. |
 | `network.root_servers` | list of strings | `[]` | At most 16 IP addresses, each with an optional port (53 when none is given). See [Labs and private networks](#labs-and-private-networks). |
 | `network.extra_ranges` | list of strings | `[]` | At most 64 address prefixes, with no bits set after the prefix length. |
+| `certificates.url` | string | `https://api.certspotter.com/v1/issuances` | An https URL with a host, with no query, fragment or user name. osk adds its own query. |
+| `certificates.key` | secret | none | An API key for the source, sent as `Authorization: Bearer <key>`. 1 to 256 octets of printable ASCII, no space. |
+| `certificates.interval` | duration | `10m` | The gap between two reads of the source for a domain. 5s to 24h. The source can ask for more: see [Certificates](#certificates). |
 
 - A duration is written as Go writes it: `90s`, `5m`, `1h`.
-- `slack`, `heartbeat`, `intervals` and `network` are optional objects. The config needs at least one channel: `slack` or one webhook.
+- `slack`, `heartbeat`, `intervals`, `network` and `certificates` are optional objects. The config needs at least one channel: `slack` or one webhook.
 - A check that gets no usable answer from any server opens a medium `check-failing` alert after 5 times its interval (`parent` and `fast`), 3 times (`other`) or 60 times (`serial`). At the default intervals that is 5, 15 and 15 minutes.
 - A `disagree` alert opens when the nameservers give different answers, each one steadily, for 2 times `intervals.other` and for 11 checks in a row. At the default intervals that is 10 minutes for a set checked every 60 seconds and up to 50 minutes for a set checked every 5 minutes. The alert ends when the split has been absent for 11 checks in a row.
 - A channel gets the messages of an alert when the highest severity of that alert reaches the channel's `min_severity`. Notices (TEST, DOWN, and a change of the expectations) go to every channel.
@@ -140,8 +143,8 @@ A webhook gets a POST with `Content-Type: application/json` and a body with `"sc
 ```
 
 - `event`: `open`, `update`, `escalate`, `reminder` or `resolve`. `severity` is the severity after the event, `was` the one before.
-- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing`, `zone-changed`, `disagree`, `alias-target`, `nameserver-host`, `mail-target`, `challenge` or `wildcard`.
-- `check.kind` is `delegation`, `ds`, `records`, `serial` or `wildcard`; it is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks a random name just under `check.name`, and its `rtype` is `A`.
+- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing`, `zone-changed`, `disagree`, `alias-target`, `nameserver-host`, `mail-target`, `challenge`, `wildcard`, `caa`, `issuer`, `certname` or `hostnames`.
+- `check.kind` is `delegation`, `ds`, `records`, `serial`, `wildcard` or `certificates`; it is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks a random name just under `check.name`, and its `rtype` is `A`.
 - `seen` lists each server whose answer differs, at most 6; `more` counts the servers left out. A resolve has an empty `seen`.
 - `value` holds at most 6 lines. Times are UTC; an empty string means none.
 - `text` is the Slack text, so a receiver that shows Slack text can show it as it is.
@@ -185,6 +188,33 @@ When a key is set, `osk run`, `osk status`, `osk validate` and `osk doctor` prin
 
 - `network.root_servers is set: osk starts its walk at <a, b> instead of the root servers of the internet, so these servers decide every answer. Use it only in a lab or a private network.`
 - `network.extra_ranges is set: data from DNS can now make osk send queries to <p, q>. Use it only in a lab or a private network.`
+
+## Certificates
+
+By default osk reads no certificate log. This object turns it on:
+
+```json
+"certificates": {
+  "key": {"env": "CERTSPOTTER_KEY"},
+  "interval": "10m"
+}
+```
+
+Every key is optional, so `"certificates": {}` turns the source on with the defaults. The source is the Cert Spotter API of SSLMate. When `certificates` is set, `osk run`, `osk status`, `osk validate` and `osk doctor` print this warning:
+
+- `certificates is set: osk sends the name of each watched domain to <host>, which learns which domains you watch.`
+
+How often osk really asks:
+
+- The source sets the gap between reads. On 17 Nov 2026, without a key, it allowed 10 requests an hour, and after a list with nothing new it asked for a wait of one hour. osk waits as asked (a wait of more than one hour after an empty list is cut to one hour) and asks again at its first check after the wait, so a new certificate is seen about one hour after the source has it (a little later when `interval` does not divide the hour; when `interval` is longer than the wait, the next read comes one `interval` later), plus the delay of the source behind the issuance, which is not measured yet. A check inside a wait sends nothing.
+- `interval` is the gap that osk uses only when the source asks for less. A wait after a `429` is kept whole; a `Retry-After` of more than 24 hours is not read, and osk then asks again at its next check.
+- One domain costs one request an hour in steady state and at least two when osk starts, because a start lists every valid certificate again. A longer list needs one request for each page, and at most 10 requests are made in one read. Once in 24 hours, in one run, osk reads the list again from the beginning, beside its normal work; this never stops the certificate alerts. For a domain whose list does not fit one run (more than 9 pages: 10 pages need 11 requests), the list is not read again until osk starts again, so a fault of the source's position marker is not healed before that. When the daily listing fails, osk tries it again one hour later, and the normal reading of new certificates goes on in between. At most two certificate checks run at one time.
+- More than 10000 valid certificates for a domain, or more than 100000 names on them, make the check fail with "too many". osk asks again after one hour, and the alerts that are open stay judged by the certificates that osk has. A domain that is truly that large fails every hour, which the `check-failing` alert tells.
+- The terms of the source said on 17 Nov 2026 that use without a key is for personal or evaluation purposes; get a key for any other use. The limits with a key were not measured.
+
+A read that fails (no answer, a timeout, status `429` or another status that is not 200, an answer that is too large or that osk cannot read) never means "no certificates": osk judges only the certificates that it has read. An alert can still open from pages read before the failure, and it ends when its certificate expires. After 3 times `interval` of failing reads, a medium `check-failing` alert opens. A source that wrongly answers with an empty list right after osk starts ends the open certificate alerts until its next true answer.
+
+The `issuer` and `certname` lines of the expectations file are judged only when `certificates` is set. When a file has such a line and the config has no `certificates`, `osk run` and `osk validate` print `warning <domain>: the issuer and certname lines are not judged: certificates is not set in the config`.
 
 ## Adding a domain
 

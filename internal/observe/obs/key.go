@@ -15,6 +15,7 @@ const (
 	KindDS                         // DS set of Domain, at every server of the parent zone
 	KindRecords                    // record set Name/Type, at every server of the zone that holds Name
 	KindSerial                     // SOA of Domain, at every server of Domain
+	KindWildcard                   // A set of a random name just under Name, at every server of the zone that holds Name
 )
 
 var kindWords = map[Kind]string{
@@ -22,6 +23,7 @@ var kindWords = map[Kind]string{
 	KindDS:         "ds",
 	KindRecords:    "records",
 	KindSerial:     "serial",
+	KindWildcard:   "wildcard",
 }
 
 func (k Kind) String() string {
@@ -31,11 +33,16 @@ func (k Kind) String() string {
 	return "kind" + strconv.Itoa(int(k))
 }
 
+// WildcardLabel is the length in octets of the random label that a wildcard
+// check asks under its name: the 26 characters of crypto/rand.Text, which no
+// one can guess and create ahead of the check to hide a wildcard from it.
+const WildcardLabel = 26
+
 // Key names one check.
 type Key struct {
 	Kind   Kind
 	Domain dnswire.Name // the watched domain the check belongs to
-	Name   dnswire.Name // equals Domain, except for KindRecords, where it may lie anywhere
+	Name   dnswire.Name // equals Domain, except for KindRecords and KindWildcard, where it may lie anywhere
 	Type   dnswire.Type
 }
 
@@ -55,6 +62,13 @@ func SerialKey(domain dnswire.Name) Key {
 // domain, as the target of an alias or of an MX record does.
 func RecordsKey(domain, name dnswire.Name, t dnswire.Type) Key {
 	return Key{Kind: KindRecords, Domain: domain, Name: name, Type: t}
+}
+
+// WildcardKey is the key of the check that asks a random name just under
+// name. The key holds no label, so that every run, with its own label, is
+// the same check.
+func WildcardKey(domain, name dnswire.Name) Key {
+	return Key{Kind: KindWildcard, Domain: domain, Name: name, Type: dnswire.TypeA}
 }
 
 // String gives every field, with the names lowercased, so two keys have the

@@ -168,6 +168,8 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 		found = judge(o, e, ok, RuleDS)
 	case obs.KindRecords:
 		found = append(zone(f, o), judge(o, e, ok, RuleRecordSet)...)
+	case obs.KindWildcard:
+		// No line of the file is about a random name.
 	case obs.KindSerial:
 		// No line of the file is about the serial.
 	}

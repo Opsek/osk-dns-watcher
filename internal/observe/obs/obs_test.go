@@ -74,7 +74,8 @@ func TestKindString(t *testing.T) {
 		{obs.KindRecords, 3, "records"},
 		{obs.KindSerial, 4, "serial"},
 		{0, 0, "kind0"},
-		{5, 5, "kind5"},
+		{obs.KindWildcard, 5, "wildcard"},
+		{6, 6, "kind6"},
 		{255, 255, "kind255"},
 	} {
 		if uint8(c.kind) != c.value || c.kind.String() != c.word {
@@ -96,6 +97,8 @@ func TestKeyConstructors(t *testing.T) {
 		{obs.DSKey(domain), obs.KindDS, domain, dnswire.TypeDS},
 		{obs.SerialKey(domain), obs.KindSerial, domain, dnswire.TypeSOA},
 		{obs.RecordsKey(domain, elsewhere, dnswire.TypeMX), obs.KindRecords, elsewhere, dnswire.TypeMX},
+		{obs.WildcardKey(domain, domain), obs.KindWildcard, domain, dnswire.TypeA},
+		{obs.WildcardKey(domain, elsewhere), obs.KindWildcard, elsewhere, dnswire.TypeA},
 	} {
 		k := c.key
 		if k.Kind != c.kind || !k.Domain.Equal(domain) || !k.Name.Equal(c.name) || k.Type != c.typ {
@@ -119,6 +122,8 @@ func TestKeyString(t *testing.T) {
 		{obs.DelegationKey(domain), "delegation corp.test. corp.test. NS"},
 		{obs.DSKey(domain), "ds corp.test. corp.test. DS"},
 		{obs.SerialKey(domain), "serial corp.test. corp.test. SOA"},
+		{obs.WildcardKey(domain, domain), "wildcard corp.test. corp.test. A"},
+		{obs.WildcardKey(domain, dataName(t, "Mail.Shop.TEST.")), "wildcard corp.test. mail.shop.test. A"},
 	} {
 		if got := c.key.String(); got != c.want {
 			t.Errorf("key prints %q, want %q", got, c.want)
@@ -317,5 +322,13 @@ func TestAnswerCarriesProof(t *testing.T) {
 		got.Received.Sub(got.Sent) != time.Millisecond || len(got.Wire) != 3 || !got.TCP ||
 		dataMatch(got.Result).failure.Reason != obs.ReasonTimeout || len(o.Walk) != 1 || !o.Zone.Equal(o.Key.Domain) {
 		t.Errorf("observation does not hold what was put in: %+v", o)
+	}
+}
+
+// 26 octets of base32 hold 128 random bits, so a server cannot guess the label
+// and answer it differently.
+func TestWildcardLabel(t *testing.T) {
+	if obs.WildcardLabel != 26 {
+		t.Errorf("WildcardLabel = %d, want 26", obs.WildcardLabel)
 	}
 }

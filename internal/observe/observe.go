@@ -7,10 +7,12 @@ package observe
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +51,7 @@ type Observer struct {
 	roots    []obs.Server
 	exchange exchangeFunc     // replaceable, so tests need no network
 	now      func() time.Time // replaceable, so tests need no real clock
+	label    func() string    // the random label of a wildcard check; replaceable, so tests know the name asked
 	limit    *limiter
 	cookies  *cookieJar
 	cache    *cutCache
@@ -85,10 +88,14 @@ func New(cfg Config) (*Observer, error) {
 		roots:    roots,
 		exchange: dnswire.Exchange,
 		now:      time.Now,
-		limit:    newLimiter(cfg.RateInterval, cfg.RateBurst),
-		cookies:  newCookieJar(),
-		cache:    newCutCache(),
-		running:  make(map[string]bool),
+		// rand.Text gives at least 26 characters, so the cut cannot fail; it
+		// keeps a longer text of a later Go from making Run refuse a key that
+		// Validate accepted.
+		label:   func() string { return strings.ToLower(rand.Text())[:obs.WildcardLabel] },
+		limit:   newLimiter(cfg.RateInterval, cfg.RateBurst),
+		cookies: newCookieJar(),
+		cache:   newCutCache(),
+		running: make(map[string]bool),
 	}, nil
 }
 
@@ -133,6 +140,10 @@ func (o *Observer) Run(ctx context.Context, c Check) (obs.Observation, error) {
 		delete(o.running, key)
 		o.mu.Unlock()
 	}()
+	q, err := o.question(c.Key)
+	if err != nil {
+		return obs.Observation{}, err
+	}
 
 	// Three quarters of the interval; Interval*3 could overflow.
 	limit := c.Interval - c.Interval/4
@@ -157,7 +168,6 @@ func (o *Observer) Run(ctx context.Context, c Check) (obs.Observation, error) {
 	parent := c.Key.Kind == obs.KindDelegation || c.Key.Kind == obs.KindDS
 	z, fail := f.walk(c.Key.Name, parent)
 	ob.Walk = f.log
-	q := dnswire.Question{Name: c.Key.Name, Type: c.Key.Type, Class: dnswire.ClassINET}
 	if fail != nil {
 		ob.Answers = []obs.Answer{{Proof: obs.Proof{Question: q, Received: o.now()}, Result: obs.FailureResult(*fail)}}
 		return ob, nil
@@ -165,6 +175,28 @@ func (o *Observer) Run(ctx context.Context, c Check) (obs.Observation, error) {
 	ob.Zone = z.name
 	ob.Answers = f.fanOut(c.Key.Kind, z, q)
 	return ob, nil
+}
+
+// question is what the fan-out asks. A wildcard check asks a name drawn anew
+// for each run, so that no one can create that one name ahead of it. Only
+// the fan-out asks it: the walk asks the servers on its way down for the NS
+// set of Key.Name.
+func (o *Observer) question(k obs.Key) (dnswire.Question, error) {
+	q := dnswire.Question{Name: k.Name, Type: k.Type, Class: dnswire.ClassINET}
+	if k.Kind != obs.KindWildcard {
+		return q, nil
+	}
+	label := o.label()
+	name, err := childName(label, k.Name)
+	if err != nil {
+		return dnswire.Question{}, fmt.Errorf("%w: the random label %q makes no name under %v: %v", ErrInvalidCheck, label, k.Name, err)
+	}
+	q.Name = name
+	return q, nil
+}
+
+func childName(label string, parent dnswire.Name) (dnswire.Name, error) {
+	return dnswire.NameFromLabels(append([]string{label}, parent.Labels()...))
 }
 
 // notRecordSets are the types that a records check cannot ask: they are not
@@ -197,13 +229,18 @@ func (c Check) Validate() error {
 		if notRecordSets[k.Type] {
 			return fmt.Errorf("%w: Type %v cannot be checked as a record set", ErrInvalidCheck, k.Type)
 		}
+	case obs.KindWildcard:
+		want = dnswire.TypeA
+		if _, err := childName(strings.Repeat("a", obs.WildcardLabel), k.Name); err != nil {
+			return fmt.Errorf("%w: Name %v leaves no room for a label of %d octets", ErrInvalidCheck, k.Name, obs.WildcardLabel)
+		}
 	default:
 		return fmt.Errorf("%w: Kind %v", ErrInvalidCheck, k.Kind)
 	}
 	switch {
 	case k.Domain.LabelCount() == 0:
 		return fmt.Errorf("%w: Domain is the root", ErrInvalidCheck)
-	case k.Kind != obs.KindRecords && !k.Name.Equal(k.Domain):
+	case k.Kind != obs.KindRecords && k.Kind != obs.KindWildcard && !k.Name.Equal(k.Domain):
 		return fmt.Errorf("%w: Name %v differs from Domain %v", ErrInvalidCheck, k.Name, k.Domain)
 	case k.Kind != obs.KindRecords && k.Type != want:
 		return fmt.Errorf("%w: Type %v, but a %v check asks %v", ErrInvalidCheck, k.Type, k.Kind, want)

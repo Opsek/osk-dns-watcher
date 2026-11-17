@@ -65,7 +65,7 @@ func TestWalkRunValidation(t *testing.T) {
 		field    string
 	}{
 		{"kind 0", obs.Key{Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
-		{"kind 5", obs.Key{Kind: 5, Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
+		{"kind 6", obs.Key{Kind: 6, Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
 		{"delegation of the root", obs.DelegationKey(dnswire.Name{}), time.Minute, "domain"},
 		{"records under the root domain", obs.RecordsKey(dnswire.Name{}, www, dnswire.TypeA), time.Minute, "domain"},
 		{"delegation of another name", obs.Key{Kind: obs.KindDelegation, Domain: corp, Name: www, Type: dnswire.TypeNS}, time.Minute, "name"},

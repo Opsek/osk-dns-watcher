@@ -106,6 +106,8 @@ func setOf(k obs.Key) (dnswire.Name, dnswire.Type, bool) {
 		return k.Name, k.Type, true
 	case obs.KindSerial:
 		// The serial changes with every edit of the zone; no line holds it.
+	case obs.KindWildcard:
+		// A random name is no set of the file.
 	}
 	return dnswire.Name{}, 0, false
 }

@@ -922,6 +922,8 @@ func (g *regGen) set(kind obs.Kind) []dnswire.Record {
 			set = append(set, decRR(g.t, "www.corp.test.", dnswire.TypeA, regPick(g, regAData...)))
 		case obs.KindSerial:
 			set = append(set, decRR(g.t, "corp.test.", dnswire.TypeSOA, "ns1.corp.test. hostmaster.corp.test. 1 3600 600 604800 300"))
+		case obs.KindWildcard:
+			// The registry rules read no wildcard check.
 		}
 	}
 	return set
@@ -1101,7 +1103,7 @@ func regOracleOf(f *expect.File, o obs.Observation) regOracle {
 				or.ds = &Finding{Rule: RuleDS, Severity: SeverityHigh, Check: key, Expected: line.FormText(), Seen: seen, Value: regValue(seen)}
 				or.rules = append(or.rules, RuleDS)
 			}
-		case obs.KindRecords, obs.KindSerial:
+		case obs.KindRecords, obs.KindSerial, obs.KindWildcard:
 			// No registry-level rule reads these checks.
 		}
 	}

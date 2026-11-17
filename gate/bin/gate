@@ -1,6 +1,6 @@
 #!/bin/sh
-# Runs the quality gate: the phases build, static, tests, selftest, lab,
-# quickstart and clean, in order, stopping at the first failure. Each check
+# Runs the quality gate: the phases build, static, tests, mutate, selftest,
+# lab, quickstart and clean, in order, stopping at the first failure. Each check
 # prints "ok <name>" or "FAIL <name>: <reason>"; the exit code is 0 only if
 # every check passed.
 # "gate/bin/gate build" runs the build phase only.
@@ -111,6 +111,11 @@ tests_phase() {
 		shift 2
 	done
 	passed tests
+}
+
+mutate_phase() {
+	box "$image" gate/phase/mutate.sh || fail mutate "gate/phase/mutate.sh failed (lines above)"
+	passed mutate
 }
 
 selftest_phase() {
@@ -258,6 +263,7 @@ build_phase
 [ $# -eq 0 ] || exit 0
 static_phase
 tests_phase
+mutate_phase
 selftest_phase
 lab_phase
 quickstart_phase

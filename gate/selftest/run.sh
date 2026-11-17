@@ -13,6 +13,10 @@ build_archcheck() { # build_archcheck <binary>
 	go build -mod=vendor -buildvcs=false -o "$1" ./gate/archcheck
 }
 
+build_mutate() { # build_mutate <binary>
+	go build -mod=vendor -buildvcs=false -o "$1" ./gate/mutate
+}
+
 # Each run_<command> runs a check on a copy.
 
 # From outside the copy, so that only --root can lead to it.
@@ -66,6 +70,28 @@ run_outside() {
 	return "$status"
 }
 
+# The mutation check runs on a small module that the faults of the mutate
+# cases write to $TMP/mutfix, never on the repository. $TMP/mutwant lists text
+# that the output must also hold, one fixed string for each line.
+run_mutate() {
+	out=$(cd "$TMP" && GOFLAGS= GOPROXY=off "$MUTATE" --root "$TMP/mutfix" \
+		--list "$TMP/mutfix/gate/mutants.txt" zz 2>&1)
+	rc=$?
+	# A problem of the list may or may not carry the name of the check.
+	out=$(printf '%s\n' "$out" | sed '/^FAIL /!s/^\(.*mutants\.txt:[0-9][0-9]*: \)/FAIL mutate: \1/')
+	if [ -f "$TMP/mutwant" ]; then
+		while IFS= read -r want; do
+			if ! printf '%s\n' "$out" | grep -qF -- "$want"; then
+				printf '%s\n' "$out" | grep -vx 'ok mutate'
+				echo "FAIL mutate-output: no line holds $want"
+				return 3
+			fi
+		done <"$TMP/mutwant"
+	fi
+	printf '%s\n' "$out"
+	return "$rc"
+}
+
 ROOT=$(pwd)
 MOD=$(sed -n 's/^module //p' go.mod)
 TMP=${TMPDIR:-/tmp}/osk-selftest.$$
@@ -75,10 +101,15 @@ trap 'exit 1' INT TERM
 CLEAN=$TMP/clean
 COPY=$TMP/repo
 ARCHCHECK=$TMP/archcheck
+MUTATE=$TMP/mutate
 bad=0
 
 if ! build_archcheck "$ARCHCHECK"; then
 	echo "FAIL selftest: gate/archcheck does not build"
+	exit 1
+fi
+if ! build_mutate "$MUTATE"; then
+	echo "FAIL selftest: gate/mutate does not build"
 	exit 1
 fi
 # Every case starts from this copy. Without .git, no check can depend on it.
@@ -1440,6 +1471,88 @@ func TestZzFault(t *testing.T) {
 EOF
 }
 
+# ---- Faults for mutate ----
+# The module has one function and a test of 5 and -5 only: the mutant that
+# changes > to >= survives, and the one that negates the test is killed.
+
+MUTATE_ID='zz/zz.go Positive boundary "x > 0"'
+
+# mutate_fixture <list>: the module, with the text of the list.
+mutate_fixture() {
+	rm -rf "$TMP/mutfix" "$TMP/mutwant"
+	mkdir -p "$TMP/mutfix/zz" "$TMP/mutfix/gate" || return 1
+	printf 'module zz\n\ngo %s\n' "$(sed -n 's/^go //p' go.mod)" >"$TMP/mutfix/go.mod"
+	cat >"$TMP/mutfix/zz/zz.go" <<'EOF'
+package zz
+
+func Positive(x int) bool { return x > 0 }
+EOF
+	cat >"$TMP/mutfix/zz/zz_test.go" <<'EOF'
+package zz
+
+import "testing"
+
+func TestPositive(t *testing.T) {
+	if !Positive(5) || Positive(-5) {
+		t.Error("Positive is wrong")
+	}
+}
+EOF
+	printf '%s' "$1" >"$TMP/mutfix/gate/mutants.txt"
+}
+
+mutate_survivor() {
+	mutate_fixture '' &&
+		printf '%s\n' "survived $MUTATE_ID" >"$TMP/mutwant"
+}
+
+mutate_listed() {
+	mutate_fixture "$MUTATE_ID equivalent: planted
+"
+}
+
+mutate_stale() {
+	mutate_fixture "$MUTATE_ID equivalent: planted
+zz/zz.go Positive negate \"x > 0\" equivalent: planted
+"
+}
+
+mutate_bad_reason() {
+	mutate_fixture "$MUTATE_ID why not
+"
+}
+
+mutate_baseline() {
+	mutate_fixture '' &&
+		cat >"$TMP/mutfix/zz/zz_test.go" <<'EOF'
+package zz
+
+import "testing"
+
+func TestPositive(t *testing.T) {
+	t.Fatal("fails without a mutant")
+}
+EOF
+}
+
+# The mutant of a + b on strings does not compile.
+mutate_not_viable() {
+	mutate_listed &&
+		cat >>"$TMP/mutfix/zz/zz.go" <<'EOF'
+
+func Join(a, b string) string { return a + b }
+EOF
+	cat >>"$TMP/mutfix/zz/zz_test.go" <<'EOF'
+
+func TestJoin(t *testing.T) {
+	if Join("a", "b") != "ab" {
+		t.Error("Join is wrong")
+	}
+}
+EOF
+	printf '%s\n' '1 not viable' >"$TMP/mutwant"
+}
+
 # ---- Cases ----
 
 Z=internal/zzfault/zzfault.go
@@ -1574,6 +1687,13 @@ check fuzz-not-found                "fuzz_test $L lab"         fuzz 'fuzz intern
 
 check labtests-run                  lab_test                   labtests pass
 check race-lab                      "racy $L lab"              labtests '--- FAIL: TestZzFault' 'race detected'
+
+check mutate-survivor               mutate_survivor            mutate mutate '1 mutant survived'
+check mutate-listed                 mutate_listed              mutate 'ok mutate'
+check mutate-stale                  mutate_stale               mutate mutate 'no surviving mutant has this id'
+check mutate-bad-reason             mutate_bad_reason          mutate mutate 'the reason must start with'
+check mutate-baseline               mutate_baseline            mutate mutate 'fail without a mutant'
+check mutate-not-viable             mutate_not_viable          mutate 'ok mutate'
 
 for script in fuzz labtests static tests; do
 	check "outside-container-$script" none outside build-container "gate/phase/$script.sh"

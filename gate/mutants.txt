@@ -1,0 +1,14 @@
+# Changes of the code that no test notices, each accepted with a reason.
+# gate/phase/mutate.sh fails on a surviving change that is not listed here,
+# and on a line here that names no surviving change.
+#
+# <file> <func> <word> <quoted>[#n] <reason>
+# The reason starts with "equivalent:" (no input tells the two apart),
+# "unreachable:" (no caller reaches the code; say why) or "open:" (no test
+# checks it yet).
+internal/expect/expect.go Expectation.Match bool "false" unreachable: Parse and Snapshot always set one of the four forms, so the switch returns before this line
+internal/expect/expect.go address bool "false" equivalent: the zero address lies in no prefix, so the range form is false with either result
+internal/expect/expect.go target bool "false" unreachable: each lets only records of the line's type through, and the decoder gives NS, CNAME, DNAME and MX only as their own types
+internal/expect/expect.go File.Zone boundary "e.Name.LabelCount() > zone.LabelCount()" equivalent: an owner under the domain with as many labels as the zone found so far is that zone, and every caller compares zones with Equal or prints them lowered
+internal/expect/parse.go Parse boundary "len(p.problems) < maxProblems" equivalent: the one extra problem that is kept lies past the cut of the final list to maxProblems
+internal/expect/parse.go hasTrailingDot arith "len(body) - len(strings.TrimRight(body, `\\`))" equivalent: a sum and a difference of the same two numbers have the same parity, and only the parity is used

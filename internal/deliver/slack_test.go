@@ -510,6 +510,8 @@ func TestSlackSendPostsTheMessage(t *testing.T) {
 		t.Errorf("Message %q, want SlackMessage %q", slack.Message(e), deliver.SlackMessage(e))
 	}
 	o := slack.Send(context.Background(), deliver.SlackMessage(e))
+	// The Date of the answer has a test of its own.
+	o.Date = time.Time{}
 	// "slow down" is no error word, so Send passes on no body.
 	want := deliver.Outcome{Status: 429, RetryAfter: 30 * time.Second}
 	if !reflect.DeepEqual(o, want) {

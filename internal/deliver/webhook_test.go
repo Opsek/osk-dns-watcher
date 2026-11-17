@@ -827,6 +827,8 @@ func wbhSigned(t *testing.T, key, body []byte) (wbhRequest, int64, int64) {
 	before := time.Now().Unix()
 	o := hook.Send(context.Background(), body)
 	after := time.Now().Unix()
+	// The Date of the answer has a test of its own.
+	o.Date = time.Time{}
 	if !reflect.DeepEqual(o, deliver.Outcome{Status: http.StatusAccepted}) {
 		t.Fatalf("Send gave %+v, want status 202", o)
 	}
@@ -1028,7 +1030,10 @@ func TestWebhookChannel(t *testing.T) {
 	if got := hook.Notice(n); !bytes.Equal(got, deliver.WebhookNotice(n)) || len(got) == 0 {
 		t.Errorf("Notice %s, want WebhookNotice %s", got, deliver.WebhookNotice(n))
 	}
-	if o := hook.Send(context.Background(), wbhBody); !reflect.DeepEqual(o, deliver.Outcome{Status: 429, RetryAfter: 30 * time.Second}) {
+	o := hook.Send(context.Background(), wbhBody)
+	// The Date of the answer has a test of its own.
+	o.Date = time.Time{}
+	if !reflect.DeepEqual(o, deliver.Outcome{Status: 429, RetryAfter: 30 * time.Second}) {
 		t.Errorf("Send gave %+v, want status 429 and Retry-After 30 s", o)
 	}
 }

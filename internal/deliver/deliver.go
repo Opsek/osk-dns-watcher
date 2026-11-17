@@ -39,6 +39,7 @@ func Delay(n int) time.Duration {
 type Outcome struct {
 	Status     int           // HTTP status; 0 when no answer came
 	RetryAfter time.Duration // httpclient.Response.RetryAfter
+	Date       time.Time     // httpclient.Response.Date
 	Body       []byte        // the answer when it is one of Slack's error words; else nil
 	Err        string        // the httpclient error text when Status is 0
 }
@@ -142,7 +143,7 @@ func outcome(r httpclient.Response, err error, words []string) Outcome {
 	if w := strings.TrimSuffix(string(r.Body), "\n"); slices.Contains(words, w) {
 		word = []byte(w)
 	}
-	return Outcome{Status: r.Status, RetryAfter: r.RetryAfter, Body: word}
+	return Outcome{Status: r.Status, RetryAfter: r.RetryAfter, Date: r.Date, Body: word}
 }
 
 // Attempt is one try of one row.

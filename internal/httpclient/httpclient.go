@@ -40,6 +40,7 @@ type Client struct {
 type Response struct {
 	Status     int
 	RetryAfter time.Duration // 0 when absent or not a number of seconds
+	Date       time.Time     // the server's clock; zero when the header is absent or not valid
 	Body       []byte        // at most MaxBody octets, as the server sent them
 }
 
@@ -130,8 +131,17 @@ func (c *Client) Post(ctx context.Context, rawURL, contentType string, body []by
 	return Response{
 		Status:     resp.StatusCode,
 		RetryAfter: retryAfter(resp.Header.Get("Retry-After")),
+		Date:       date(resp.Header.Get("Date")),
 		Body:       data,
 	}, nil
+}
+
+func date(v string) time.Time {
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // The failures of Post other than ErrURL, ErrHost and ErrTimeout. The text

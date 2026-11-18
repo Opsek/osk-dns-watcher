@@ -40,7 +40,7 @@ When the answer is as expected again, a RESOLVED message follows. Other webhooks
 
 ## The expectations file
 
-One file per domain, one line per record set: the name, the type, and what is expected. `osk init` writes the first version from what the servers give, for the NS, DS, A, AAAA, MX, TXT and CAA sets of the domain and the A set of `www`. It also writes `_acme-challenge.<domain>. TXT none`, `_acme-challenge.www.<domain>. TXT none` and `*.<domain>. A none` where nothing is there. If you use DNS challenges to get certificates, remove the two `_acme-challenge` lines: the challenge alert fires at each certificate request. Edit it to change what osk trusts or to watch more names:
+One file per domain, one line per record set: the name, the type, and what is expected. `osk init` writes the first version from what the servers give, for the NS, DS, A, AAAA, MX, TXT and CAA sets of the domain and the A set of `www`, and the TXT sets of `_dmarc.<domain>` and `_mta-sts.<domain>`. When `_mta-sts.<domain>` holds an MTA-STS record (not a CNAME) that reads, and the domain serves a policy file that reads, it also writes the `mta-sts` line (below) from that file. `osk snapshot` does the same. It also writes `_acme-challenge.<domain>. TXT none`, `_acme-challenge.www.<domain>. TXT none` and `*.<domain>. A none` where nothing is there. If you use DNS challenges to get certificates, remove the two `_acme-challenge` lines: the challenge alert fires at each certificate request. Edit it to change what osk trusts or to watch more names:
 
 ```
 domain example.com.
@@ -62,6 +62,7 @@ _acme-challenge.example.com. TXT none
 - Names end with a dot. A line that starts with `#` is a comment.
 - A `DS` line is compared at the parent: a changed DS record gives an alert. The address line of a nameserver host also checks its glue at the parent, the address that the parent gives with the delegation. Ask for the host pairs in `osk snapshot` to get those lines, for example `osk snapshot example.com. ns1.example.com. A ns1.example.com. AAAA`. Ask for both types: a host with no AAAA gets the line `AAAA none`, and glue of a type with no line is a difference.
 - `issuer <name>` and `certname <name>` lines tell the certificate check (see [Certificates](#certificates)) what is expected. `issuer letsencrypt.org` names a certificate authority as it appears in CAA records (no trailing dot); with at least one such line, a valid certificate from any other authority gives an alert. `certname *.example.com.` allows a wildcard certificate name; it ends with a dot and must be at or under the domain. Write one name on each line.
+- `mta-sts <mode> <max_age> <mx>...` is the MTA-STS policy that the domain must serve, for example `mta-sts enforce 604800 mail.example.com. *.mail.example.net.`. The mode is `enforce`, `testing` or `none`; `max_age` is a number of seconds; each mx pattern ends with a dot, and only its first label may be `*`. A file has at most one such line. The line makes osk fetch the policy file (see [Mail records](#mail-records)). `osk init` and `osk snapshot` write it only when the `_mta-sts` record is there and is no CNAME.
 
 To accept the value that an alert reports, run `docker compose exec osk osk accept --config osk.json <alert id>`: it prints the change and a code; add `--write <code>` before the id to make it. To edit a file by hand: `docker compose exec osk vi example.com.expect`. osk reads the files again every 5 seconds, keeps the last valid file when one is not valid (and alerts), and sends a notice with the changed lines.
 
@@ -84,6 +85,15 @@ Run them as `docker compose exec osk osk <command>`. All but the last four take 
 | `query @<server> <name> [<type>]` | Sends one DNS query to one server and prints the answer. |
 | `version` | Prints the versions of osk, Go and SQLite. |
 
+## Mail records
+
+osk reads the mail records of your domain as policies, not only as text. When the SPF, DMARC, DKIM or MTA-STS record of a line changes, the alert names the policy, and when the record now lets more senders pass, asks receivers to do less, adds a signing key or protects mail in transit less than the line in your file, the alert says so and lists each such change in words, for example `all gives softfail in place of fail` or `p=none in place of p=reject`. A change that permits nothing more still gives the alert, so that your file stays the record of what is right. osk also fetches the MTA-STS policy file of each domain whose file has an `mta-sts` line, over HTTPS from `mta-sts.<domain>`, and compares it with that line.
+
+- The policy file is `https://mta-sts.<domain>/.well-known/mta-sts.txt`. osk fetches it every 5 minutes (the `other` interval), and only for a domain whose file has an `mta-sts` line: remove the line and the fetch stops. The request is a plain GET that sends no secret and no data of yours, to that one host, which is the host that mail senders use. osk follows no redirect, checks the certificate of the host against the certificates that the system trusts, waits at most 30 seconds, and accepts a body of at most 64 kilobytes.
+- When the file differs from the line, osk alerts, with words when its mode, its `max_age` or its mx patterns protect less than the line. A file that arrives but cannot be read as a policy is such a difference: the alert says that senders act as if there were no policy. A fetch that fails (no connection, a certificate that the system does not trust, a redirect, a status other than 200, a body that is too large, no answer in time) is never taken as "no policy": the alert about the policy stays as it is, and after 15 minutes of failures osk alerts that the check is failing. The `text` of the log line of each failed run names the cause in parentheses, for example `checked other policy example.com. mta-sts.example.com. TXT 2026-11-18T10:00:00.000Z failed bad-answer (HTTP status 404)`. While the line is in the file, the `id` of the MTA-STS record is not compared; only whether the record is there. An `id` that changes with the same policy gives the low alert that the zone changed and no watched record differs.
+- An SPF line is a TXT line at a name that holds an SPF record, a DMARC line one at `_dmarc.<domain>.`, an MTA-STS line one at `_mta-sts.<domain>.`, and a DKIM line one at `<selector>._domainkey.<domain>.`. Add the line of each DKIM selector with `osk snapshot`, for example `osk snapshot example.com. s1._domainkey.example.com. TXT`: selectors cannot be listed from DNS, so `osk init` does not guess them.
+- A mail record that the file does not have yet reads as `none`. When it appears, the alert comes with no words, and `osk accept` writes it.
+
 ## What osk detects
 
 - The nameservers of a domain at its parent zone differ from the file: critical.
@@ -91,6 +101,8 @@ Run them as `docker compose exec osk osk <command>`. All but the last four take 
 - The DS set at the parent differs from the file or is gone: high; critical when the nameservers alert of the domain is open, and it stays critical until it resolves.
 - The parent says that the domain does not exist: critical.
 - A record set at any nameserver of the domain differs from the file: high for A, AAAA, CNAME, MX and NS, medium for the other types.
+- A watched SPF, DMARC, DKIM or MTA-STS record changes: medium, as for any TXT record. The alert names the policy. When the record now permits more than the line in the file, the alert's first lines say how: an SPF record that lets more senders pass, a DMARC record that asks receivers to do less or sends reports elsewhere, a DKIM key that the file does not list, an MTA-STS record that is gone or cannot be read.
+- The MTA-STS policy file of a domain whose file has an `mta-sts` line differs from that line: medium. osk fetches `https://mta-sts.<domain>/.well-known/mta-sts.txt` every 5 minutes, and the alert says in words when the mode, the `max_age` or the mx patterns protect less. A fetch that fails is not read as no policy; after 15 minutes it gives the alert of a failing check.
 - A name is answered from a zone that the file does not expect.
 - The file has no line for the NS or the DS set of a domain.
 - The zone serial moved and no watched record differs: low. This is a change to a record you do not watch, or one that was undone.
@@ -142,7 +154,24 @@ osk can also read the public certificate logs, to see certificates that were iss
 - A certificate from an expected authority for a name of the file, for example one that someone obtained by changing DNS for a moment: the logs cannot tell it from your own renewal. The DNS checks and the CAA lines are the defence.
 - A wildcard certificate for a name that is one label above a watched domain.
 - Certificates that were issued before osk started are all new to it: the first run lists every valid certificate, and what the file does not cover gives up to three alerts for each domain.
-- Registry data (locks, expiry), email policy, DNSSEC validation and the answers of public resolvers.
+- A change inside a record that an SPF include or redirect names: osk compares the record of the line, not the records that it points at. Watch such a record with a line of its own.
+- A name that an SPF macro builds.
+- A DKIM key added at a selector that no line names: selectors cannot be listed from DNS.
+- Which DMARC record governs a subdomain that has none of its own: add the line of the record that governs it.
+- The size of a DKIM key.
+- A TXT line with `||`: it gives the generic alert, without the words.
+- A mail record that a provider hosts through a CNAME: osk watches the CNAME and alerts when its target changes, but does not read the provider's record behind it.
+- A mail record rewritten with the same policy (other string breaks or spaces) still alerts: accept the new text.
+- An SPF record that appears where the file has `TXT none` or a TXT line that holds no SPF record: the alert shows the record, with no words.
+- The limit of 10 DNS lookups of an SPF record counts the terms of that record only, not those of the records that its includes name.
+- A DKIM record that does not follow the strict form (the `v` tag not first, an odd tag) is not a key for osk, though a lenient verifier may use it.
+- A DMARC `psd` tag: any change counts as weaker, and osk does not model the tree walk that finds the record of a parent domain.
+- Whether a mail record is weak at all: osk compares with your file, so it does not say that your own SPF has `+all`, your DMARC has `p=none` or your MTA-STS mode is `testing`.
+- In the MTA-STS policy file, a key given twice with other values: the first counts, as the standard says, and a sender that keeps the last one reads another policy. The media type of the file is not checked.
+- A failed policy fetch gives no alert about the policy: only the check-failing alert, after the limit. A host that fails two runs in three never reaches the limit.
+- The policy fetch sends one request for each run to one address, so a host can tell osk from a mail server and serve it another policy.
+- The fetch of the MTA-STS policy file goes to the address that DNS gives for `mta-sts.<domain>`. Who controls the zone can point that name at an address inside your network; osk then tries a TLS connection to port 443 there on each run. No data of yours is sent and nothing of the answer reaches that party. The DNS checks refuse such addresses; this fetch does not yet.
+- Registry data (locks, expiry), DNSSEC validation and the answers of public resolvers.
 
 ## Update, stop, data
 

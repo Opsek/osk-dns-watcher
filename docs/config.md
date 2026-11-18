@@ -73,7 +73,7 @@ An `env` secret needs the variable in the environment of `osk run`. The Compose 
 | `intervals.serial` | duration | `15s` | The zone serial at each nameserver. 5s to 24h. |
 | `intervals.parent` | duration | `60s` | The NS and DS sets at the parent zone. 5s to 24h. |
 | `intervals.fast` | duration | `60s` | The A, AAAA, CAA and MX sets of the domain, every line whose first label is `_acme-challenge`, at or under the domain, and the `fast` names. 5s to 24h. |
-| `intervals.other` | duration | `5m` | Every other line; the address check of each name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at; the wildcard check of each `*.<name>. A none` line (only that line; another line with a `*` name is an ordinary line); and the CAA check of each name of the file that has no CAA line, when a CAA line at the domain or at a name above it sets a policy for that name. A moved serial of the domain's own zone also starts the checks of that zone at once, the wildcard check of a name in it among them. 5s to 24h. |
+| `intervals.other` | duration | `5m` | Every other line; the address check of each name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at; the wildcard check of each `*.<name>. A none` line (only that line; another line with a `*` name is an ordinary line); the fetch of the MTA-STS policy file of a domain whose file has an `mta-sts` line; and the CAA check of each name of the file that has no CAA line, when a CAA line at the domain or at a name above it sets a policy for that name. A moved serial of the domain's own zone also starts the checks of that zone at once, the wildcard check of a name in it among them. 5s to 24h. |
 | `slack.url` | secret | required in `slack` | An https URL with a host and no user name. |
 | `slack.min_severity` | string | `low` | `low`, `medium`, `high` or `critical`. |
 | `webhooks` | list of objects | `[]` | 0 to 8 webhooks. |
@@ -143,10 +143,10 @@ A webhook gets a POST with `Content-Type: application/json` and a body with `"sc
 ```
 
 - `event`: `open`, `update`, `escalate`, `reminder` or `resolve`. `severity` is the severity after the event, `was` the one before.
-- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing`, `zone-changed`, `disagree`, `alias-target`, `nameserver-host`, `mail-target`, `challenge`, `wildcard`, `caa`, `issuer`, `certname` or `hostnames`.
-- `check.kind` is `delegation`, `ds`, `records`, `serial`, `wildcard` or `certificates`; it is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks a random name just under `check.name`, and its `rtype` is `A`.
+- `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing`, `zone-changed`, `disagree`, `alias-target`, `nameserver-host`, `mail-target`, `challenge`, `wildcard`, `caa`, `issuer`, `certname`, `hostnames`, `spf`, `dmarc`, `dkim` or `mta-sts`.
+- `check.kind` is `delegation`, `ds`, `records`, `serial`, `wildcard`, `certificates` or `policy`; it is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks a random name just under `check.name`, and its `rtype` is `A`. A `policy` check fetches the MTA-STS policy file from the host `check.name` (`mta-sts.<domain>`); its `rtype` is `TXT`.
 - `seen` lists each server whose answer differs, at most 6; `more` counts the servers left out. A resolve has an empty `seen`.
-- `value` holds at most 6 lines. Times are UTC; an empty string means none.
+- `value` holds at most 6 lines. Times are UTC; an empty string means none. For the rules `spf`, `dmarc`, `dkim` and `mta-sts`, `value` holds at most 6 lines of servers, and then all lines `weaker <word>`, one for each way in which the record permits more than the file (or, for `mta-sts`, protects less), for example `weaker p=none in place of p=reject`, `weaker all gives softfail in place of fail` or `weaker mode testing in place of enforce: senders deliver mail even when the TLS check fails`. A word is a fixed English phrase of osk, at most 240 characters, and never holds text of the record beyond an address, a name or a key. osk gives at most 12 words; when there are more, the twelfth is `weaker and <k> more`, which counts the others.
 - `text` is the Slack text, so a receiver that shows Slack text can show it as it is.
 
 A notice has `schema`, `type` (`"notice"`), `id`, `at`, `notice` (`test`, `down` or `expectations`), `domain` (empty when the notice is about no domain), `lines` (at most 200) and `text`.
@@ -216,12 +216,18 @@ A read that fails (no answer, a timeout, status `429` or another status that is 
 
 The `issuer` and `certname` lines of the expectations file are judged only when `certificates` is set. When a file has such a line and the config has no `certificates`, `osk run` and `osk validate` print `warning <domain>: the issuer and certname lines are not judged: certificates is not set in the config`.
 
+## The MTA-STS policy file
+
+osk fetches the MTA-STS policy file of a domain exactly when its expectations file has an `mta-sts` line; there is no key in the config for it. The request is one HTTPS GET of `https://mta-sts.<domain>/.well-known/mta-sts.txt` every 5 minutes, sent to that host only. It does not use a proxy, follows no redirect (a redirect is a failure) and checks the certificate of the host against the certificates that the system trusts. It waits at most 30 seconds. A body of more than 64 kilobytes is a failure, and so is a status other than 200. A body that arrives but cannot be read as a policy is not a failure: it is a difference from the `mta-sts` line, and the alert says that senders act as if there were no policy. The name `mta-sts.<domain>` is looked up through the resolver of the machine, so the certificate, not the resolver, tells osk that the answer is the domain's. osk does not refuse the address that the lookup gives: the DNS checks refuse addresses inside private networks, this fetch does not yet.
+
+A fetch that fails never means "no policy": osk judges only the policy that it has read, and after 15 minutes of failing fetches a medium `check-failing` alert opens, with the check kind `policy`. The `text` of the log line of each failed run names the cause in parentheses after the reason, for example `checked other policy example.com. mta-sts.example.com. TXT 2026-11-18T10:00:00.000Z failed bad-answer (HTTP status 404)`; the other texts are `timeout`, `network: name lookup failed`, `network: certificate not trusted`, `network: cannot connect`, `network: no usable answer` and `the policy file is larger than 65536 octets`. `osk init` and `osk snapshot` write the `mta-sts` line only when `_mta-sts.<domain>` holds an MTA-STS record and the policy file reads; when the record is there and the file does not read, `osk snapshot` prints a `# not written:` line with the reason, and `osk init` lists the policy file among the sets that it could not watch. A domain with no MTA-STS record gets no line and no message.
+
 ## Adding a domain
 
 `osk init` runs only once, so add a second domain by hand. Write its expectations from what its servers give now:
 
 ```sh
-docker compose exec osk sh -c 'osk snapshot example.net. example.net. A example.net. AAAA example.net. MX example.net. TXT example.net. CAA www.example.net. A > example.net.expect'
+docker compose exec osk sh -c 'osk snapshot example.net. example.net. A example.net. AAAA example.net. MX example.net. TXT example.net. CAA www.example.net. A _dmarc.example.net. TXT _mta-sts.example.net. TXT > example.net.expect'
 ```
 
 This asks for the same sets that `osk init` writes. A set that osk could not take gets a `# not written:` comment line with the reason, and the command then exits with 1. Read every line before you trust it, and add or change lines:

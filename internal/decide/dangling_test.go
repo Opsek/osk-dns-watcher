@@ -1373,6 +1373,12 @@ func FuzzTargets(f *testing.F) {
 		"domain corp.test.\ncorp.test. TXT \"v=spf1 include:%{d}\" | \"V=SPF1 -INCLUDE:B.test.\"\n",
 		"domain corp.test.\ncorp.test. MX 0 .\n*.corp.test. A none\n*.*.corp.test. A none\n*. A none\n",
 		"domain .\ncdn. CNAME .\n",
+		"domain 0.\n. TXT \"V=SPF1 INCLUDE:1\"",
+		"domain corp.test.\ncorp.test. TXT \"v=spf1 include:a.123 -all\"\n",
+		"domain corp.test.\ncorp.test. TXT \"v=spf1 include:localhost -all\"\n",
+		"domain corp.test.\ncorp.test. TXT \"v=spf1 include:a.%{x}.test -all\"\n",
+		"domain corp.test.\ncorp.test. TXT \"v=spf1 include:a.-b -all\"\n",
+		"domain corp.test.\ncorp.test. TXT \"v=spf1 include:a.test include:b -all\"\n",
 		"domain test.\ncorp.test. NS ns1.corp.test.\nx.corp.test. CNAME corp.test.\n",
 		"",
 	} {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -830,10 +831,19 @@ func emlModifier(f string) (name, value string, ok bool) {
 	return f[:i], f[i+1:], true
 }
 
-// emlDomainSpec says whether d is a domain-spec: not empty, and either a
-// macro or a name with at most one trailing dot.
+// emlSpecGrammar is the domain-spec of RFC 7208 section 7.1: any octets and
+// macros, then a macro, or a dot, a top label and at most one more dot. A
+// top label has a letter, or a hyphen inside letters and digits.
+var emlSpecGrammar = func() *regexp.Regexp {
+	macro := `%(?:[%_-]|\{[slodiphcrtvSLODIPHCRTV][0-9]*[rR]?[-.+,/_=]*\})`
+	top := `(?:[0-9A-Za-z]*[A-Za-z][0-9A-Za-z]*|[0-9A-Za-z]+-[0-9A-Za-z-]*[0-9A-Za-z])`
+	return regexp.MustCompile(`^(?:[^%]|` + macro + `)*(?:` + macro + `|\.` + top + `\.?)$`)
+}()
+
+// emlDomainSpec says whether d is a domain-spec: it fits the grammar, and a
+// name with no macro is also a name that the tool can parse.
 func emlDomainSpec(d string) bool {
-	if d == "" {
+	if !emlSpecGrammar.MatchString(d) {
 		return false
 	}
 	if strings.Contains(d, "%") {

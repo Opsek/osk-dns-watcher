@@ -7,8 +7,10 @@ import (
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/expect"
+	"github.com/Opsek/dns-monitoring/internal/mtasts"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	startpkg "github.com/Opsek/dns-monitoring/internal/start"
 )
 
 // snapshot runs "osk snapshot": it writes what the servers of a domain give
@@ -20,6 +22,7 @@ func snapshot(args []string, stdout, stderr io.Writer) int {
 	if msg != "" {
 		return snapshotWrongUse(stderr, msg)
 	}
+	a.cfg.Policy = mtasts.Fetch
 	o, err := observe.New(a.cfg)
 	if err != nil {
 		// Only the flags fill the configuration.
@@ -27,6 +30,11 @@ func snapshot(args []string, stdout, stderr io.Writer) int {
 	}
 	domain := a.keys[0].Domain
 	observations := runChecks(o, snapshotKeys(domain, a.keys))
+	// The policy file is asked for only after the _mta-sts record is seen
+	// to be on, so that no request goes to a host that the domain never set up.
+	if policy, ok := startpkg.WantsPolicy(domain, observations); ok {
+		observations = append(observations, runChecks(o, []obs.Key{policy})...)
+	}
 	f, skips := expect.Snapshot(domain, observations)
 	out := &lines{json: a.json}
 	formatSnapshot(out, domain, f, skips, len(expect.Unreached(observations)))

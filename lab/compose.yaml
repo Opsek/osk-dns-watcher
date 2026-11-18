@@ -71,7 +71,7 @@ services:
     networks:
       lab:
         ipv4_address: "10.53.${LAB_ID}.30"
-        aliases: [hooks.lab.test]
+        aliases: [hooks.lab.test, mta-sts.corp.test]
 
   runner:
     <<: *host
@@ -81,6 +81,7 @@ services:
     working_dir: /src
     extra_hosts:
       - "hooks.lab.test:10.53.${LAB_ID}.30"
+      - "mta-sts.corp.test:10.53.${LAB_ID}.30"
     command:
       - sh
       - -c

@@ -21,6 +21,7 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/deliver"
 	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/dns-monitoring/internal/mtasts"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/schedule"
 	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
@@ -135,7 +136,7 @@ func problemText(problems []config.Problem) string {
 func prepare(c *config.Config) (values config.Values, o *observe.Observer, files []*expect.File, text string) {
 	values, problems := c.Secrets(os.LookupEnv)
 	text = problemText(problems)
-	o, err := observe.New(observe.Config{RootServers: c.RootServers, ExtraRanges: c.ExtraRanges})
+	o, err := observe.New(observe.Config{RootServers: c.RootServers, ExtraRanges: c.ExtraRanges, Policy: mtasts.Fetch})
 	if err != nil {
 		text += "osk: " + err.Error() + "\n"
 	}

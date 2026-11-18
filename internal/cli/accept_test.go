@@ -1148,3 +1148,132 @@ func TestAcceptSaysThatTheFileListsEveryName(t *testing.T) {
 		t.Error("a refused accept changed the file")
 	}
 }
+
+// emlaOpen stores an open alert of rule for the TXT line at name of
+// corp.test., with the Value that the rules give: server lines, then words.
+func emlaOpen(t *testing.T, w *cliWorld, rule decide.Rule, name, expected string, seen ...string) int64 {
+	t.Helper()
+	a := cliAlert(rule, decide.SeverityMedium, cliRecordsKey("corp.test.", name, dnswire.TypeTXT), expected, cliT0, seen...)
+	a.Value += "\nweaker a word of the rule"
+	var id int64
+	cliStore(t, w.state, func(s *store.Store) { id = cliOpen(t, s, cliT0, a)[0].ID })
+	return id
+}
+
+// The four mail rules are accepted as record-set is: the line of the alert's
+// set is replaced by the text that the servers gave, nothing else changes,
+// and without --write nothing is written.
+func TestAcceptEditsTheLineOfAMailRule(t *testing.T) {
+	for _, c := range []struct {
+		name, owner, form, seen string
+		rule                    decide.Rule
+	}{
+		{"spf", "corp.test.", `"v=spf1 mx -all"`, `"v=spf1 mx include:evil.test ~all"`, decide.RuleSPF},
+		{"spf stricter", "corp.test.", `"v=spf1 mx -all"`, `"v=spf1 -all"`, decide.RuleSPF},
+		{"dmarc", "_dmarc.corp.test.", `"v=DMARC1; p=reject"`, `"v=DMARC1; p=none; rua=mailto:x@evil.test"`, decide.RuleDMARC},
+		{"dmarc to none", "_dmarc.corp.test.", `"v=DMARC1; p=reject"`, "none", decide.RuleDMARC},
+		{"dmarc appears", "_dmarc.corp.test.", "none", `"v=DMARC1; p=reject"`, decide.RuleDMARC},
+		{"dkim", "s1._domainkey.corp.test.", `"v=DKIM1; k=rsa; p=QUJDRA=="`, `"v=DKIM1; k=rsa; p=RUZHSA=="`, decide.RuleDKIM},
+		{"dkim in two strings", "s1._domainkey.corp.test.", `"v=DKIM1; k=rsa; p=QUJDRA=="`, `"v=DKIM1; k=rsa; " "p=QUJDRA=="`, decide.RuleDKIM},
+		{"mta-sts gone", "_mta-sts.corp.test.", `"v=STSv1; id=20261117"`, "none", decide.RuleMTASTS},
+		{"mta-sts new id", "_mta-sts.corp.test.", `"v=STSv1; id=20261117"`, `"v=STSv1; id=20261118"`, decide.RuleMTASTS},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			old := c.owner + " TXT " + c.form
+			file := cliCorpFile + old + "\nftp.corp.test. A 10.53.0.85\n"
+			cliWriteFile(t, w.corp, file)
+			id := emlaOpen(t, w, c.rule, c.owner, c.form, c.seen, c.seen)
+			idText := strconv.FormatInt(id, 10)
+			line := c.owner + " TXT " + c.seen
+
+			code, out, errOut := cliAccept(w, idText)
+			if code != 0 || errOut != "" {
+				t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "accept", out, w.corp+":5", "- "+old, "+ "+line, cliToWrite(w, id, w.corp, old, line))
+			if cliRead(t, w.corp) != file {
+				t.Error("accept without --write changed the file")
+			}
+
+			code, out, errOut = cliAccept(w, "--write", cliChangeCode(id, w.corp, old, line), idText)
+			if code != 0 || errOut != "" {
+				t.Errorf("--write: exit code %d, errors %q; want 0 and none", code, errOut)
+			}
+			cliSame(t, "accept --write", out, w.corp+":5", "- "+old, "+ "+line, "written")
+			got := cliRead(t, w.corp)
+			if want := cliReplaced(file, 5, line); got != want {
+				t.Errorf("the file after accept --write:\n%s\nwant:\n%s", got, want)
+			}
+			cliFinds(t, got, c.owner, dnswire.TypeTXT, c.seen)
+
+			// The file now holds the set that the servers show.
+			code, out, errOut = cliAccept(w, idText)
+			wantErr := "osk: the file changed since this alert: " + c.owner + " TXT is now " + c.seen + "\n"
+			if code != 1 || out != "" || errOut != wantErr {
+				t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, wantErr)
+			}
+		})
+	}
+}
+
+// Servers that give different sets leave accept nothing to choose from, and a
+// file that changed since the alert is not written over; both with and
+// without --write, and the file stays.
+func TestAcceptRefusesAMailRuleThatItCannotChange(t *testing.T) {
+	const old = `_dmarc.corp.test. TXT "v=DMARC1; p=reject"`
+	file := cliCorpFile + old + "\n"
+	for _, c := range []struct {
+		name  string
+		file  string
+		seen  []string
+		error string
+	}{
+		{"the servers disagree", file, []string{`"v=DMARC1; p=none"`, `"v=DMARC1; p=quarantine"`},
+			`the servers disagree: "v=DMARC1; p=none"; "v=DMARC1; p=quarantine"; edit the file by hand`},
+		{"one server has no set", file, []string{`"v=DMARC1; p=none"`, "none"},
+			`the servers disagree: "v=DMARC1; p=none"; none; edit the file by hand`},
+		{"no server gave a set", file, nil, "no server gave a set for this alert; edit the file by hand"},
+		{"the line changed", cliCorpFile + `_dmarc.corp.test. TXT "v=DMARC1; p=quarantine"` + "\n", []string{`"v=DMARC1; p=none"`},
+			`the file changed since this alert: _dmarc.corp.test. TXT is now "v=DMARC1; p=quarantine"`},
+		{"the line is none now", cliCorpFile + "_dmarc.corp.test. TXT none\n", []string{`"v=DMARC1; p=none"`},
+			"the file changed since this alert: _dmarc.corp.test. TXT is now none"},
+		{"the line is gone", cliCorpFile, []string{`"v=DMARC1; p=none"`},
+			"the file changed since this alert: it has no line for _dmarc.corp.test. TXT"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := cliNewWorld(t, false)
+			cliWriteFile(t, w.corp, c.file)
+			id := emlaOpen(t, w, decide.RuleDMARC, "_dmarc.corp.test.", `"v=DMARC1; p=reject"`, c.seen...)
+			for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
+				code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
+				if want := "osk: " + c.error + "\n"; code != 1 || out != "" || errOut != want {
+					t.Errorf("accept %q: exit code %d, output %q, errors %q; want 1, nothing and %q", args, code, out, errOut, want)
+				}
+			}
+			if cliRead(t, w.corp) != c.file {
+				t.Error("a refused accept changed the file")
+			}
+		})
+	}
+}
+
+// The code of the dry run belongs to the line that the servers gave: a code
+// for another line is refused and the file stays.
+func TestAcceptWriteOfAMailRuleNeedsTheCodeOfItsChange(t *testing.T) {
+	w := cliNewWorld(t, false)
+	const old = `corp.test. TXT "v=spf1 mx -all"`
+	file := cliCorpFile + old + "\n"
+	cliWriteFile(t, w.corp, file)
+	id := emlaOpen(t, w, decide.RuleSPF, "corp.test.", `"v=spf1 mx -all"`, `"v=spf1 mx include:evil.test ~all"`)
+	idText := strconv.FormatInt(id, 10)
+	for _, code := range []string{cliAnyCode, cliChangeCode(id, w.corp, old, `corp.test. TXT "v=spf1 +all"`)} {
+		c, out, errOut := cliAccept(w, "--write", code, idText)
+		if want := "osk: the alert changed since you looked; run osk accept " + idText + " again\n"; c != 1 || out != "" || errOut != want {
+			t.Errorf("--write %s: exit code %d, output %q, errors %q; want 1, nothing and %q", code, c, out, errOut, want)
+		}
+	}
+	if cliRead(t, w.corp) != file {
+		t.Error("a refused accept changed the file")
+	}
+}

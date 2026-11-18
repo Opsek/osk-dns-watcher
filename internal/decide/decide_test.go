@@ -228,7 +228,7 @@ func TestRuleSeverityAndOpWords(t *testing.T) {
 		{Rule(4).String(), "nameservers"},
 		{Rule(5).String(), "record-set"},
 		{Rule(0).String(), "rule0"},
-		{Rule(21).String(), "rule21"},
+		{Rule(25).String(), "rule25"},
 		{Severity(1).String(), "low"},
 		{Severity(2).String(), "medium"},
 		{Severity(3).String(), "high"},

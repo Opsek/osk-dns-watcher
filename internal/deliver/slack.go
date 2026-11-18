@@ -63,9 +63,10 @@ func SlackMessage(e alert.Event) []byte {
 // the name, and the name with its type, each as inline code; {K} for the
 // kind of the check, a fixed word of the tool. now is the view line of a
 // resolve; it is empty for the rules that compare a set, whose resolve view
-// lists the expected records.
+// lists the expected records. more is the phrase of an alert that lists
+// weaker words; it is empty for a rule that has none.
 type wording struct {
-	phrase, resolved, action, now string
+	phrase, more, resolved, action, now string
 }
 
 var wordings = map[decide.Rule]wording{
@@ -155,6 +156,30 @@ var wordings = map[decide.Rule]wording{
 		resolved: "{NT} is as expected again",
 		action:   "If you did not make this change, check your DNS provider account now.",
 	},
+	decide.RuleSPF: {
+		phrase:   "the SPF record at {N} changed",
+		more:     "the SPF record at {N} lets more senders pass than the file",
+		resolved: "the SPF record at {N} is as expected again",
+		action:   "If you did not make this change, restore the record at your DNS provider: every sender that it lets pass can send mail as {N}.",
+	},
+	decide.RuleDMARC: {
+		phrase:   "the DMARC record {N} changed",
+		more:     "the DMARC record {N} asks receivers to do less than the file",
+		resolved: "the DMARC record {N} is as expected again",
+		action:   "If you did not make this change, restore the record at your DNS provider: receivers follow it for mail that claims to come from your domain.",
+	},
+	decide.RuleDKIM: {
+		phrase:   "the DKIM key {N} changed",
+		more:     "the DKIM key {N} lets another key sign mail",
+		resolved: "the DKIM key {N} is as expected again",
+		action:   "If you did not change this key, remove the key that is not yours at your DNS provider: whoever holds its private key can sign mail that receivers trust.",
+	},
+	decide.RuleMTASTS: {
+		phrase:   "MTA-STS at {N} changed",
+		more:     "MTA-STS at {N} protects less than the file",
+		resolved: "MTA-STS at {N} is as expected again",
+		action:   "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours.",
+	},
 	decide.RuleZone: {
 		phrase:   "{N} is answered from an unexpected zone",
 		resolved: "{N} is answered from the expected zone again",
@@ -204,6 +229,7 @@ const (
 	labelNow      = "now"
 	labelSeenAt   = "seen at"
 	labelProblem  = "problem"
+	labelWeaker   = "weaker"
 
 	// labelWidth makes the values of the code block stand under each other.
 	labelWidth = 11
@@ -222,6 +248,7 @@ const (
 	maxRecords  = 6
 	maxAnswers  = 3
 	maxServers  = 6
+	maxWords    = 6
 	maxText     = 3000
 	cutLine     = "[cut]"
 )
@@ -236,9 +263,15 @@ func SlackText(e alert.Event) string {
 		w.action = "Find out why osk gets no usable answer from the certificate source; the log of osk names the reason. Until it does, a new certificate is not seen."
 		w.now = "the source answers"
 	}
+	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindPolicy {
+		// The policy file comes from an HTTPS host, not from the DNS servers.
+		w.action = "Find out why osk cannot fetch the policy file from {N}; the log of osk names the reason. Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
+	}
 	phrase, action := w.phrase, w.action
 	if e.Kind == alert.EventResolve {
 		phrase, action = w.resolved, resolvedAction
+	} else if w.more != "" && len(weakerWords(e.Alert.Value)) > 0 {
+		phrase = w.more
 	}
 	fill := fields(e.Alert.Check)
 	return compose(headline(e)+dot+fill.Replace(phrase), view(e, w.now), times(e), fill.Replace(action))
@@ -427,18 +460,81 @@ func view(e alert.Event, resolvedNow string) []string {
 		// Expected holds one part for each host and type that differs, or for each
 		// line that points at the name, joined by "; ". A part may hold " | ", so
 		// it is not split as a record list.
-		return append(partLines(strings.Split(a.Expected, "; ")), seenLines(a.Lines)...)
+		return append(partLines(strings.Split(a.Expected, "; ")), seenLines(a)...)
 	case decide.RuleIssuer:
 		// A part is a CAA line, which may hold "; " inside a quoted value.
 		parts := partLines(splitOutsideQuotes(a.Expected, "; "))
 		return append(append(parts, ""), nameLines(a.Lines)...)
 	case decide.RuleCertName, decide.RuleHostnames:
 		return nameLines(a.Lines)
+	case decide.RuleSPF, decide.RuleDMARC, decide.RuleDKIM, decide.RuleMTASTS:
+		// The words come first: compose cuts from the end of the view.
+		return append(weakerLines(a.Value), setView(a)...)
 	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered,
 		decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard,
 		decide.RuleCAA:
 	}
-	return append(recordLines(expectedRows(labelExpected, a.Expected)), seenLines(a.Lines)...)
+	return setView(a)
+}
+
+// setView lists the expected records, then each set that servers gave.
+func setView(a alert.Alert) []string {
+	return append(recordLines(expectedRows(labelExpected, a.Expected)), seenLines(a)...)
+}
+
+// weakerLines gives the words of a mail policy that Value holds, the first
+// six under "weaker", then the count of the others, then one empty line. It
+// gives no line when there is no word. A last word "and <k> more" is the
+// cap of the rule, not a word: its k joins the count of the words left out.
+func weakerLines(value string) []string {
+	words := weakerWords(value)
+	skipped := 0
+	if n := len(words); n > 0 {
+		if k, ok := capCount(words[n-1]); ok {
+			words, skipped = words[:n-1], k
+		}
+	}
+	var out []string
+	for i, w := range words[:min(len(words), maxWords)] {
+		label := ""
+		if i == 0 {
+			label = labelWeaker
+		}
+		out = append(out, pad(label)+Clean(w, recordWidth))
+	}
+	if more := max(len(words)-maxWords, 0) + skipped; more > 0 {
+		out = append(out, pad("")+"and "+strconv.Itoa(more)+" more")
+	}
+	if len(out) > 0 {
+		out = append(out, "")
+	}
+	return out
+}
+
+// capCount reads the word "and <k> more" that the rule puts after its
+// twelfth word.
+func capCount(word string) (int, bool) {
+	num, ok := strings.CutPrefix(word, "and ")
+	if !ok {
+		return 0, false
+	}
+	num, ok = strings.CutSuffix(num, " more")
+	if !ok {
+		return 0, false
+	}
+	k, err := strconv.Atoi(num)
+	return k, err == nil && k > 0
+}
+
+// weakerWords gives the words of the lines of value that start with "weaker ".
+func weakerWords(value string) []string {
+	var words []string
+	for _, line := range strings.Split(value, "\n") {
+		if w, ok := strings.CutPrefix(line, "weaker "); ok {
+			words = append(words, w)
+		}
+	}
+	return words
 }
 
 // resolveView shows the state now. The rules that compare a set have no
@@ -472,9 +568,11 @@ func answers(lines []alert.Line) []answer {
 
 // seenLines gives a block for each of the first maxAnswers distinct texts,
 // with its servers. At most maxServers server lines stand in the whole view;
-// a text that no server line is left for counts as an answer not shown.
-func seenLines(lines []alert.Line) []string {
-	all := answers(lines)
+// a text that no server line is left for counts as an answer not shown. A
+// server line ends with its TTL, except for a policy file, which has none.
+func seenLines(a alert.Alert) []string {
+	ttl := a.Check.Kind != obs.KindPolicy
+	all := answers(a.Lines)
 	var out []string
 	left, more, blocks := maxServers, 0, 0
 	for _, a := range all {
@@ -487,7 +585,7 @@ func seenLines(lines []alert.Line) []string {
 		more += len(a.servers) - len(shown)
 		out = append(out, "")
 		out = append(out, recordLines(rowsOf(labelNow, a.text))...)
-		out = append(out, serverLines(shown)...)
+		out = append(out, serverLines(shown, ttl)...)
 	}
 	if more > 0 {
 		out = append(out, pad("")+"and "+strconv.Itoa(more)+" more servers")
@@ -510,19 +608,19 @@ func moveLines(moves []string) []string {
 	return out
 }
 
-func serverLines(lines []alert.Line) []string {
+func serverLines(lines []alert.Line, ttl bool) []string {
 	var out []string
 	for i, l := range lines {
 		label := ""
 		if i == 0 {
 			label = labelSeenAt
 		}
-		out = append(out, pad(label)+serverText(l))
+		out = append(out, pad(label)+serverText(l, ttl))
 	}
 	return out
 }
 
-func serverText(l alert.Line) string {
+func serverText(l alert.Line, ttl bool) string {
 	host, addr := "-", "-"
 	if l.Server.Name.LabelCount() > 0 {
 		host = Clean(l.Server.Name.Lower().String(), 64)
@@ -535,7 +633,11 @@ func serverText(l alert.Line) string {
 		}
 		addr = Clean(shown, 64)
 	}
-	return host + " (" + addr + ")   TTL " + strconv.FormatUint(uint64(l.TTL), 10)
+	text := host + " (" + addr + ")"
+	if ttl {
+		text += "   TTL " + strconv.FormatUint(uint64(l.TTL), 10)
+	}
+	return text
 }
 
 func times(e alert.Event) string {

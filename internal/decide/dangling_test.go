@@ -33,23 +33,6 @@ type dngpTarget struct {
 	refs []Ref
 }
 
-// dngpSPFIncludes gives the include domains of a record text, as written.
-func dngpSPFIncludes(text string) []string {
-	if len(text) < 6 || !strings.EqualFold(text[:6], "v=spf1") || (len(text) > 6 && text[6] != ' ') {
-		return nil
-	}
-	var out []string
-	for _, term := range strings.Split(text[6:], " ") {
-		if term != "" && strings.ContainsRune("+-~?", rune(term[0])) {
-			term = term[1:]
-		}
-		if len(term) >= 8 && strings.EqualFold(term[:8], "include:") {
-			out = append(out, term[8:])
-		}
-	}
-	return out
-}
-
 func dngpTargetsOf(f *expect.File) []dngpTarget {
 	if f == nil {
 		return nil
@@ -84,17 +67,14 @@ func dngpTargetsOf(f *expect.File) []dngpTarget {
 					add(e, RuleNameServerHost, d.Host, "NS ")
 				case dnswire.MX:
 					add(e, RuleMailTarget, d.Exchange, "MX ")
-				case dnswire.TXT:
-					for _, dom := range dngpSPFIncludes(strings.Join(d.Strings, "")) {
-						dom = strings.TrimSuffix(dom, ".")
-						if strings.Contains(dom, "%") {
-							continue
-						}
-						if n, err := dnswire.ParseName(dom + "."); err == nil {
-							add(e, RuleMailTarget, n, "TXT include:")
-						}
-					}
 				}
+			}
+			for _, tg := range emlSPFTargets(alt) {
+				middle := "TXT include:"
+				if tg.redirect {
+					middle = "TXT redirect="
+				}
+				add(e, RuleMailTarget, tg.name, middle)
 			}
 		}
 	}
@@ -183,7 +163,7 @@ func dngpSeverity(r Rule) Severity {
 		return SeverityMedium
 	case RuleInvalidFile, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
 		RuleGlue, RuleDS, RuleGone, RuleDisagree, RuleAliasTarget, RuleMailTarget, RuleChallenge, RuleCAA,
-		RuleIssuer, RuleCertName, RuleHostnames:
+		RuleIssuer, RuleCertName, RuleHostnames, RuleSPF, RuleDMARC, RuleDKIM, RuleMTASTS:
 	}
 	return SeverityHigh
 }
@@ -248,7 +228,7 @@ func dngpFindings(f *expect.File, o obs.Observation) []Finding {
 		if len(seen) > 0 {
 			found = append(found, finding(RuleWildcard, "none", seen))
 		}
-	case obs.KindDelegation, obs.KindDS, obs.KindSerial, obs.KindCertificates:
+	case obs.KindDelegation, obs.KindDS, obs.KindSerial, obs.KindCertificates, obs.KindPolicy:
 	}
 	slices.SortStableFunc(found, func(a, b Finding) int { return int(a.Rule) - int(b.Rule) })
 	return found
@@ -431,7 +411,7 @@ func TestSPFScanRows(t *testing.T) {
 		{"two strings, space at the start of the second", `"v=spf1" " include:a.dnshost.test"`, []string{a}},
 		{"own zone is left out", `"v=spf1 include:spf.corp.test include:corp.test include:a.dnshost.test"`, []string{a}},
 		{"order of appearance, no repeat", `"v=spf1 include:b.dnshost.test include:a.dnshost.test include:B.dnshost.test"`, []string{b, a}},
-		{"a label that is too long", `"v=spf1 include:` + long + `.dnshost.test include:a.dnshost.test"`, []string{a}},
+		{"a label that is too long", `"v=spf1 include:` + long + `.dnshost.test include:a.dnshost.test"`, nil},
 		{"a record that is not SPF beside one that is", `"hello" | "v=spf1 include:a.dnshost.test"`, []string{a}},
 		{"each alternative", `"v=spf1 include:a.dnshost.test" || "v=spf1 include:b.dnshost.test"`, []string{a, b}},
 	}
@@ -443,6 +423,66 @@ func TestSPFScanRows(t *testing.T) {
 			}
 			if got := dngpRender(Targets(dngpFile(t, "corp.test. TXT "+r.data))); !reflect.DeepEqual(got, want) {
 				t.Errorf("Targets gave %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A record with a problem, or a set with two SPF records, gives receivers a
+// permerror: they look up nothing, so there is nothing to probe. A redirect is
+// the last name, and only when no all ends the record first.
+func TestSPFTargetRows(t *testing.T) {
+	const inc, red = "mail-target corp.test. TXT include:", "mail-target corp.test. TXT redirect="
+	a, b := "a.dnshost.test.", "b.dnshost.test."
+	tenIncludes := func(tail string) string {
+		var terms []string
+		for i := 1; i <= 10; i++ {
+			terms = append(terms, "include:a"+strconv.Itoa(i)+".dnshost.test")
+		}
+		return `"v=spf1"` + ` " ` + strings.Join(terms, `" " `) + tail + `"`
+	}
+	var tenTargets [][]string
+	for i := 1; i <= 10; i++ {
+		n := "a" + strconv.Itoa(i) + ".dnshost.test."
+		tenTargets = append(tenTargets, []string{n, inc + n})
+	}
+	rows := []struct {
+		name string
+		data string
+		want [][]string
+	}{
+		{"a redirect and no all", `"v=spf1 mx redirect=b.dnshost.test"`, [][]string{{b, red + b}}},
+		{"a redirect in capitals", `"V=SPF1 REDIRECT=B.DnsHost.Test."`, [][]string{{b, red + b}}},
+		{"an include, then the redirect", `"v=spf1 include:a.dnshost.test redirect=b.dnshost.test"`, [][]string{{a, inc + a}, {b, red + b}}},
+		{"the redirect before an include is still last", `"v=spf1 redirect=b.dnshost.test include:a.dnshost.test"`, [][]string{{a, inc + a}, {b, red + b}}},
+		{"one name that is an include and the redirect", `"v=spf1 include:a.dnshost.test redirect=a.dnshost.test"`, [][]string{{a, inc + a, red + a}}},
+		{"an all ends the record: no redirect", `"v=spf1 mx -all redirect=b.dnshost.test"`, nil},
+		{"an all, then an include: never evaluated", `"v=spf1 include:a.dnshost.test -all include:b.dnshost.test"`, [][]string{{a, inc + a}}},
+		{"an all of another qualifier ends it too", `"v=spf1 include:a.dnshost.test ?all include:b.dnshost.test"`, [][]string{{a, inc + a}}},
+		{"a redirect with a macro", `"v=spf1 redirect=%{d}.dnshost.test"`, nil},
+		{"a redirect with a macro beside an include", `"v=spf1 include:a.dnshost.test redirect=%{d}.dnshost.test"`, [][]string{{a, inc + a}}},
+		{"a redirect to the root", `"v=spf1 redirect=."`, nil},
+		{"a redirect to the own zone", `"v=spf1 redirect=spf.corp.test"`, nil},
+		{"two redirects", `"v=spf1 include:a.dnshost.test redirect=a.dnshost.test redirect=b.dnshost.test"`, nil},
+		{"a redirect with no domain", `"v=spf1 include:a.dnshost.test redirect="`, nil},
+		{"a redirect with a qualifier is no modifier", `"v=spf1 include:a.dnshost.test -redirect=b.dnshost.test"`, nil},
+		{"another modifier is ignored", `"v=spf1 include:a.dnshost.test foo=bar exp=why.dnshost.test redirect=b.dnshost.test"`, [][]string{{a, inc + a}, {b, red + b}}},
+		{"a term that cannot be read", `"v=spf1 include:a.dnshost.test foo:bar"`, nil},
+		{"an address that cannot be read", `"v=spf1 include:a.dnshost.test ip4:300.0.0.1"`, nil},
+		{"a length that cannot be read", `"v=spf1 include:a.dnshost.test ip4:192.0.2.0/33"`, nil},
+		{"a term after an all that cannot be read", `"v=spf1 include:a.dnshost.test -all foo:bar"`, nil},
+		{"two SPF records", `"v=spf1 include:a.dnshost.test" | "v=spf1 include:b.dnshost.test"`, nil},
+		{"two SPF records beside another record", `"hello" | "v=spf1 include:a.dnshost.test" | "v=spf1 -all"`, nil},
+		{"ten lookups", tenIncludes(""), tenTargets},
+		{"eleven lookups", tenIncludes(" include:a11.dnshost.test"), nil},
+		{"a redirect is the eleventh lookup", tenIncludes(" redirect=b.dnshost.test"), nil},
+		{"an all leaves the redirect out of the count", tenIncludes(" -all redirect=b.dnshost.test"), tenTargets},
+		{"a redirect in each alternative", `"v=spf1 redirect=a.dnshost.test" || "v=spf1 redirect=b.dnshost.test"`, [][]string{{a, red + a}, {b, red + b}}},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			if got := dngpRender(Targets(dngpFile(t, "corp.test. TXT "+r.data))); !reflect.DeepEqual(got, r.want) {
+				t.Errorf("Targets gave %q, want %q", got, r.want)
 			}
 		})
 	}

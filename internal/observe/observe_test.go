@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestWalkRunValidation(t *testing.T) {
 		field    string
 	}{
 		{"kind 0", obs.Key{Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
-		{"kind 7", obs.Key{Kind: 7, Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
+		{"kind 8", obs.Key{Kind: 8, Domain: corp, Name: corp, Type: dnswire.TypeNS}, time.Minute, "kind"},
 		{"certificates", obs.CertificatesKey(corp), time.Minute, "kind"},
 		{"delegation of the root", obs.DelegationKey(dnswire.Name{}), time.Minute, "domain"},
 		{"records under the root domain", obs.RecordsKey(dnswire.Name{}, www, dnswire.TypeA), time.Minute, "domain"},
@@ -314,5 +315,252 @@ func TestValidateRefusesCertificates(t *testing.T) {
 		if !errors.Is(err, ErrInvalidCheck) || err.Error() != want {
 			t.Errorf("Validate of %v: %v; want %q", c, err, want)
 		}
+	}
+}
+
+// mtsObserver asks the fake world for DNS, with its clock standing at walkT0,
+// and hands a check of kind policy to policy.
+func mtsObserver(t *testing.T, w *walkWorld, policy func(context.Context, obs.Key) obs.Answer) *Observer {
+	t.Helper()
+	o, err := New(Config{
+		RootServers:  []netip.AddrPort{walkAddr(t, "10.0.0.1")},
+		ExtraRanges:  []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		RateInterval: time.Nanosecond,
+		RateBurst:    1000,
+		Policy:       policy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.exchange = w.exchange
+	o.now = (&walkClock{}).get
+	return o
+}
+
+func mtsPolicyKey(t *testing.T, domain string) obs.Key {
+	t.Helper()
+	k, ok := obs.PolicyKey(walkName(t, domain))
+	if !ok {
+		t.Fatalf("PolicyKey(%s): not ok", domain)
+	}
+	return k
+}
+
+// A check of kind policy fetches from the host that its Name gives, so only
+// the key that its domain fixes is valid. Any other is refused before Policy
+// is called, with a text that names the domain.
+func TestValidatePolicy(t *testing.T) {
+	corp := walkName(t, "corp.test.")
+	k := mtsPolicyKey(t, "corp.test.")
+	for _, key := range []obs.Key{
+		k,
+		mtsPolicyKey(t, "Corp.TEST."),
+		{Kind: obs.KindPolicy, Domain: corp, Name: walkName(t, "MTA-STS.Corp.test."), Type: dnswire.TypeTXT},
+	} {
+		if err := (Check{Key: key, Interval: time.Second}).Validate(); err != nil {
+			t.Errorf("Validate(%v): %v", key, err)
+		}
+	}
+
+	withName := func(name string) obs.Key { c := k; c.Name = walkName(t, name); return c }
+	withType := func(typ dnswire.Type) obs.Key { c := k; c.Type = typ; return c }
+	// Labels of 63, 63, 63 and 61 octets: the domain fits, its policy host does not.
+	long, err := dnswire.NameFromLabels([]string{strings.Repeat("a", 63), strings.Repeat("b", 63), strings.Repeat("c", 63), strings.Repeat("d", 61)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notPolicy := func(domain string) string { return ErrInvalidCheck.Error() + ": not the policy key of " + domain }
+	for _, c := range []struct {
+		name     string
+		key      obs.Key
+		interval time.Duration
+		want     string // the whole text; "" when only ErrInvalidCheck is asserted
+	}{
+		{"the domain as Name", withName("corp.test."), time.Minute, notPolicy("corp.test.")},
+		{"the host of another domain", withName("mta-sts.shop.test."), time.Minute, notPolicy("corp.test.")},
+		{"a name under the host", withName("x.mta-sts.corp.test."), time.Minute, notPolicy("corp.test.")},
+		{"a name without the first label", withName("mta-sts.test."), time.Minute, notPolicy("corp.test.")},
+		{"type A", withType(dnswire.TypeA), time.Minute, notPolicy("corp.test.")},
+		{"type 0", withType(0), time.Minute, notPolicy("corp.test.")},
+		{"another domain with this host", obs.Key{Kind: obs.KindPolicy, Domain: walkName(t, "shop.test."), Name: k.Name, Type: dnswire.TypeTXT},
+			time.Minute, notPolicy("shop.test.")},
+		{"a domain whose host is too long", obs.Key{Kind: obs.KindPolicy, Domain: long, Name: long, Type: dnswire.TypeTXT},
+			time.Minute, notPolicy(long.String())},
+		{"the root", mtsPolicyKey(t, "."), time.Minute, ""},
+		{"interval below 1s", k, time.Second - time.Nanosecond, ""},
+	} {
+		err := (Check{Key: c.key, Interval: c.interval}).Validate()
+		if !errors.Is(err, ErrInvalidCheck) || c.want != "" && err.Error() != c.want {
+			t.Errorf("%s: Validate gives %v; want ErrInvalidCheck %q", c.name, err, c.want)
+		}
+
+		w := walkBase(t)
+		var calls atomic.Int64
+		o := mtsObserver(t, w, func(context.Context, obs.Key) obs.Answer { calls.Add(1); return obs.Answer{} })
+		ob, runErr := o.Run(context.Background(), Check{Key: c.key, Interval: c.interval})
+		if !errors.Is(runErr, ErrInvalidCheck) || err != nil && runErr.Error() != err.Error() {
+			t.Errorf("%s: Run gives %v; want the error of Validate, %v", c.name, runErr, err)
+		}
+		if calls.Load() != 0 || len(ob.Answers) != 0 || len(w.queries()) != 0 {
+			t.Errorf("%s: Policy called %d times, %d answers, %d queries; want none", c.name, calls.Load(), len(ob.Answers), len(w.queries()))
+		}
+	}
+}
+
+// Run hands a check of kind policy to Policy once, with the key as given and
+// a context of the caller that ends at the check's deadline, and returns its
+// answer unchanged, in the zone of the domain. It walks nothing and sends no
+// DNS query.
+func TestRunPolicy(t *testing.T) {
+	w := walkBase(t)
+	k := mtsPolicyKey(t, "Corp.TEST.")
+	host := walkName(t, "mta-sts.corp.test.")
+	answer := obs.Answer{
+		Proof: obs.Proof{
+			Server:   obs.Server{Name: host, Addr: netip.MustParseAddrPort("192.0.2.25:443")},
+			Question: dnswire.Question{Name: host, Type: dnswire.TypeTXT, Class: dnswire.ClassINET},
+			Sent:     walkT0.Add(time.Second),
+			Received: walkT0.Add(2 * time.Second),
+			TCP:      true,
+		},
+		Result: obs.RecordsResult(obs.Records{Set: []dnswire.Record{
+			{Name: host, Class: dnswire.ClassINET, Data: dnswire.TXT{Strings: []string{"version: STSv1"}}},
+		}}),
+	}
+	type ctxKey struct{}
+	var (
+		calls    atomic.Int64
+		got      obs.Key
+		deadline time.Duration
+		bounded  bool
+		value    any
+	)
+	o := mtsObserver(t, w, func(ctx context.Context, key obs.Key) obs.Answer {
+		calls.Add(1)
+		got = key
+		var dl time.Time
+		dl, bounded = ctx.Deadline()
+		deadline = time.Until(dl)
+		value = ctx.Value(ctxKey{})
+		return answer
+	})
+	ob, err := o.Run(context.WithValue(context.Background(), ctxKey{}, "caller"), Check{Key: k, Interval: 4 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := calls.Load(); n != 1 || got.String() != k.String() || !got.Name.Equal(k.Name) || !got.Domain.Equal(k.Domain) {
+		t.Errorf("Policy called %d times with %v; want once with %v", n, got, k)
+	}
+	if !bounded || deadline <= 2*time.Second || deadline > 3*time.Second || value != "caller" {
+		t.Errorf("Policy got a context with deadline %v (set %v) and value %v; want three quarters of 4s ahead, in the caller's context", deadline, bounded, value)
+	}
+	if ob.Key.String() != k.String() || !ob.Zone.Equal(k.Domain) || len(ob.Walk) != 0 ||
+		!ob.Start.Equal(walkT0) || !ob.Deadline.Equal(walkT0.Add(3*time.Second)) {
+		t.Errorf("observation key %v, zone %v, %d walk answers, start %v, deadline %v; want the key, zone corp.test., no walk, %v and 3s later",
+			ob.Key, ob.Zone, len(ob.Walk), ob.Start, ob.Deadline, walkT0)
+	}
+	if len(ob.Answers) != 1 {
+		t.Fatalf("%d answers, want the one of Policy", len(ob.Answers))
+	}
+	a := ob.Answers[0]
+	if walkServer(a.Server) != walkServer(answer.Server) || !a.Question.Name.Equal(host) || a.Question.Type != dnswire.TypeTXT ||
+		a.Question.Class != dnswire.ClassINET || !a.Sent.Equal(answer.Sent) ||
+		!a.Received.Equal(answer.Received) || a.Wire != nil || !a.TCP || walkCase(a.Result) != walkCase(answer.Result) {
+		t.Errorf("answer %s %v %v %v %v %s; want the answer of Policy unchanged",
+			walkServer(a.Server), a.Question, a.Sent, a.Received, a.TCP, walkCase(a.Result))
+	}
+	if n := len(w.queries()); n != 0 {
+		t.Errorf("a policy check sent %d DNS queries", n)
+	}
+}
+
+// While a policy check runs, the same check is refused at once, also when
+// its names differ in case, and Policy is not called again; the policy check
+// of another domain runs meanwhile.
+func TestRunPolicyRunningGuard(t *testing.T) {
+	w := walkBase(t)
+	corp := walkName(t, "corp.test.")
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	var calls atomic.Int64
+	o := mtsObserver(t, w, func(ctx context.Context, key obs.Key) obs.Answer {
+		calls.Add(1)
+		if key.Domain.Equal(corp) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return obs.Answer{Result: obs.FailureResult(obs.Failure{Reason: obs.ReasonTimeout, Detail: "timeout"})}
+	})
+	k := mtsPolicyKey(t, "corp.test.")
+	first := make(chan error, 1)
+	go func() {
+		_, err := o.Run(context.Background(), Check{Key: k, Interval: time.Minute})
+		first <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the first check never reached Policy")
+	}
+
+	start := time.Now()
+	for _, key := range []obs.Key{
+		k,
+		mtsPolicyKey(t, "CORP.test."),
+		{Kind: obs.KindPolicy, Domain: corp, Name: walkName(t, "MTA-STS.CORP.TEST."), Type: dnswire.TypeTXT},
+	} {
+		if _, err := o.Run(context.Background(), Check{Key: key, Interval: time.Minute}); !errors.Is(err, ErrRunning) {
+			t.Errorf("second Run of %v: %v, want ErrRunning", key, err)
+		}
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the refused Runs took %v, want an answer at once", d)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("Policy called %d times while the check ran, want once", n)
+	}
+	if _, err := o.Run(context.Background(), Check{Key: mtsPolicyKey(t, "shop.test."), Interval: time.Minute}); err != nil {
+		t.Errorf("the policy check of another domain: %v", err)
+	}
+
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if _, err := o.Run(context.Background(), Check{Key: k, Interval: time.Minute}); err != nil {
+		t.Errorf("Run after the first ended: %v", err)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("Policy called %d times in all, want 3", n)
+	}
+}
+
+// Without a policy client a policy check gives one failure answer, not
+// permitted, and sends nothing.
+func TestRunPolicyWithoutClient(t *testing.T) {
+	w := walkBase(t)
+	k := mtsPolicyKey(t, "corp.test.")
+	ob := walkRun(t, mtsObserver(t, w, nil), k, time.Minute)
+	if len(ob.Answers) != 1 {
+		t.Fatalf("%d answers, want one", len(ob.Answers))
+	}
+	a := ob.Answers[0]
+	f := walkFailure(a.Result)
+	if walkCase(a.Result) != "failure not-permitted" || f.Detail != "no policy client" {
+		t.Errorf("result %s %q; want failure not-permitted %q", walkCase(a.Result), f.Detail, "no policy client")
+	}
+	q := dnswire.Question{Name: k.Name, Type: dnswire.TypeTXT, Class: dnswire.ClassINET}
+	if !a.Server.Name.Equal(k.Name) || a.Server.Addr.IsValid() || !a.Question.Name.Equal(q.Name) || a.Question.Type != q.Type ||
+		a.Question.Class != q.Class || !a.Sent.IsZero() || a.Wire != nil {
+		t.Errorf("proof %s %v, sent %v, wire %v; want %v without address, %v, nothing sent", walkServer(a.Server), a.Question, a.Sent, a.Wire, k.Name, q)
+	}
+	if !ob.Zone.Equal(k.Domain) || len(ob.Walk) != 0 || len(w.queries()) != 0 {
+		t.Errorf("zone %v, %d walk answers, %d queries; want corp.test., none, none", ob.Zone, len(ob.Walk), len(w.queries()))
 	}
 }

@@ -138,7 +138,7 @@ func WebhookMessage(e alert.Event) []byte {
 		Expected:  Clean(a.Expected, 160),
 		Seen:      seen,
 		More:      more,
-		Value:     cleanLines(value, valueLines(a.Rule)),
+		Value:     cleanLines(valueLines(a.Rule, value), maxBodyLines),
 		FirstSeen: jsonTime(a.Opened),
 		LastClean: jsonTime(a.LastClean),
 		Resolved:  jsonTime(a.Resolved),
@@ -177,14 +177,29 @@ func jsonTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05Z")
 }
 
-// valueLines is how many lines of Value a body holds. The certificate rules
-// list names, and a receiver wants all of them; every other rule shows what
-// the Slack text shows.
-func valueLines(r decide.Rule) int {
+// valueLines gives the lines of Value that a body holds. The certificate
+// rules list names, and a receiver wants all of them; every other rule shows
+// what the Slack text shows.
+func valueLines(r decide.Rule, lines []string) []string {
 	if r == decide.RuleIssuer || r == decide.RuleCertName || r == decide.RuleHostnames {
-		return maxBodyLines
+		return lines
 	}
-	return maxServers
+	mail := r == decide.RuleSPF || r == decide.RuleDMARC || r == decide.RuleDKIM || r == decide.RuleMTASTS
+	if !mail {
+		return lines[:min(len(lines), maxServers)]
+	}
+	// The server lines are cut as for any rule; every word stays.
+	var out []string
+	servers := 0
+	for _, l := range lines {
+		if strings.HasPrefix(l, "weaker ") {
+			out = append(out, l)
+		} else if servers < maxServers {
+			out = append(out, l)
+			servers++
+		}
+	}
+	return out
 }
 
 // checkOf leaves kind and rtype empty for an alert about a whole domain,

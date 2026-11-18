@@ -41,6 +41,10 @@ const (
 	RuleIssuer                         // a certificate was issued by an authority that the policy or the file does not allow
 	RuleCertName                       // a wildcard certificate name that the file does not list
 	RuleHostnames                      // a certificate holds a name that the file does not list
+	RuleSPF                            // the SPF record of a line changed
+	RuleDMARC                          // the DMARC record of a line changed
+	RuleDKIM                           // the DKIM key of a line changed
+	RuleMTASTS                         // the MTA-STS record of a line changed
 )
 
 var ruleWords = map[Rule]string{
@@ -65,6 +69,10 @@ var ruleWords = map[Rule]string{
 	RuleIssuer:         "issuer",
 	RuleCertName:       "certname",
 	RuleHostnames:      "hostnames",
+	RuleSPF:            "spf",
+	RuleDMARC:          "dmarc",
+	RuleDKIM:           "dkim",
+	RuleMTASTS:         "mta-sts",
 }
 
 func (r Rule) String() string { return word(ruleWords, r, "rule") }
@@ -135,6 +143,10 @@ var severities = map[Rule]Severity{
 	RuleIssuer:         SeverityHigh,
 	RuleCertName:       SeverityHigh,
 	RuleHostnames:      SeverityLow,
+	RuleSPF:            SeverityMedium,
+	RuleDMARC:          SeverityMedium,
+	RuleDKIM:           SeverityMedium,
+	RuleMTASTS:         SeverityMedium,
 }
 
 var highTypes = map[dnswire.Type]bool{
@@ -211,7 +223,7 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 		// A probe of a target or of a CAA policy has no line of its own to be
 		// covered by.
 		if ok || !(probe || judged) {
-			found = append(found, judge(o, e, ok, recordRule(f, e, ok))...)
+			found = append(found, recordFindings(f, o, e, ok)...)
 		}
 		if probe {
 			found = append(found, targetFindings(o, t)...)
@@ -223,6 +235,8 @@ func Findings(f *expect.File, o obs.Observation) []Finding {
 		}
 	case obs.KindWildcard:
 		found = wildcard(f, o)
+	case obs.KindPolicy:
+		found = policyFindings(f, o)
 	case obs.KindSerial:
 		// No line of the file is about the serial.
 	case obs.KindCertificates:
@@ -242,23 +256,55 @@ func expectation(f *expect.File, k obs.Key) (expect.Expectation, bool) {
 	return f.Find(k.Name, k.Type)
 }
 
+// mailRules is the rule of a TXT line at the owner of each policy that has a
+// name of its own. A line at any other owner is SPF only when it holds an SPF
+// record.
+var mailRules = map[expect.MailKind]Rule{
+	expect.MailDMARC:  RuleDMARC,
+	expect.MailDKIM:   RuleDKIM,
+	expect.MailMTASTS: RuleMTASTS,
+}
+
 // recordRule is challenge for a line that says no certificate-challenge record
-// exists, and record-set for every other line: an alias that hands the
-// challenge to another zone lets whoever controls it obtain a certificate.
+// exists: an alias that hands the challenge to another zone lets whoever
+// controls it obtain a certificate. A TXT line with one alternative, or none,
+// gets the rule of its mail policy. Every other line is record-set. The rule
+// depends on the line alone, so it never changes from one run to the next.
 func recordRule(f *expect.File, e expect.Expectation, ok bool) Rule {
 	if ok && e.Form == expect.FormNone && IsChallenge(f.Domain, e.Name) {
 		return RuleChallenge
 	}
+	// Two alternatives would need a choice between them to say what is weaker.
+	if e.Type != dnswire.TypeTXT || (e.Form == expect.FormSets && len(e.Sets) > 1) {
+		return RuleRecordSet
+	}
+	kind := expect.MailKindOf(e.Name)
+	if r, named := mailRules[kind]; named {
+		return r
+	}
+	if e.Form == expect.FormSets && expect.HasSPF(e.Sets[0]) {
+		return RuleSPF
+	}
 	return RuleRecordSet
+}
+
+// LineRule reports whether r is the rule that a records line gives when a
+// server's set does not match it.
+func LineRule(r Rule) bool {
+	return r == RuleRecordSet || r == RuleChallenge || r == RuleSPF || r == RuleDMARC || r == RuleDKIM || r == RuleMTASTS
 }
 
 // judge gives not-covered when there is no expectation, else a finding of
 // rule r when some server gives a set that does not match.
 func judge(o obs.Observation, e expect.Expectation, ok bool, r Rule) []Finding {
+	return judgeIf(o, e, ok, r, func(set []dnswire.Record) bool { return !e.Match(set) })
+}
+
+// judgeIf is judge with its own idea of which sets differ from the line.
+func judgeIf(o obs.Observation, e expect.Expectation, ok bool, r Rule, differs func([]dnswire.Record) bool) []Finding {
 	if !ok {
 		return []Finding{notCovered(o)}
 	}
-	differs := func(set []dnswire.Record) bool { return !e.Match(set) }
 	seen := seenIf(o.Answers, differs, setText(o.Key.Type))
 	if len(seen) == 0 {
 		return nil
@@ -382,9 +428,10 @@ func Decide(in Input) []Change {
 	changes := openOrUpdate(found, open, in.Now)
 	for _, was := range open {
 		ends := !hasRule(found, was.Rule) && !blocked(was, o)
-		if was.Rule == RuleRecordSet && hasRule(found, RuleCAA) {
-			// caa takes the place of record-set while the set still differs
-			// from the line, so the open record-set alert stays as it is.
+		if was.Rule == RuleRecordSet && slices.ContainsFunc(found, func(f Finding) bool { return replacesRecordSet(f.Rule) }) {
+			// caa, or the rule of a mail policy line, takes the place of
+			// record-set while the set still differs from the line, so an
+			// open record-set alert stays as it is.
 			ends = false
 		}
 		if was.Rule == RuleCheckFailing {
@@ -400,12 +447,22 @@ func Decide(in Input) []Change {
 	return changes
 }
 
+// replacesRecordSet reports whether r takes the place of record-set on a
+// records line whose set differs from the line.
+func replacesRecordSet(r Rule) bool {
+	return r == RuleCAA || r == RuleSPF || r == RuleDMARC || r == RuleDKIM || r == RuleMTASTS
+}
+
 // inForce gives the open finding of a resolve with the line now in the file as
 // Expected, so the resolve shows what the servers match and not the old line.
 // These rules are the ones whose resolve view shows Expected as the state now.
 // A finding of another rule, or with no line now, stays as it is.
 func inForce(was Finding, in Input) Finding {
-	if was.Rule == RuleNameServers || was.Rule == RuleRecordSet || was.Rule == RuleDS || was.Rule == RuleChallenge {
+	if p := policyLine(in.Expect, in.Observation.Key); p != nil && was.Rule == RuleMTASTS {
+		was.Expected = p.String()
+		return was
+	}
+	if was.Rule == RuleNameServers || was.Rule == RuleDS || LineRule(was.Rule) {
 		if e, ok := expectation(in.Expect, in.Observation.Key); ok {
 			was.Expected = e.FormText()
 		}
@@ -453,6 +510,10 @@ func firstOpen(open []Finding, k string) []Finding {
 	return mine
 }
 
+func hasLineRule(findings []Finding) bool {
+	return slices.ContainsFunc(findings, func(f Finding) bool { return LineRule(f.Rule) })
+}
+
 func hasRule(findings []Finding, r Rule) bool {
 	return slices.ContainsFunc(findings, func(f Finding) bool { return f.Rule == r })
 }
@@ -492,8 +553,24 @@ func changed(was, f Finding) bool {
 	if f.Rule == RuleDisagree {
 		return false
 	}
-	old := lines(was.Value)
-	return slices.ContainsFunc(lines(f.Value), func(l string) bool { return !slices.Contains(old, l) })
+	old, now := lines(was.Value), lines(f.Value)
+	if f.Check.Kind == obs.KindPolicy {
+		// A policy host behind several addresses answers from another one at
+		// almost every fetch, and the same policy from another address is no
+		// news. Value keeps the address for the view.
+		old, now = withoutFirstField(old), withoutFirstField(now)
+	}
+	return slices.ContainsFunc(now, func(l string) bool { return !slices.Contains(old, l) })
+}
+
+// withoutFirstField cuts the first field from each line: the address of a
+// server line, and "weaker" of a word line.
+func withoutFirstField(ls []string) []string {
+	out := make([]string, len(ls))
+	for i, l := range ls {
+		_, out[i], _ = strings.Cut(l, " ")
+	}
+	return out
 }
 
 // hasNewPart reports whether now holds a part of a glue or issuer Expected that old does not.

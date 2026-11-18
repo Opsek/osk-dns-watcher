@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/Opsek/dns-monitoring/internal/mtasts"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	startpkg "github.com/Opsek/dns-monitoring/internal/start"
 )
@@ -21,6 +22,7 @@ func setup(args []string, stdout, stderr io.Writer) int {
 	if msg != "" {
 		return initWrongUse(stderr, msg)
 	}
+	cfg.Policy = mtasts.Fetch
 	o, err := observe.New(cfg)
 	if err != nil {
 		// Only the flags fill the configuration.

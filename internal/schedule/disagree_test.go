@@ -1257,8 +1257,10 @@ func TestDisagreeChangeLeavesTheRoundUnexplained(t *testing.T) {
 
 func TestOwnNoticeIsTheRulesOfTheLinesOfTheZone(t *testing.T) {
 	for _, rule := range []decide.Rule{decide.RuleInvalidFile, decide.RuleNotCovered, decide.RuleZone, decide.RuleNameServers, decide.RuleRecordSet,
-		decide.RuleCheckFailing, decide.RuleZoneChanged, decide.RuleGlue, decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard} {
-		want := rule == decide.RuleRecordSet || rule == decide.RuleZone || rule == decide.RuleChallenge || rule == decide.RuleWildcard
+		decide.RuleCheckFailing, decide.RuleZoneChanged, decide.RuleGlue, decide.RuleDS, decide.RuleGone, decide.RuleDisagree, decide.RuleChallenge, decide.RuleWildcard,
+		decide.RuleSPF, decide.RuleDMARC, decide.RuleDKIM, decide.RuleMTASTS} {
+		want := rule == decide.RuleRecordSet || rule == decide.RuleZone || rule == decide.RuleChallenge || rule == decide.RuleWildcard ||
+			rule == decide.RuleSPF || rule == decide.RuleDMARC || rule == decide.RuleDKIM || rule == decide.RuleMTASTS
 		for _, op := range []decide.Op{decide.OpOpen, decide.OpUpdate, decide.OpResolve} {
 			c := decide.Change{Op: op, Finding: decide.Finding{Rule: rule}}
 			if got := ownNotice(c); got != want {

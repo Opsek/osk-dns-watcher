@@ -47,6 +47,7 @@ The runner sees the repository read-only at `/src`. Its `/tmp` is writable.
 | resolver | 10.53.N.20 | Recursive resolver that starts at the lab root. It does not validate DNSSEC. |
 | liar | 10.53.N.21 | Like resolver, but `labctl lie` makes it give false answers. |
 | receiver | 10.53.N.30 | HTTPS webhook receiver for `hooks.lab.test`. It stores every request. Containers on the lab network find `hooks.lab.test` through Docker's DNS. |
+| mta-sts.corp.test | 10.53.N.30 | The policy host of `corp.test.`: the receiver again, under a second name. See [The MTA-STS policy host](#the-mta-sts-policy-host). |
 | runner | 10.53.N.100 | Runs tests and `labctl`. It has `dig`, `delv`, `nsupdate`, `dnssec-keygen`, `dnssec-signzone` and `curl`. |
 
 No host uses 10.53.N.99: delegate to it to get a server that does not answer.
@@ -94,7 +95,9 @@ The examples are for lab 0 and run in the runner.
 | `certs set` | `labctl certs set < issuances.json` | Replaces the set that stands in for a certificate source; the JSON array comes on standard input. `GET https://hooks.lab.test/v1/issuances?domain=<name>&after=<id>` answers with the issuances of the set that name the domain or a name below it, at most 2 in a page, in id order; none left gives `[]` with `Retry-After: 1`. These requests are not listed by `hooks list`. |
 | `certs fail <status> <count> [<retry>]` | `labctl certs fail 429 1 30` | Answers the next `<count>` lookups with this status and, when `<retry>` is above 0, `Retry-After: <retry>`. |
 | `certs clear` | `labctl certs clear` | Empties the set and the failures. |
-| `reset` | `labctl reset` | Puts the lab back into its base state; `lab/bin/lab reset` runs it. |
+| `policy <host> <status> [<body>]` | `labctl policy mta-sts.corp.test. 200 "$(printf 'version: STSv1\nmode: enforce\nmx: mail.corp.test\nmax_age: 604800\n')"` | Sets the status and body that the policy host serves for `<host>`, which replaces what was set for it. The body is one argument and keeps its line feeds; without it the body is empty. The status is 200 to 599. |
+| `policy clear` | `labctl policy clear` | Removes every policy, so that every host answers 404. |
+| `reset` | `labctl reset` | Puts the lab back into its base state, which includes `policy clear`; `lab/bin/lab reset` runs it. |
 | `status` | `labctl status` | Prints each host and whether it answers; `lab/bin/lab status` runs it. |
 
 A DS record is one argument: `labctl ds corp.test. '11111 13 2 <64 hex digits>'`.
@@ -119,6 +122,37 @@ $ lab/bin/lab run curl -s -o /dev/null -w '%{http_code}\n' --data hello https://
 200
 ```
 
+## The MTA-STS policy host
+
+The receiver also serves the policy file of `corp.test.` for a client that
+checks MTA-STS:
+
+- Name and address: `mta-sts.corp.test`, 10.53.N.30. The runner finds it
+  through its hosts file, and other containers on the lab network through the
+  Docker alias of the receiver. The lab zones hold no record for it, so a
+  query to the lab resolvers for this name gets no answer.
+- Certificate: the lab CA signs it; it is the certificate of the receiver,
+  which names both `hooks.lab.test` and `mta-sts.corp.test`. The runner trusts
+  the CA. A lab made before this name was added keeps its old certificate until
+  `lab/bin/lab down`.
+- Path: only a GET of `/.well-known/mta-sts.txt` returns a policy. It answers
+  with the status and body that `labctl policy` set for the host of the
+  request (lowercase, without port or final dot), and with 404 and an empty
+  body when none is set. It sends no redirect of its own, but `labctl policy
+  <host> 302` makes it answer 302.
+- These requests are not stored: `labctl hooks list` shows none of them.
+
+```sh
+$ lab/bin/lab run labctl policy mta-sts.corp.test. 200 'version: STSv1'
+$ lab/bin/lab run curl -s https://mta-sts.corp.test/.well-known/mta-sts.txt
+version: STSv1
+$ lab/bin/lab run labctl policy mta-sts.corp.test. 404     # break the policy
+$ lab/bin/lab run labctl policy clear                      # no policy at all
+```
+
+The base zones have no `_mta-sts` record; add one with `labctl set`, for
+example `labctl set both _mta-sts.corp.test. 300 TXT '"v=STSv1; id=1"'`.
+
 ## Acceptance checks
 
 The checks of the lab itself. `run.sh` runs in the runner of a started lab
@@ -130,6 +164,10 @@ and stops two labs of its own (`HOST_LAB_A` and `HOST_LAB_B`, default 8 and
 lab/bin/lab up && lab/bin/lab run /src/lab/accept/run.sh; lab/bin/lab down
 lab/accept/host.sh
 ```
+
+`policy-served` sets a policy, fetches it over HTTPS with the lab CA, checks
+that the certificate names the host and that `hooks list` stays empty;
+`policy-reset` checks that `labctl reset` leaves the host answering 404.
 
 Each prints `ok <name>` or `FAIL <name>: <reason>` for each check and exits
 with 0 only if all passed. `make check` runs both.

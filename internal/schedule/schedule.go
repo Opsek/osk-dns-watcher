@@ -481,5 +481,5 @@ func (s *Schedule) Flush(now time.Time) []decide.Move {
 // also when it ends an alert because a change was put back.
 func ownNotice(c decide.Change) bool {
 	r := c.Finding.Rule
-	return r == decide.RuleRecordSet || r == decide.RuleChallenge || r == decide.RuleZone || r == decide.RuleWildcard || r == decide.RuleCAA
+	return decide.LineRule(r) || r == decide.RuleZone || r == decide.RuleWildcard || r == decide.RuleCAA
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/expect"
+	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
 
 // change is one line of an expectations file, before and after.
@@ -152,7 +153,8 @@ func article(word string) string {
 func refusal(r decide.Rule) string {
 	switch r {
 	case decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered, decide.RuleDS, decide.RuleCAA,
-		decide.RuleCertName, decide.RuleHostnames:
+		decide.RuleCertName, decide.RuleHostnames,
+		decide.RuleSPF, decide.RuleDMARC, decide.RuleDKIM, decide.RuleMTASTS:
 		return ""
 	case decide.RuleIssuer:
 		return "the CAA lines and the issuer lines of the file decide which authorities may issue; change them by hand, or have the certificate revoked if it is not yours"
@@ -224,6 +226,9 @@ func readExpect(path string) ([]byte, *expect.File, error) {
 // check names the set: the key of a delegation, DS or records check holds
 // the name and type of the line that covers it.
 func editFile(path string, data []byte, f *expect.File, a alert.Alert, text string) (change, error) {
+	if a.Check.Kind == obs.KindPolicy {
+		return policyChange(path, data, f, a, text)
+	}
 	name, t := a.Check.Name, a.Check.Type
 	set := name.Lower().String() + " " + t.String()
 	line := ownerField(name) + " " + t.String() + " " + text
@@ -252,6 +257,20 @@ func editFile(path string, data []byte, f *expect.File, a alert.Alert, text stri
 	default:
 		ch = replaceLine(path, string(data), e.Line, line)
 	}
+	return ch, parses(ch)
+}
+
+// policyChange replaces the mta-sts line with the policy that the fetch read.
+// A text that does not read gives a line that does not parse, which parses
+// refuses.
+func policyChange(path string, data []byte, f *expect.File, a alert.Alert, text string) (change, error) {
+	switch {
+	case f.Policy == nil:
+		return change{}, errors.New("the file has no mta-sts line now")
+	case f.Policy.String() != a.Expected:
+		return change{}, fmt.Errorf("the file changed since this alert: the mta-sts line is now %s", f.Policy)
+	}
+	ch := replaceLine(path, string(data), f.Policy.Line, text)
 	return ch, parses(ch)
 }
 

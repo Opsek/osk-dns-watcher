@@ -146,10 +146,11 @@ func TestRecordChangedSeen(t *testing.T) {
 
 	expCtl(t, "set", "both", "corp.test.", "300", "TXT", `"v=spf1 +all"`)
 	txt := []string{
-		"finding medium record-set records corp.test. TXT",
+		"finding medium spf records corp.test. TXT",
 		`  expected "v=spf1 mx -all"`,
 		"  seen " + n + `11:53 ns1.corp.test. "v=spf1 +all"`,
 		"  seen " + n + `12:53 ns2.corp.test. "v=spf1 +all"`,
+		"  weaker all gives pass in place of fail",
 	}
 	expCheck(t, n, file, 1, slices.Concat(txt, wwwBoth, []string{sets + "2 findings, 0 unknown answers"})...)
 

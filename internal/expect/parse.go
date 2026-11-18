@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
 
 // Bounds on the work and memory that one file can ask for.
@@ -100,6 +101,7 @@ type parser struct {
 	hasDomain  bool
 	domainLine int // the first domain line, valid or not
 	count      int // expectation lines
+	policyLine int // the first mta-sts line, valid or not
 	seen       map[setKey]int
 	problems   []Problem
 
@@ -125,6 +127,8 @@ func (p *parser) readLine(n int, line string) string {
 		return p.readIssuer(n, rest)
 	case "certname":
 		return p.readCertName(n, rest)
+	case "mta-sts":
+		return p.readPolicy(n, rest)
 	}
 	e, text := p.readExpectation(n, first, rest)
 	if text == "" {
@@ -166,7 +170,7 @@ func (p *parser) readIssuer(n int, rest string) string {
 	if len(fields) != 1 {
 		return "an issuer line takes one name"
 	}
-	if !isIssuerName(fields[0]) {
+	if !isHostName(fields[0]) {
 		return fmt.Sprintf("bad issuer %q: want a name such as letsencrypt.org, with no trailing dot", fields[0])
 	}
 	issuer := strings.ToLower(fields[0])
@@ -178,10 +182,10 @@ func (p *parser) readIssuer(n int, rest string) string {
 	return ""
 }
 
-// isIssuerName reports whether s is the issuer-domain-name of a CAA value:
-// labels of letters, digits and hyphens, each starting and ending with a
-// letter or digit.
-func isIssuerName(s string) bool {
+// isHostName reports whether s is labels of letters, digits and hyphens,
+// each starting and ending with a letter or digit: the issuer-domain-name of
+// a CAA value, and the Domain of RFC 5321 section 4.1.2.
+func isHostName(s string) bool {
 	for label := range strings.SplitSeq(s, ".") {
 		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
@@ -218,6 +222,52 @@ func (p *parser) readCertName(n int, rest string) string {
 	}
 	p.certNameLines[name.Key()] = n
 	p.file.CertNames = append(p.file.CertNames, name)
+	return ""
+}
+
+// readPolicy reads the mta-sts line: the MTA-STS policy that the domain must
+// serve, in the form that STSPolicy.String prints. A faulty line counts as
+// given, so that a second line is reported too.
+func (p *parser) readPolicy(n int, rest string) string {
+	if p.policyLine != 0 {
+		return fmt.Sprintf("mta-sts already given on line %d", p.policyLine)
+	}
+	p.policyLine = n
+	fields := splitFields(rest)
+	if len(fields) < 2 {
+		return "want mta-sts <mode> <max_age> <mx>..."
+	}
+	mode, ok := stsModeOf(fields[0])
+	if !ok {
+		return "mode must be enforce, testing or none"
+	}
+	maxAge, ok := stsMaxAge(fields[1])
+	if !ok {
+		return "max_age must be a whole number from 0 to 31557600"
+	}
+	patterns := fields[2:]
+	if len(patterns) > maxTerms {
+		return fmt.Sprintf("more than %d prefixes or patterns", maxTerms)
+	}
+	var mx []dnswire.Name
+	for _, f := range patterns {
+		if !hasTrailingDot(f) {
+			return fmt.Sprintf("%q has no trailing dot", f)
+		}
+		name, ok := stsPattern(f)
+		if !ok {
+			return fmt.Sprintf("bad mx pattern %q", f)
+		}
+		mx = append(mx, name)
+	}
+	if mode != STSNone && len(mx) == 0 {
+		return fmt.Sprintf("mode %s needs at least one mx pattern", fields[0])
+	}
+	// The policy file lives at a host of its own (RFC 8461 section 3.3).
+	if _, ok := obs.PolicyKey(p.file.Domain); !ok {
+		return "the name mta-sts." + p.file.Domain.Lower().String() + " is too long"
+	}
+	p.file.Policy = &STSPolicy{Line: n, Mode: mode, MaxAge: maxAge, MX: stsPatterns(mx)}
 	return ""
 }
 
@@ -477,6 +527,9 @@ func hasTrailingDot(s string) bool {
 func (f *File) String() string {
 	var b strings.Builder
 	b.WriteString("domain " + nameText(f.Domain) + "\n")
+	if f.Policy != nil {
+		b.WriteString(f.Policy.String() + "\n")
+	}
 	for _, issuer := range f.Issuers {
 		b.WriteString("issuer " + issuer + "\n")
 	}

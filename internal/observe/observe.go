@@ -1,7 +1,8 @@
 // Package observe finds the authoritative servers of a name by its own walk
 // down from the root servers, asks every address of them, and returns each
 // answer with the proof of what was received. It never asks a resolver: its
-// only way to the network is dnswire.Exchange.
+// only way to the network is dnswire.Exchange. A check of kind policy is not
+// DNS: it is handed to Config.Policy.
 package observe
 
 import (
@@ -28,6 +29,9 @@ type Config struct {
 	QueryTimeout time.Duration    // one exchange, its TCP retry included; 0 means 2s
 	RateInterval time.Duration    // per server address, after the burst; 0 means 50ms
 	RateBurst    int              // 0 means 20
+	// Policy runs a check of kind policy. nil: such a check gives one
+	// failure answer, reason not-permitted.
+	Policy func(ctx context.Context, k obs.Key) obs.Answer
 }
 
 // Check is one observation to make. The caller runs it every Interval, so a
@@ -151,6 +155,11 @@ func (o *Observer) Run(ctx context.Context, c Check) (obs.Observation, error) {
 	ob := obs.Observation{Key: c.Key, Start: start, Deadline: start.Add(limit)}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	if c.Key.Kind == obs.KindPolicy {
+		ob.Zone = c.Key.Domain
+		ob.Answers = []obs.Answer{o.policy(ctx, c.Key, q)}
+		return ob, nil
+	}
 
 	f := &finder{
 		o:        o,
@@ -175,6 +184,16 @@ func (o *Observer) Run(ctx context.Context, c Check) (obs.Observation, error) {
 	ob.Zone = z.name
 	ob.Answers = f.fanOut(c.Key.Kind, z, q)
 	return ob, nil
+}
+
+func (o *Observer) policy(ctx context.Context, k obs.Key, q dnswire.Question) obs.Answer {
+	if o.cfg.Policy == nil {
+		return obs.Answer{
+			Proof:  obs.Proof{Server: obs.Server{Name: k.Name}, Question: q, Received: o.now()},
+			Result: obs.FailureResult(obs.Failure{Reason: obs.ReasonNotPermitted, Detail: "no policy client"}),
+		}
+	}
+	return o.cfg.Policy(ctx, k)
 }
 
 // question is what the fan-out asks. A wildcard check asks a name drawn anew
@@ -236,13 +255,20 @@ func (c Check) Validate() error {
 		}
 	case obs.KindCertificates:
 		return fmt.Errorf("%w: kind certificates is not a check of the DNS", ErrInvalidCheck)
+	case obs.KindPolicy:
+		// The fetch goes to the host that Name gives, so Name must be the
+		// one that the domain fixes.
+		want = dnswire.TypeTXT
+		if p, ok := obs.PolicyKey(k.Domain); !ok || k.String() != p.String() {
+			return fmt.Errorf("%w: not the policy key of %v", ErrInvalidCheck, k.Domain)
+		}
 	default:
 		return fmt.Errorf("%w: Kind %v", ErrInvalidCheck, k.Kind)
 	}
 	switch {
 	case k.Domain.LabelCount() == 0:
 		return fmt.Errorf("%w: Domain is the root", ErrInvalidCheck)
-	case k.Kind != obs.KindRecords && k.Kind != obs.KindWildcard && !k.Name.Equal(k.Domain):
+	case k.Kind != obs.KindRecords && k.Kind != obs.KindWildcard && k.Kind != obs.KindPolicy && !k.Name.Equal(k.Domain):
 		return fmt.Errorf("%w: Name %v differs from Domain %v", ErrInvalidCheck, k.Name, k.Domain)
 	case k.Kind != obs.KindRecords && k.Type != want:
 		return fmt.Errorf("%w: Type %v, but a %v check asks %v", ErrInvalidCheck, k.Type, k.Kind, want)

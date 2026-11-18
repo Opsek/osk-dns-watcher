@@ -57,8 +57,7 @@ func disagree(in Input, found, open []Finding) (Finding, bool) {
 		return Finding{}, false
 	}
 	e, line := expectation(in.Expect, o.Key)
-	explained := hasRule(found, RuleRecordSet) || hasRule(found, RuleChallenge) || hasRule(found, RuleNotCovered) ||
-		hasRule(found, RuleCAA)
+	explained := hasLineRule(found) || hasRule(found, RuleNotCovered) || hasRule(found, RuleCAA)
 	opens := Disagree(o) && line && !explained && in.DisagreeLong
 	stays := hasRule(open, RuleDisagree) && !in.DisagreeOver
 	if !opens && !stays {

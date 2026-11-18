@@ -486,6 +486,7 @@ func stfDead(d string, keep ...string) map[string][][]obs.Answer {
 	seq := map[string][][]obs.Answer{}
 	keys := []string{
 		iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "*."+d, dnswire.TypeA),
+		iniKey(d, "_dmarc."+d, dnswire.TypeTXT), iniKey(d, "_mta-sts."+d, dnswire.TypeTXT),
 		iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT), iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT),
 	}
 	for _, ty := range []dnswire.Type{dnswire.TypeNS, dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeMX, dnswire.TypeTXT, dnswire.TypeCAA} {
@@ -514,6 +515,8 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 		{"DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeA)), true, false},
 		{"DS and a none line of a name under the apex", stfDead(com, iniKey(com, "*."+com, dnswire.TypeA)), true, false},
 		{"DS and the none line of a challenge name", stfDead(com, iniKey(com, "_acme-challenge."+com, dnswire.TypeTXT)), true, false},
+		{"DS and the none line of the DMARC name", stfDead(com, iniKey(com, "_dmarc."+com, dnswire.TypeTXT)), true, false},
+		{"DS and the none line of the MTA-STS name", stfDead(com, iniKey(com, "_mta-sts."+com, dnswire.TypeTXT)), true, false},
 		{"NS, DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, com, dnswire.TypeMX)), false, false},
 		{"NS, DS and a none line of a name under the apex", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, "_acme-challenge.www."+com, dnswire.TypeTXT)), false, false},
 		{"the fake world", nil, false, false},

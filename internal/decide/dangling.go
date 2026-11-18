@@ -64,47 +64,21 @@ func Targets(f *expect.File) []Target {
 					add(d.Host, line(RuleNameServerHost, d.Host))
 				case dnswire.MX:
 					add(d.Exchange, line(RuleMailTarget, d.Exchange))
-				case dnswire.TXT:
-					for _, n := range spfIncludes(d.Strings) {
-						add(n, Ref{RuleMailTarget, owner + " TXT include:" + n.Lower().String()})
-					}
 				}
+			}
+			_, hasRedirect := expect.SPFRedirect(e.Name, alt)
+			names := expect.SPFTargets(e.Name, alt)
+			for i, n := range names {
+				// The redirect, when there is one, is the last name.
+				term := "include:"
+				if hasRedirect && i == len(names)-1 {
+					term = "redirect="
+				}
+				add(n, Ref{RuleMailTarget, owner + " TXT " + term + n.Lower().String()})
 			}
 		}
 	}
 	return targets
-}
-
-// spfIncludes gives the domains of the include terms of a TXT record, if the
-// record is SPF. The text comes from DNS, so every term that is odd is skipped.
-func spfIncludes(strs []string) []dnswire.Name {
-	text := strings.Join(strs, "")
-	const version = "v=spf1"
-	if len(text) < len(version) || !strings.EqualFold(text[:len(version)], version) {
-		return nil
-	}
-	text = text[len(version):]
-	if text != "" && text[0] != ' ' {
-		return nil
-	}
-	var names []dnswire.Name
-	for _, term := range strings.Split(text, " ") {
-		if term != "" && strings.ContainsRune("+-~?", rune(term[0])) {
-			term = term[1:]
-		}
-		const include = "include:"
-		if len(term) < len(include) || !strings.EqualFold(term[:len(include)], include) {
-			continue
-		}
-		domain := strings.TrimSuffix(term[len(include):], ".")
-		if domain == "" || strings.Contains(domain, "%") {
-			continue
-		}
-		if n, err := dnswire.ParseName(domain + "."); err == nil {
-			names = append(names, n)
-		}
-	}
-	return names
 }
 
 // IsWildcardOwner reports whether name is a wildcard owner. Only a "*" that is

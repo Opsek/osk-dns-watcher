@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,7 +77,8 @@ func TestKindString(t *testing.T) {
 		{0, 0, "kind0"},
 		{obs.KindWildcard, 5, "wildcard"},
 		{obs.KindCertificates, 6, "certificates"},
-		{7, 7, "kind7"},
+		{obs.KindPolicy, 7, "policy"},
+		{8, 8, "kind8"},
 		{255, 255, "kind255"},
 	} {
 		if uint8(c.kind) != c.value || c.kind.String() != c.word {
@@ -101,6 +103,7 @@ func TestKeyConstructors(t *testing.T) {
 		{obs.CertificatesKey(domain), obs.KindCertificates, domain, 0},
 		{obs.WildcardKey(domain, domain), obs.KindWildcard, domain, dnswire.TypeA},
 		{obs.WildcardKey(domain, elsewhere), obs.KindWildcard, elsewhere, dnswire.TypeA},
+		{mtsPolicyKey(t, domain), obs.KindPolicy, dataName(t, "mta-sts.corp.test."), dnswire.TypeTXT},
 	} {
 		k := c.key
 		if k.Kind != c.kind || !k.Domain.Equal(domain) || !k.Name.Equal(c.name) || k.Type != c.typ {
@@ -128,9 +131,67 @@ func TestKeyString(t *testing.T) {
 		{obs.WildcardKey(domain, dataName(t, "Mail.Shop.TEST.")), "wildcard corp.test. mail.shop.test. A"},
 		{obs.CertificatesKey(domain), "certificates corp.test."},
 		{obs.CertificatesKey(dataName(t, "Shop.Example.COM.")), "certificates shop.example.com."},
+		{mtsPolicyKey(t, domain), "policy corp.test. mta-sts.corp.test. TXT"},
 	} {
 		if got := c.key.String(); got != c.want {
 			t.Errorf("key prints %q, want %q", got, c.want)
+		}
+	}
+}
+
+// mtsPolicyKey is the policy key of a domain whose policy name fits.
+func mtsPolicyKey(t *testing.T, domain dnswire.Name) obs.Key {
+	t.Helper()
+	k, ok := obs.PolicyKey(domain)
+	if !ok {
+		t.Fatalf("PolicyKey(%v): not ok", domain)
+	}
+	return k
+}
+
+// mtsLabels makes a name of raw label octets, so that a label may hold a dot.
+func mtsLabels(t *testing.T, labels ...string) dnswire.Name {
+	t.Helper()
+	n, err := dnswire.NameFromLabels(labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// The policy name is mta-sts.<domain> (RFC 8461 section 3.3), made of the
+// labels of the domain: a label that holds a dot stays one label. A name of
+// more than 255 octets on the wire cannot be made.
+func TestPolicyKey(t *testing.T) {
+	a, b, c := strings.Repeat("a", 63), strings.Repeat("b", 63), strings.Repeat("c", 63)
+	// Three labels of 63 octets and one of last: 1+63 octets each, the last
+	// label, the root octet; mta-sts. adds 8.
+	long := func(last int) dnswire.Name { return mtsLabels(t, a, b, c, strings.Repeat("d", last)) }
+	for _, tc := range []struct {
+		name   string
+		domain dnswire.Name
+		labels []string // of the policy name, in lower case
+	}{
+		{"plain", dataName(t, "corp.test."), []string{"mta-sts", "corp", "test"}},
+		{"upper case", dataName(t, "Corp.TEST."), []string{"mta-sts", "corp", "test"}},
+		{"a dot inside a label", mtsLabels(t, "corp.test"), []string{"mta-sts", "corp.test"}},
+		{"a slash and a colon", mtsLabels(t, "a/b", "test:443"), []string{"mta-sts", "a/b", "test:443"}},
+		{"the root", dnswire.Name{}, []string{"mta-sts"}},
+		{"a policy name of 255 octets", long(53), []string{"mta-sts", a, b, c, strings.Repeat("d", 53)}},
+	} {
+		k, ok := obs.PolicyKey(tc.domain)
+		var got []string
+		for _, l := range k.Name.Labels() {
+			got = append(got, strings.ToLower(l))
+		}
+		if !ok || k.Kind != obs.KindPolicy || !k.Domain.Equal(tc.domain) || k.Type != dnswire.TypeTXT || !slices.Equal(got, tc.labels) {
+			t.Errorf("%s: PolicyKey = %v %v %q %v, %v; want policy, the domain, %q, TXT, ok",
+				tc.name, k.Kind, k.Domain, got, k.Type, ok, tc.labels)
+		}
+	}
+	for _, domain := range []dnswire.Name{long(54), long(61)} {
+		if k, ok := obs.PolicyKey(domain); ok {
+			t.Errorf("PolicyKey of a domain of %d labels: %v, ok; want not ok, the policy name is too long", domain.LabelCount(), k)
 		}
 	}
 }

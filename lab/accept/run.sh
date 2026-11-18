@@ -632,6 +632,38 @@ c_certs_fake() {
 	lc certs clear
 	cwant "domain=corp.test after certs clear" "domain=corp.test" "200|1" ""
 }
+# pget: GET the policy file of the policy host with the runner's trust store; prints the status
+# and leaves the body in $TMP/body
+pget() {
+	rm -f "$TMP/body"
+	curl -sS -o "$TMP/body" -w '%{http_code}' --max-time 5 \
+		https://mta-sts.corp.test/.well-known/mta-sts.txt 2>&1
+}
+c_policy_served() {
+	ps_body='version: STSv1
+mode: enforce
+mx: mail.corp.test
+max_age: 604800
+'
+	lc policy mta-sts.corp.test. 200 "$ps_body"
+	same "GET the policy file (status)" 200 "$(pget)"
+	printf '%s' "$ps_body" >"$TMP/want"
+	cmp -s "$TMP/want" "$TMP/body" || echo "GET the policy file (body): want the stored body with its line feeds, got $(tr '\n' '|' <"$TMP/body")"
+	same "the policy host is in the certificate" "DNS:hooks.lab.test, DNS:mta-sts.corp.test" \
+		"$(openssl s_client -connect mta-sts.corp.test:443 -servername mta-sts.corp.test </dev/null 2>/dev/null |
+			openssl x509 -noout -ext subjectAltName | sed -n 's/^ *//; /^DNS:/p')"
+	lc policy mta-sts.corp.test. 302
+	same "GET the policy file after labctl policy mta-sts.corp.test. 302" 302 "$(pget)"
+	lc policy clear
+	same "GET the policy file after labctl policy clear" 404 "$(pget)"
+	same "stored hook requests after the policy requests" "" "$(labctl hooks list 2>&1)"
+}
+c_policy_reset() {
+	lc policy mta-sts.corp.test. 200 'version: STSv1'
+	lc reset
+	same "GET the policy file after reset (status)" 404 "$(pget)"
+	same "GET the policy file after reset (body)" "" "$(body)"
+}
 c_exit_codes() {
 	ec_serial=$(serial_of "$NS1" corp.test.)
 	same "exit code of labctl serial ns1 corp.test." 0 "$(code serial ns1 corp.test.)"
@@ -1072,6 +1104,8 @@ main() {
 	check labctl-hooks-reply-delay c_hooks_delay
 	check labctl-hooks-reply-redirect c_hooks_redirect
 	check certs-fake c_certs_fake
+	check policy-served c_policy_served
+	check policy-reset c_policy_reset
 	check labctl-exit-codes c_exit_codes
 
 	check attack-ns-replaced c_ns_replaced

@@ -18,14 +18,15 @@ import (
 // a failed run does. Judged is asserted at every step.
 
 // rndRules are the rules whose change tells the operator about the zone.
-var rndRules = []decide.Rule{decide.RuleRecordSet, decide.RuleChallenge, decide.RuleZone, decide.RuleWildcard, decide.RuleCAA}
+var rndRules = []decide.Rule{decide.RuleRecordSet, decide.RuleChallenge, decide.RuleZone, decide.RuleWildcard, decide.RuleCAA,
+	decide.RuleSPF, decide.RuleDMARC, decide.RuleDKIM, decide.RuleMTASTS}
 
 var rndOps = []decide.Op{decide.OpOpen, decide.OpUpdate, decide.OpResolve}
 
 // rndOtherRules are all the rules whose change tells nothing of the zone.
 func rndOtherRules() []decide.Rule {
 	var others []decide.Rule
-	for r := decide.RuleInvalidFile; r <= decide.RuleHostnames; r++ {
+	for r := decide.RuleInvalidFile; r <= decide.RuleMTASTS; r++ {
 		if !slices.Contains(rndRules, r) {
 			others = append(others, r)
 		}
@@ -535,5 +536,22 @@ func TestNoticeOfTheFirstUsableRunSinceNewExplainsNothing(t *testing.T) {
 			}
 			rndRound(t, s, "the round", schSec(15), want)
 		})
+	}
+}
+
+// A change of a mail rule tells of the zone as a change of the line does, for
+// each of the four and each op, and no other rule beside them does.
+func TestOwnNoticeHoldsEveryMailRuleInEveryOp(t *testing.T) {
+	for _, rule := range []decide.Rule{decide.RuleSPF, decide.RuleDMARC, decide.RuleDKIM, decide.RuleMTASTS} {
+		for _, op := range rndOps {
+			if !ownNotice(rndChange(rule, op, obs.Key{})) {
+				t.Errorf("ownNotice of %s %s is false", op, rule)
+			}
+		}
+	}
+	for _, rule := range []decide.Rule{decide.RuleDisagree, decide.RuleCheckFailing, decide.RuleZoneChanged} {
+		if ownNotice(rndChange(rule, decide.OpOpen, obs.Key{})) {
+			t.Errorf("ownNotice of open %s is true", rule)
+		}
 	}
 }

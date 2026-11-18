@@ -237,8 +237,8 @@ func TestDisagreeRuleWordsNumbersAndSeverities(t *testing.T) {
 			}
 		}
 	}
-	if got := Rule(21).String(); got != "rule21" {
-		t.Errorf("Rule(21).String() is %q, want rule21", got)
+	if got := Rule(25).String(); got != "rule25" {
+		t.Errorf("Rule(25).String() is %q, want rule25", got)
 	}
 	if got := Rule(10).String(); got != "gone" {
 		t.Errorf("Rule(10).String() is %q, want gone", got)
@@ -987,8 +987,8 @@ func dngSeverity(r Rule, typ dnswire.Type) Severity {
 		}
 	case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleCheckFailing, RuleZoneChanged, RuleGlue, RuleDS, RuleGone,
 		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleWildcard, RuleCAA,
-		RuleIssuer, RuleCertName, RuleHostnames:
-		// The oracle gives only these three rules; the others weigh medium here.
+		RuleIssuer, RuleCertName, RuleHostnames, RuleSPF, RuleDMARC, RuleDKIM, RuleMTASTS:
+		// The oracle gives only the rules of a line; the others weigh medium here.
 	}
 	return SeverityMedium
 }
@@ -1014,7 +1014,7 @@ func dngFindings(f *expect.File, o obs.Observation) []Finding {
 	if line == nil {
 		return []Finding{finding(RuleNotCovered, "", dngUsable(o, nil))}
 	}
-	rule, differs := RuleRecordSet, func(set []dnswire.Record) bool { return !line.Match(set) }
+	rule, differs := emlOracleRule(*line), func(set []dnswire.Record) bool { return !line.Match(set) }
 	if line.Form == expect.FormNone && dngChallengeName(f, o.Key.Name) {
 		rule, differs = RuleChallenge, func(set []dnswire.Record) bool { return len(set) > 0 }
 	}
@@ -1022,7 +1022,9 @@ func dngFindings(f *expect.File, o obs.Observation) []Finding {
 	if len(seen) == 0 {
 		return nil
 	}
-	return []Finding{finding(rule, line.FormText(), seen)}
+	found := finding(rule, line.FormText(), seen)
+	found.Value = emlOracleValue(rule, *line, seen, found.Value)
+	return []Finding{found}
 }
 
 func dngFirstOpen(open []Finding, key obs.Key, r Rule) (Finding, bool) {
@@ -1102,7 +1104,8 @@ func dngOracle(in Input) dngWant {
 	_, w.open = dngFirstOpen(in.Open, o.Key, RuleDisagree)
 	cov, line := dngCovLine(in.Expect, o.Key)
 	w.cov, w.line = cov, line != nil
-	w.explained = dngHas(w.findings, RuleRecordSet) || dngHas(w.findings, RuleChallenge) || dngHas(w.findings, RuleNotCovered)
+	w.explained = dngHas(w.findings, RuleRecordSet) || dngHas(w.findings, RuleChallenge) || dngHas(w.findings, RuleNotCovered) ||
+		dngHas(w.findings, RuleSPF) || dngHas(w.findings, RuleDMARC) || dngHas(w.findings, RuleDKIM) || dngHas(w.findings, RuleMTASTS)
 	w.late = in.DisagreeLong
 	w.given = records && (dngDisagree(o) && w.line && !w.explained && w.late || w.open && !in.DisagreeOver)
 	if w.given {
@@ -1136,7 +1139,8 @@ func dngOracle(in Input) dngWant {
 		}
 		if ends {
 			// A resolve of these rules shows the line in force when the file has it.
-			if (was.Rule == RuleRecordSet || was.Rule == RuleChallenge || was.Rule == RuleNameServers || was.Rule == RuleDS) && line != nil {
+			if (was.Rule == RuleRecordSet || was.Rule == RuleChallenge || was.Rule == RuleSPF || was.Rule == RuleDMARC || was.Rule == RuleDKIM ||
+				was.Rule == RuleMTASTS || was.Rule == RuleNameServers || was.Rule == RuleDS) && line != nil {
 				was.Expected = line.FormText()
 			}
 			w.changes = append(w.changes, Change{Op: OpResolve, Finding: was, At: in.Now})

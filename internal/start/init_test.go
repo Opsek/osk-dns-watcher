@@ -159,6 +159,8 @@ func iniLines(d string) []string {
 		d + ` CAA 0 issue "letsencrypt.org"`,
 		"*." + d + " A none",
 		"_acme-challenge." + d + " TXT none",
+		"_dmarc." + d + " TXT none",
+		"_mta-sts." + d + " TXT none",
 		"_acme-challenge.www." + d + " TXT none",
 	}
 }
@@ -173,7 +175,8 @@ func iniKey(domain, name string, t dnswire.Type) string {
 
 // iniKeys are the checks of a snapshot of d: the delegation, the DS set, the
 // NS set of the apex, the five other sets of the apex and, when under is
-// true, the four names under d: www, the two challenge names and the wildcard.
+// true, the six names under d: www, the DMARC and MTA-STS names, the two
+// challenge names and the wildcard.
 func iniKeys(d string, under bool) []string {
 	n := iniName(d)
 	keys := []string{obs.DelegationKey(n).String(), obs.DSKey(n).String()}
@@ -181,7 +184,8 @@ func iniKeys(d string, under bool) []string {
 		keys = append(keys, iniKey(d, d, t))
 	}
 	if under {
-		keys = append(keys, iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT),
+		keys = append(keys, iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "_dmarc."+d, dnswire.TypeTXT),
+			iniKey(d, "_mta-sts."+d, dnswire.TypeTXT), iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT),
 			iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT), iniKey(d, "*."+d, dnswire.TypeA))
 	}
 	return keys
@@ -948,8 +952,8 @@ func TestInitWritesNothingBeforeYes(t *testing.T) {
 		}
 	}
 	// What is written is what was shown: no check runs after the answer.
-	if n := s.runner.count(); moments[2].checks != 12 || n != 12 {
-		t.Errorf("%d checks had run when yes was asked, %d at the end; want 12 and 12", moments[2].checks, n)
+	if n := s.runner.count(); moments[2].checks != 14 || n != 14 {
+		t.Errorf("%d checks had run when yes was asked, %d at the end; want 14 and 14", moments[2].checks, n)
 	}
 	if code != 0 || !strings.HasSuffix(out, "yes\n"+s.wrote(d)) {
 		t.Errorf("exit code %d, output ends %q; want 0 and the written files", code, out[max(0, len(out)-200):])
@@ -1057,8 +1061,8 @@ func TestInitWritesOnlyForExactlyYes(t *testing.T) {
 				t.Errorf("exit code %d; want 1", code)
 			}
 			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+answer+"\n"+iniNothing)
-			if n := s.runner.count(); n != 12 {
-				t.Errorf("%d checks ran; want 12", n)
+			if n := s.runner.count(); n != 14 {
+				t.Errorf("%d checks ran; want 14", n)
 			}
 			s.nothingWritten()
 		})
@@ -1248,17 +1252,17 @@ func TestInitTakesAtMostHundredDomains(t *testing.T) {
 	if n := strings.Count(out, " as osk sees it now."); n != 100 {
 		t.Errorf("init showed %d domains; want 100", n)
 	}
-	if n := s.runner.count(); n != 1200 {
-		t.Errorf("%d checks ran; want 1200", n)
+	if n := s.runner.count(); n != 1400 {
+		t.Errorf("%d checks ran; want 1400", n)
 	}
 	s.nothingWritten()
 }
 
 // The checks of a domain are those of "osk snapshot" for the six sets, www,
-// the two challenge names and the wildcard name, with
-// the interval of the faster checks, and they run at once: the observer
-// answers no check before all twelve have started.
-func TestInitRunsTheTwelveChecksOfADomainAtOnce(t *testing.T) {
+// the DMARC and MTA-STS names, the two challenge names and the wildcard name,
+// with the interval of the faster checks, and they run at once: the observer
+// answers no check before all fourteen have started.
+func TestInitRunsTheFourteenChecksOfADomainAtOnce(t *testing.T) {
 	s := iniNew(t, "example.com", iniURL, "no")
 	all := make(chan struct{})
 	var once sync.Once
@@ -1266,7 +1270,7 @@ func TestInitRunsTheTwelveChecksOfADomainAtOnce(t *testing.T) {
 	apart := false
 	deadline := time.Now().Add(5 * time.Second)
 	s.runner.during = func(calls int) {
-		if calls == 12 {
+		if calls == 14 {
 			once.Do(func() { close(all) })
 		}
 		select {
@@ -1283,7 +1287,7 @@ func TestInitRunsTheTwelveChecksOfADomainAtOnce(t *testing.T) {
 	}
 	mu.Lock()
 	if apart {
-		t.Errorf("the twelve checks did not run at once")
+		t.Errorf("the fourteen checks did not run at once")
 	}
 	mu.Unlock()
 	keys := s.runner.keys()
@@ -1864,6 +1868,8 @@ func TestLookKeysAsksTheChallengeAndWildcardNamesAfterWWW(t *testing.T) {
 		iniKey(d, d, dnswire.TypeTXT),
 		iniKey(d, d, dnswire.TypeCAA),
 		iniKey(d, "www."+d, dnswire.TypeA),
+		iniKey(d, "_dmarc."+d, dnswire.TypeTXT),
+		iniKey(d, "_mta-sts."+d, dnswire.TypeTXT),
 		iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT),
 		iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT),
 		iniKey(d, "*."+d, dnswire.TypeA),
@@ -1885,10 +1891,14 @@ func TestLookKeysLeavesOutEachNameThatWouldBeTooLong(t *testing.T) {
 		octets int
 		under  []string // the names kept, in order
 	}{
-		{235, []string{"www", "_acme-challenge", "_acme-challenge.www", "*"}},
-		{236, []string{"www", "_acme-challenge", "*"}},
-		{239, []string{"www", "_acme-challenge", "*"}},
-		{240, []string{"www", "*"}},
+		{235, []string{"www", "_dmarc", "_mta-sts", "_acme-challenge", "_acme-challenge.www", "*"}},
+		{236, []string{"www", "_dmarc", "_mta-sts", "_acme-challenge", "*"}},
+		{239, []string{"www", "_dmarc", "_mta-sts", "_acme-challenge", "*"}},
+		{240, []string{"www", "_dmarc", "_mta-sts", "*"}},
+		{246, []string{"www", "_dmarc", "_mta-sts", "*"}},
+		{247, []string{"www", "_dmarc", "*"}},
+		{248, []string{"www", "_dmarc", "*"}},
+		{249, []string{"www", "*"}},
 		{251, []string{"www", "*"}},
 		{252, []string{"*"}},
 		{253, []string{"*"}},

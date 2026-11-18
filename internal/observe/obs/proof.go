@@ -14,7 +14,10 @@ type Server struct {
 }
 
 // Proof is what was asked of whom and when, and what came back, so that a
-// result can be checked later against the octets the server sent.
+// result can be checked later against the octets the server sent. For a
+// check of kind policy, Server is the policy host and the address that
+// answered over HTTPS, Question is that host's name with type TXT, and Wire
+// is nil.
 type Proof struct {
 	Server   Server
 	Question dnswire.Question // what was asked; class IN

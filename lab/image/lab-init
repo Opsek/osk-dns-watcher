@@ -16,7 +16,7 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
 	-subj "/CN=osk lab CA $LAB_ID" -keyout ca.key -out ca.pem 2> /dev/null
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
 	-subj /CN=hooks.lab.test -CA ca.pem -CAkey ca.key \
-	-addext subjectAltName=DNS:hooks.lab.test -addext basicConstraints=critical,CA:FALSE \
+	-addext subjectAltName=DNS:hooks.lab.test,DNS:mta-sts.corp.test -addext basicConstraints=critical,CA:FALSE \
 	-keyout hooks.key -out hooks.pem 2> /dev/null
 # ca/ holds the CA certificate alone: a container that reads every file of
 # a folder, as SSL_CERT_DIR does, then trusts the CA and no key or leaf.

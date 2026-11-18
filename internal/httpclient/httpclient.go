@@ -14,6 +14,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -33,6 +35,10 @@ const GetTimeout = 30 * time.Second
 // MaxBody is the most octets of a response body that Post reads.
 const MaxBody = 4096
 
+// MaxPolicy is the largest MTA-STS policy file that a caller of Get takes
+// (RFC 8461 section 3.3 suggests 64 kilobytes).
+const MaxPolicy = 65536
+
 var ErrURL = errors.New("not an https URL with a host and no user name")
 var ErrHost = errors.New("host not allowed")
 var ErrTimeout = errors.New("timeout")
@@ -48,9 +54,10 @@ type Client struct {
 
 type Response struct {
 	Status     int
-	RetryAfter time.Duration // 0 when absent or not a number of seconds
-	Date       time.Time     // the server's clock; zero when the header is absent or not valid
-	Body       []byte        // as the server sent it: of Post the first MaxBody octets, of Get the whole body
+	RetryAfter time.Duration  // 0 when absent or not a number of seconds
+	Date       time.Time      // the server's clock; zero when the header is absent or not valid
+	Body       []byte         // as the server sent it: of Post the first MaxBody octets, of Get the whole body
+	Addr       netip.AddrPort // of Get only: the address that answered; zero when not known
 }
 
 // HostOf gives "host:port" of an https URL, the host in lower case and port
@@ -127,8 +134,14 @@ func (c *Client) Post(ctx context.Context, rawURL, contentType string, body []by
 // gives ErrTooLarge and no body, so that a cut text is never read. Each
 // header is set after "Accept: application/json".
 func (c *Client) Get(ctx context.Context, rawURL string, limit int64, headers ...Header) (Response, error) {
+	// The transport calls GotConn on this goroutine, before Do returns, and
+	// only once the TLS handshake has checked the certificate.
+	var addr netip.AddrPort
+	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		addr, _ = netip.ParseAddrPort(info.Conn.RemoteAddr().String())
+	}}
 	first := Header{Name: "Accept", Value: "application/json"}
-	resp, err := c.send(ctx, c.get, http.MethodGet, rawURL, nil, append([]Header{first}, headers...))
+	resp, err := c.send(httptrace.WithClientTrace(ctx, trace), c.get, http.MethodGet, rawURL, nil, append([]Header{first}, headers...))
 	if err != nil {
 		return Response{}, err
 	}
@@ -143,7 +156,9 @@ func (c *Client) Get(ctx context.Context, rawURL string, limit int64, headers ..
 	case int64(len(data)) > limit:
 		return Response{}, ErrTooLarge
 	}
-	return answer(resp, data), nil
+	r := answer(resp, data)
+	r.Addr = addr
+	return r, nil
 }
 
 // send makes one request through hc, with the headers set in order, and

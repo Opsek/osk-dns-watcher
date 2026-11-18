@@ -104,9 +104,10 @@ var fastTypes = []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA, dnswire.TypeCAA,
 // Plan gives the checks of f: the serial, delegation and DS checks of its
 // domain, a records check for each expectation in file order, an address
 // check for each name that a line points at, and a wildcard check for each
-// zone that the file says has no wildcard, a CAA check for each name whose
-// CAA policy the file states only through a parent, and last the certificate
-// check when its interval is set.
+// zone that the file says has no wildcard, a policy check when it has an
+// mta-sts line, a CAA check for each name whose CAA policy the file states
+// only through a parent, and last the certificate check when its interval is
+// set.
 func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 	d := f.Domain
 	checks := []Check{
@@ -155,6 +156,18 @@ func Plan(f *expect.File, fast []dnswire.Name, iv Intervals) []Check {
 			Tier:     TierOther,
 			Interval: iv.Of(TierOther),
 			Zone:     z.IsSubdomainOf(d) && f.Zone(z).Equal(d),
+		})
+	}
+	if policy, ok := obs.PolicyKey(d); ok && f.Policy != nil {
+		// A policy update moves the id at _mta-sts.<d>, so the round that the
+		// serial starts fetches the policy at once. That owner is one octet
+		// longer than the host of the fetch, so it may not exist.
+		record, err := dnswire.NameFromLabels(append([]string{"_mta-sts"}, d.Labels()...))
+		checks = append(checks, Check{
+			Key:      policy,
+			Tier:     TierOther,
+			Interval: iv.Of(TierOther),
+			Zone:     err == nil && f.Zone(record).Equal(d),
 		})
 	}
 	// A CAA set is inherited down the tree, so a name with no CAA line of its

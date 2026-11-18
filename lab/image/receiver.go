@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -54,12 +55,19 @@ type certFail struct {
 // listing needs several pages.
 const certPage = 2
 
+// policy is the status and body of the MTA-STS policy file of one host.
+type policy struct {
+	status int
+	body   string
+}
+
 type receiver struct {
 	mu        sync.Mutex
 	requests  []request
 	next      reply
 	issuances []issuance
 	failing   certFail
+	policies  map[string]policy
 }
 
 func (rc *receiver) hook(w http.ResponseWriter, r *http.Request) {
@@ -247,14 +255,60 @@ func (rc *receiver) failIssuances(w http.ResponseWriter, r *http.Request) {
 	rc.mu.Unlock()
 }
 
+// policyHost is the form under which policies are stored: lowercase, with no
+// port and no final dot.
+func policyHost(h string) string {
+	if name, _, err := net.SplitHostPort(h); err == nil {
+		h = name
+	}
+	return strings.TrimSuffix(strings.ToLower(h), ".")
+}
+
+// servePolicy answers a GET of the policy path with what is stored for the
+// request's host, and with 404 and no body when nothing is. Like lookup, its
+// requests are not stored with the webhook requests, which the scenarios count.
+func (rc *receiver) servePolicy(w http.ResponseWriter, r *http.Request) {
+	rc.mu.Lock()
+	p, ok := rc.policies[policyHost(r.Host)]
+	rc.mu.Unlock()
+	if !ok {
+		p.status = http.StatusNotFound
+	}
+	w.WriteHeader(p.status)
+	// A failed write means that the client left.
+	_, _ = io.WriteString(w, p.body)
+}
+
+// setPolicy takes the form fields host, status and body.
+func (rc *receiver) setPolicy(w http.ResponseWriter, r *http.Request) {
+	host := policyHost(r.FormValue("host"))
+	status, err := strconv.Atoi(r.FormValue("status"))
+	if host == "" || err != nil || status < 200 || status > 599 {
+		http.Error(w, "want a host and a status 200 to 599", http.StatusBadRequest)
+		return
+	}
+	rc.mu.Lock()
+	rc.policies[host] = policy{status: status, body: r.FormValue("body")}
+	rc.mu.Unlock()
+}
+
+func (rc *receiver) clearPolicies(w http.ResponseWriter, r *http.Request) {
+	rc.mu.Lock()
+	clear(rc.policies)
+	rc.mu.Unlock()
+}
+
 func main() {
-	rc := &receiver{}
+	rc := &receiver{policies: map[string]policy{}}
 	tls := http.NewServeMux()
 	tls.HandleFunc("GET /v1/issuances", rc.lookup)
+	tls.HandleFunc("GET /.well-known/mta-sts.txt", rc.servePolicy)
 	tls.HandleFunc("/", rc.hook)
 	control := http.NewServeMux()
 	control.HandleFunc("POST /issuances", rc.setIssuances)
 	control.HandleFunc("POST /issuances/fail", rc.failIssuances)
+	control.HandleFunc("POST /policy", rc.setPolicy)
+	control.HandleFunc("POST /policy/clear", rc.clearPolicies)
 	control.HandleFunc("GET /requests", rc.list)
 	control.HandleFunc("POST /clear", rc.clear)
 	control.HandleFunc("POST /reply", rc.setReply)

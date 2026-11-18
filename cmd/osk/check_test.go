@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -623,5 +624,153 @@ func TestExpectKeysHaveNoRecordsCheckForANoneLineThatAWildcardCheckOwns(t *testi
 	}
 	if got := dngqKeys(expectKeys(f)); !slices.Equal(got, want) {
 		t.Errorf("expectKeys gave\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// emlcWorld is cliWorld with an SPF record at corp.test. and a DMARC record
+// at _dmarc.corp.test.
+func emlcWorld(q []byte, tcp bool) []byte {
+	m, err := dnswire.Parse(q)
+	if err != nil || len(m.Question) != 1 {
+		return nil
+	}
+	name, qtype := strings.ToLower(m.Question[0].Name.String()), m.Question[0].Type
+	text := map[string]string{
+		"corp.test.":        "v=spf1 mx include:evil.test ~all",
+		"_dmarc.corp.test.": "v=DMARC1; p=none; rua=mailto:x@evil.test",
+	}[name]
+	if text == "" || qtype != dnswire.TypeTXT {
+		return cliWorld(q, tcp)
+	}
+	record := cliRR(name, 300, dnswire.TXT{Strings: []string{text}})
+	return cliAnswer(q, transportQR|transportAA, []dnswire.Record{record}, nil, nil)
+}
+
+// emlcFile expects a stricter SPF record and a stricter DMARC record than
+// emlcWorld serves.
+const emlcFile = "domain corp.test.\n" +
+	"corp.test. NS ns1.corp.test. | ns2.corp.test.\n" +
+	"corp.test. DS none\n" +
+	"corp.test. TXT \"v=spf1 mx -all\"\n" +
+	"_dmarc.corp.test. TXT \"v=DMARC1; p=reject\"\n"
+
+// emlcBlock gives the text lines of the finding of rule at name: its first
+// line and the lines that are indented after it.
+func emlcBlock(t *testing.T, lines []string, rule, name string) []string {
+	t.Helper()
+	for i, l := range lines {
+		if strings.HasPrefix(l, "finding medium "+rule+" records "+name+" TXT") {
+			end := i + 1
+			for end < len(lines) && strings.HasPrefix(lines[end], "  ") {
+				end++
+			}
+			return lines[i:end]
+		}
+	}
+	t.Errorf("no finding of %s at %s in:\n%s", rule, name, strings.Join(lines, "\n"))
+	return nil
+}
+
+// A Value line "weaker <word>" prints as "  weaker <word>" after the lines of
+// the servers.
+func TestCheckExpectPrintsTheWordsOfAMailRule(t *testing.T) {
+	s := transportStart(t, emlcWorld)
+	code, lines, errOut := expRun(t, "check", "--root-server", s.addr, "--extra-range", "127.0.0.0/8", "--expect", expFile(t, emlcFile))
+	if code != 1 || errOut != "" {
+		t.Errorf("exit code %d, errors %q; want 1 and none", code, errOut)
+	}
+	seen := "  seen " + s.addr + " " + expRootHost + " "
+	cliCompare(t, emlcBlock(t, lines, "spf", "corp.test."), []string{
+		"finding medium spf records corp.test. TXT",
+		`  expected "v=spf1 mx -all"`,
+		seen + `"v=spf1 mx include:evil.test ~all"`,
+		"  weaker all gives softfail in place of fail",
+		"  weaker include:evil.test gives pass in place of fail",
+	})
+	cliCompare(t, emlcBlock(t, lines, "dmarc", "_dmarc.corp.test."), []string{
+		"finding medium dmarc records _dmarc.corp.test. TXT",
+		`  expected "v=DMARC1; p=reject"`,
+		seen + `"v=DMARC1; p=none; rua=mailto:x@evil.test"`,
+		"  weaker p=none in place of p=reject",
+		"  weaker rua also sends reports to mailto:x@evil.test",
+	})
+	for _, l := range lines {
+		if strings.HasPrefix(l, "  seen ") && strings.Contains(l, "weaker ") {
+			t.Errorf("a word printed as a seen line: %q", l)
+		}
+	}
+}
+
+// A record that differs and permits nothing more gives the finding with no
+// word and no "weaker" key: the file writes the same policy without spaces.
+func TestCheckExpectPrintsNoWordForARecordThatPermitsNothingMore(t *testing.T) {
+	s := transportStart(t, emlcWorld)
+	file := expFile(t, strings.Replace(emlcFile, `"v=DMARC1; p=reject"`, `"v=DMARC1;p=none;rua=mailto:x@evil.test"`, 1))
+	code, lines, errOut := expRun(t, "check", "--root-server", s.addr, "--extra-range", "127.0.0.0/8", "--expect", file)
+	if code != 1 || errOut != "" {
+		t.Errorf("exit code %d, errors %q; want 1 and none", code, errOut)
+	}
+	cliCompare(t, emlcBlock(t, lines, "dmarc", "_dmarc.corp.test."), []string{
+		"finding medium dmarc records _dmarc.corp.test. TXT",
+		`  expected "v=DMARC1;p=none;rua=mailto:x@evil.test"`,
+		"  seen " + s.addr + " " + expRootHost + ` "v=DMARC1; p=none; rua=mailto:x@evil.test"`,
+	})
+	_, out, _ := transportRun("check", "--json", "--root-server", s.addr, "--extra-range", "127.0.0.0/8", "--expect", file)
+	n := 0
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, `"rule":"dmarc"`) {
+			n++
+			if strings.Contains(l, "weaker") {
+				t.Errorf("the finding holds a weaker key although the record permits nothing more: %s", l)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d dmarc findings in the JSON output; want 1:\n%s", n, out)
+	}
+}
+
+// With --json the words are the list "weaker", after "seen", and the lines of
+// the servers hold no word.
+func TestCheckExpectJSONHasTheWordsOfAMailRule(t *testing.T) {
+	s := transportStart(t, emlcWorld)
+	code, out, errOut := transportRun("check", "--json", "--root-server", s.addr, "--extra-range", "127.0.0.0/8", "--expect", expFile(t, emlcFile))
+	if code != 1 || errOut != "" {
+		t.Errorf("exit code %d, errors %q; want 1 and none", code, errOut)
+	}
+	found := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		var f struct {
+			Type, Rule, Kind, Name, RType, Expected string
+			Seen                                    []struct{ Address, Host, Text string }
+			Weaker                                  []string
+		}
+		if err := json.Unmarshal([]byte(line), &f); err != nil {
+			t.Fatalf("line %q: %v", line, err)
+		}
+		if f.Type != "finding" || (f.Rule != "spf" && f.Rule != "dmarc") {
+			continue
+		}
+		found[f.Rule] = true
+		var want []string
+		var text, expected string
+		if f.Rule == "spf" {
+			want = []string{"all gives softfail in place of fail", "include:evil.test gives pass in place of fail"}
+			text, expected = `"v=spf1 mx include:evil.test ~all"`, `"v=spf1 mx -all"`
+		} else {
+			want = []string{"p=none in place of p=reject", "rua also sends reports to mailto:x@evil.test"}
+			text, expected = `"v=DMARC1; p=none; rua=mailto:x@evil.test"`, `"v=DMARC1; p=reject"`
+		}
+		if !slices.Equal(f.Weaker, want) || f.Expected != expected || len(f.Seen) != 1 || f.Seen[0].Text != text ||
+			f.Seen[0].Address != s.addr || f.Seen[0].Host != "" || f.Kind != "records" || f.RType != "TXT" {
+			t.Errorf("finding %s: %+v; want the words %q, expected %s and one seen %s", f.Rule, f, want, expected, text)
+		}
+		// The key comes after "seen" and the words are a list of strings.
+		if i, j := strings.Index(line, `"seen":`), strings.Index(line, `"weaker":[`); i < 0 || j < i {
+			t.Errorf("line %s: the key weaker does not follow seen", line)
+		}
+	}
+	if !found["spf"] || !found["dmarc"] {
+		t.Errorf("findings of %v; want spf and dmarc in:\n%s", found, out)
 	}
 }

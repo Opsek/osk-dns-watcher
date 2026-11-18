@@ -73,6 +73,8 @@ func iniLabLines(n string) []string {
 		`corp.test. CAA 0 issue "ca.test"`,
 		"*.corp.test. A none",
 		"_acme-challenge.corp.test. TXT none",
+		`_dmarc.corp.test. TXT "v=DMARC1; p=reject"`,
+		"_mta-sts.corp.test. TXT none",
 		"www.corp.test. A " + n + "81",
 		"_acme-challenge.www.corp.test. TXT none",
 	}
@@ -219,8 +221,8 @@ func TestInitSetupChecksWithoutFindings(t *testing.T) {
 				keys = append(keys, obs.RecordsKey(f.Domain, e.Name, e.Type))
 			}
 		}
-		if len(keys) != 12 {
-			t.Errorf("%s gives %d checks; want 12", dom.Expect, len(keys))
+		if len(keys) != 14 {
+			t.Errorf("%s gives %d checks; want 14", dom.Expect, len(keys))
 		}
 		for _, k := range keys {
 			ob, err := o.Run(t.Context(), observe.Check{Key: k, Interval: time.Minute})

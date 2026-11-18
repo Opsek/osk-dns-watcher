@@ -179,8 +179,8 @@ func TestRegistryRuleWordsAndNumbers(t *testing.T) {
 			t.Errorf("Rule(%d).String() is %q, want %q", c.num, got, c.word)
 		}
 	}
-	if got := Rule(21).String(); got != "rule21" {
-		t.Errorf("Rule(21).String() is %q, want rule21", got)
+	if got := Rule(25).String(); got != "rule25" {
+		t.Errorf("Rule(25).String() is %q, want rule25", got)
 	}
 }
 
@@ -922,8 +922,8 @@ func (g *regGen) set(kind obs.Kind) []dnswire.Record {
 			set = append(set, decRR(g.t, "www.corp.test.", dnswire.TypeA, regPick(g, regAData...)))
 		case obs.KindSerial:
 			set = append(set, decRR(g.t, "corp.test.", dnswire.TypeSOA, "ns1.corp.test. hostmaster.corp.test. 1 3600 600 604800 300"))
-		case obs.KindWildcard, obs.KindCertificates:
-			// The registry rules read no wildcard or certificate check.
+		case obs.KindWildcard, obs.KindCertificates, obs.KindPolicy:
+			// The registry rules read no wildcard, certificate or policy check.
 		}
 	}
 	return set
@@ -1103,7 +1103,7 @@ func regOracleOf(f *expect.File, o obs.Observation) regOracle {
 				or.ds = &Finding{Rule: RuleDS, Severity: SeverityHigh, Check: key, Expected: line.FormText(), Seen: seen, Value: regValue(seen)}
 				or.rules = append(or.rules, RuleDS)
 			}
-		case obs.KindRecords, obs.KindSerial, obs.KindWildcard, obs.KindCertificates:
+		case obs.KindRecords, obs.KindSerial, obs.KindWildcard, obs.KindCertificates, obs.KindPolicy:
 			// No registry-level rule reads these checks.
 		}
 	}
@@ -1187,7 +1187,7 @@ func regOutcomeOf(in Input, or regOracle, r Rule) regOutcome {
 		}
 	case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
 		RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard, RuleCAA,
-		RuleIssuer, RuleCertName, RuleHostnames:
+		RuleIssuer, RuleCertName, RuleHostnames, RuleSPF, RuleDMARC, RuleDKIM, RuleMTASTS:
 		// Not registry-level rules: the oracle wants no finding.
 	}
 	switch {
@@ -1301,7 +1301,7 @@ func regCheckFindings(t *testing.T, seed uint64, in Input) {
 			want = or.ds
 		case RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet, RuleCheckFailing, RuleZoneChanged,
 			RuleDisagree, RuleAliasTarget, RuleNameServerHost, RuleMailTarget, RuleChallenge, RuleWildcard, RuleCAA,
-			RuleIssuer, RuleCertName, RuleHostnames:
+			RuleIssuer, RuleCertName, RuleHostnames, RuleSPF, RuleDMARC, RuleDKIM, RuleMTASTS:
 			t.Fatalf("seed %d: %v is not a registry-level rule", seed, r)
 		}
 		g := byRule(r)

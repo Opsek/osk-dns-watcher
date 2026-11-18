@@ -218,8 +218,8 @@ func TestCertificateRuleWordsNumbersAndSeverities(t *testing.T) {
 			}
 		}
 	}
-	if got := Rule(21).String(); got != "rule21" {
-		t.Errorf("Rule(21).String() is %q, want rule21", got)
+	if got := Rule(25).String(); got != "rule25" {
+		t.Errorf("Rule(25).String() is %q, want rule25", got)
 	}
 	if RuleCAA != 17 {
 		t.Errorf("RuleCAA is %d, want 17", RuleCAA)

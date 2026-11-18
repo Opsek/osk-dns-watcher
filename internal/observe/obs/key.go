@@ -17,6 +17,7 @@ const (
 	KindSerial                       // SOA of Domain, at every server of Domain
 	KindWildcard                     // A set of a random name just under Name, at every server of the zone that holds Name
 	KindCertificates                 // the certificates that a certificate log shows for Domain; no DNS check
+	KindPolicy                       // the MTA-STS policy file of Domain, over HTTPS from the host Name; no DNS check
 )
 
 var kindWords = map[Kind]string{
@@ -26,6 +27,7 @@ var kindWords = map[Kind]string{
 	KindSerial:       "serial",
 	KindWildcard:     "wildcard",
 	KindCertificates: "certificates",
+	KindPolicy:       "policy",
 }
 
 func (k Kind) String() string {
@@ -44,7 +46,7 @@ const WildcardLabel = 26
 type Key struct {
 	Kind   Kind
 	Domain dnswire.Name // the watched domain the check belongs to
-	Name   dnswire.Name // equals Domain, except for KindRecords and KindWildcard, where it may lie anywhere
+	Name   dnswire.Name // equals Domain, except: anywhere for KindRecords and KindWildcard; mta-sts.<Domain> for KindPolicy
 	Type   dnswire.Type
 }
 
@@ -78,6 +80,18 @@ func WildcardKey(domain, name dnswire.Name) Key {
 // type of its own.
 func CertificatesKey(domain dnswire.Name) Key {
 	return Key{Kind: KindCertificates, Domain: domain, Name: domain}
+}
+
+// PolicyKey is the key of the fetch of the MTA-STS policy file of domain
+// from the host mta-sts.<domain> (RFC 8461 section 3.3). Type is TXT
+// because the file comes back as the data of one TXT record. ok is false
+// when that name would be too long.
+func PolicyKey(domain dnswire.Name) (Key, bool) {
+	name, err := dnswire.NameFromLabels(append([]string{"mta-sts"}, domain.Labels()...))
+	if err != nil {
+		return Key{}, false
+	}
+	return Key{Kind: KindPolicy, Domain: domain, Name: name, Type: dnswire.TypeTXT}, true
 }
 
 // String gives every field, with the names lowercased, so two keys have the

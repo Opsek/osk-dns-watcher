@@ -17,6 +17,7 @@ import (
 	"github.com/Opsek/dns-monitoring/internal/decide"
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/expect"
+	"github.com/Opsek/dns-monitoring/internal/mtasts"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 	"github.com/Opsek/dns-monitoring/internal/schedule"
@@ -40,6 +41,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 	if msg != "" {
 		return checkWrongUse(stderr, msg)
 	}
+	a.cfg.Policy = mtasts.Fetch
 	o, err := observe.New(a.cfg)
 	if err != nil {
 		// Only the flags fill the configuration.
@@ -420,6 +422,7 @@ type findingJSON struct {
 	RType    string     `json:"rtype"`
 	Expected string     `json:"expected"`
 	Seen     []seenJSON `json:"seen"`
+	Weaker   []string   `json:"weaker,omitempty"`
 }
 
 type seenJSON struct {
@@ -430,7 +433,8 @@ type seenJSON struct {
 
 // formatFinding writes a finding with its proof. Value holds one line for
 // each Seen answer, which decide builds only from Name.String and
-// expect.SetText.
+// expect.SetText, then a "weaker " line for each word of a mail policy, which
+// is printable ASCII.
 func formatFinding(out *lines, f decide.Finding) {
 	k := f.Check
 	j := findingJSON{Type: "finding", Severity: f.Severity.String(), Rule: f.Rule.String(), Kind: k.Kind.String(),
@@ -442,7 +446,12 @@ func formatFinding(out *lines, f decide.Finding) {
 	text += "  expected " + cmp.Or(f.Expected, "-")
 	if f.Value != "" {
 		for _, line := range strings.Split(f.Value, "\n") {
-			text += "\n  seen " + line
+			if word, ok := strings.CutPrefix(line, "weaker "); ok {
+				j.Weaker = append(j.Weaker, word)
+				text += "\n  weaker " + word
+			} else {
+				text += "\n  seen " + line
+			}
 		}
 	}
 	out.add(text, j)

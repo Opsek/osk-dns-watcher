@@ -25,7 +25,9 @@ type Skip struct {
 func Snapshot(domain dnswire.Name, observations []obs.Observation) (*File, []Skip) {
 	file := &File{Domain: domain}
 	var skips []Skip
-	for _, g := range groupSets(ofDomain(domain, observations)) {
+	mine := ofDomain(domain, observations)
+	groups := groupSets(mine)
+	for _, g := range groups {
 		e, _, why := g.line()
 		if why != "" {
 			skips = append(skips, Skip{Name: g.name, Type: g.t, Why: why})
@@ -33,6 +35,9 @@ func Snapshot(domain dnswire.Name, observations []obs.Observation) (*File, []Ski
 		}
 		file.Expectations = append(file.Expectations, e)
 	}
+	var policySkips []Skip
+	file.Policy, policySkips = snapshotPolicy(domain, groups, mine)
+	skips = append(skips, policySkips...)
 	skips = append(skips, dropForeignZones(file, observations)...)
 	slices.SortFunc(file.Expectations, compareExpectations)
 	slices.SortFunc(skips, func(a, b Skip) int {
@@ -111,8 +116,90 @@ func setOf(k obs.Key) (dnswire.Name, dnswire.Type, bool) {
 		// A random name is no set of the file.
 	case obs.KindCertificates:
 		// A certificate log is no record set.
+	case obs.KindPolicy:
+		// A policy file gives the mta-sts line, not a set: see snapshotPolicy.
 	}
 	return dnswire.Name{}, 0, false
+}
+
+// snapshotPolicy gives the mta-sts line that the fetches of the policy file
+// show, or a Skip that says why they give none. A domain whose MTA-STS
+// record is off gets neither: it has no policy to watch. As for a set, every
+// fetch must have read the file, and all must read one policy.
+func snapshotPolicy(domain dnswire.Name, groups []*setGroup, observations []obs.Observation) (*STSPolicy, []Skip) {
+	if !stsRecordOn(domain, groups) {
+		return nil, nil
+	}
+	var line *STSPolicy
+	var from obs.Server // the last server that gave line
+	for _, o := range observations {
+		if o.Key.Kind != obs.KindPolicy {
+			continue
+		}
+		for _, a := range o.Answers {
+			p, why := fetchedPolicy(a)
+			if why == "" && line != nil && p.String() != line.String() {
+				why = fmt.Sprintf("servers disagree: %s gives %s; %s gives %s",
+					serverText(from), line.String(), serverText(a.Server), p.String())
+			}
+			if why != "" {
+				return nil, []Skip{{Name: o.Key.Name, Type: dnswire.TypeTXT, Why: why}}
+			}
+			line, from = &p, a.Server
+		}
+	}
+	return line, nil
+}
+
+// stsRecordOn reports whether the records check of _mta-sts.<domain> TXT
+// shows one MTA-STS record that reads, or a CNAME: a provider that hosts the
+// record (RFC 8461 section 8.2). Every server that judges the set must have
+// answered, and all must agree.
+func stsRecordOn(domain dnswire.Name, groups []*setGroup) bool {
+	for _, g := range groups {
+		if g.t != dnswire.TypeTXT || MailKindOf(g.name) != MailMTASTS || !g.name.Parent().Equal(domain) {
+			continue
+		}
+		set := g.agreed()
+		return STSOn(recordData(set)) ||
+			slices.ContainsFunc(set, func(r dnswire.Record) bool { return r.Type() == dnswire.TypeCNAME })
+	}
+	return false
+}
+
+// agreed gives the set that every answer that judges g gives; nil when one
+// of them failed or two differ.
+func (g *setGroup) agreed() []dnswire.Record {
+	answers, _ := g.reachable()
+	seen := map[string]struct{}{}
+	var set []dnswire.Record
+	for _, a := range answers {
+		s, _, failed := readAnswer(a)
+		if failed {
+			return nil
+		}
+		set = s
+		seen[SetText(g.t, s)] = struct{}{}
+	}
+	if len(seen) != 1 {
+		return nil
+	}
+	return set
+}
+
+// fetchedPolicy reads the policy file of one fetch: the TXT strings of its
+// records, joined. A negative answer reads as an empty file, which is no
+// policy.
+func fetchedPolicy(a obs.Answer) (STSPolicy, string) {
+	set, failure, failed := readAnswer(a)
+	if failed {
+		return STSPolicy{}, fmt.Sprintf("%s gave no answer: %s", serverText(a.Server), failure.Reason)
+	}
+	p, problem := ParseSTSPolicy([]byte(strings.Join(texts(recordData(set)), "")))
+	if problem != "" {
+		return STSPolicy{}, "the policy file cannot be read: " + problem
+	}
+	return p, ""
 }
 
 // line gives the line of the set and the servers that it leaves out, or why

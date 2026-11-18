@@ -510,7 +510,8 @@ func (s *healthState) problems(now time.Time) []string {
 }
 
 // checkedLine tells how a run of a check went: ok when some server gave a
-// usable answer, else the reasons of the failures.
+// usable answer, else the reasons of the failures. A failed policy check
+// also gives the cause in parentheses: no alert names it.
 func checkedLine(t schedule.Tier, o obs.Observation) string {
 	head := "checked " + t.String() + " " + o.Key.String() + " " + o.Start.UTC().Format(receivedLayout)
 	if !decide.Failed(o) {
@@ -522,7 +523,14 @@ func checkedLine(t schedule.Tier, o obs.Observation) string {
 			func(obs.Records) string { return "" },
 			func(obs.NoData) string { return "" },
 			func(obs.NoName) string { return "" },
-			func(f obs.Failure) string { return f.Reason.String() })
+			func(f obs.Failure) string {
+				// The fetch of a policy file gives only fixed texts, such as
+				// "HTTP status 404", that hold no octet of the answer.
+				if o.Key.Kind == obs.KindPolicy && f.Detail != "" {
+					return f.Reason.String() + " (" + f.Detail + ")"
+				}
+				return f.Reason.String()
+			})
 		if r != "" && !slices.Contains(reasons, r) {
 			reasons = append(reasons, r)
 		}

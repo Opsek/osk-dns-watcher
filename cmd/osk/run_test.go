@@ -2999,7 +2999,20 @@ var downNoticeDefault = downNotice
 
 func TestMain(m *testing.M) {
 	downNotice = 0
-	os.Exit(m.Run())
+	dir, err := os.MkdirTemp("", "osk-roots")
+	if err != nil {
+		crtTLS.err = err
+	} else {
+		crtTLS.srv, crtTLS.err = crtListen(dir)
+	}
+	code := m.Run()
+	if crtTLS.srv != nil {
+		crtTLS.srv.Close()
+	}
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
+	os.Exit(code)
 }
 
 // A stop shorter than a minute, as for a change of the config, is told by

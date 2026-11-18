@@ -28,8 +28,8 @@ import (
 
 // These tests run the service against a source of certificates that is one
 // local HTTPS server. The service trusts it through SSL_CERT_FILE, which the
-// system roots read once for the whole process; crtListen sets it before
-// anything else asks for the roots, and fails when that is too late.
+// system roots read once for the whole process, so TestMain starts the server
+// and loads the roots before any test can make an HTTPS request.
 
 const (
 	crtKeyEnv   = "OSK_CRT_KEY"
@@ -231,16 +231,16 @@ func crtWaitSlack(t *testing.T, words string, n int) {
 	}
 }
 
+// crtTLS is set by TestMain; a set-up error fails each test that needs the
+// server instead of stopping the package.
 var crtTLS struct {
-	once sync.Once
-	srv  *httptest.Server
-	err  error
+	srv *httptest.Server
+	err error
 }
 
-// crtBase starts the one server on first use and gives its address.
+// crtBase gives the address of the one server.
 func crtBase(t *testing.T) string {
 	t.Helper()
-	crtTLS.once.Do(func() { crtTLS.srv, crtTLS.err = crtListen(t.TempDir()) })
 	if crtTLS.err != nil {
 		t.Fatal(crtTLS.err)
 	}

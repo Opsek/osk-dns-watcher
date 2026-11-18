@@ -409,6 +409,9 @@ func TestExpectationsChangeNotice(t *testing.T) {
 	again.wait(t, "the notice of the change made while osk was down", 0, time.Now().Add(10*time.Second),
 		runIs("delivery slack sent notice expectations corp.test."))
 	again.wait(t, "the down message", 0, time.Now().Add(5*time.Second), runIs("delivery slack sent notice down -"))
+	// A stop cuts a delivery that is still on its way, and the next start
+	// sends it again.
+	again.wait(t, "the notice to siem", 0, time.Now().Add(5*time.Second), runIs("delivery siem sent notice expectations corp.test."))
 	again.stop(t)
 	svcNoticeReached(t, w, []string{"+ cdn.corp.test. CNAME edge.dnshost.test."})
 	if downs := runDownHooksOn(t, w.slackPath); len(downs) != 1 || downs[0] < 2*time.Second {
@@ -430,6 +433,7 @@ func TestExpectationsChangeNotice(t *testing.T) {
 		"domain shop.test.\nshop.test. NS ns1.dnshost.test. | ns2.dnshost.test.\nshop.test. DS none\n")}}
 	third := runStart(t, runConfig(t, shop)...)
 	third.wait(t, "the notice of the domain that left", 0, time.Now().Add(10*time.Second), runIs("delivery slack sent notice expectations corp.test."))
+	third.wait(t, "the notice to siem", 0, time.Now().Add(5*time.Second), runIs("delivery siem sent notice expectations corp.test."))
 	third.stop(t)
 	var gone []string
 	for _, l := range svcSumLines(svcCanonical(t, "corp.test. NS ns1.corp.test. | ns2.corp.test.", "corp.test. DS none",

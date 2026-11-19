@@ -1,5 +1,5 @@
 #!/bin/sh
-# Sets up and starts osk with Docker Compose, from a signed release. The
+# Sets up and starts osk-dns-watcher with Docker Compose, from a signed release. The
 # first run asks two questions; "start.sh update" first moves the copy to the
 # newest signed release. A copy checked out by hand at a higher release counts
 # only if an update would have taken that release. Both end with a test
@@ -13,11 +13,11 @@
 # It builds only the commit of a release tag that a key of the copy's
 # release/allowed_signers signed (release/verify-tag.sh), as git holds that
 # commit. The copy keeps the tag object of its release under
-# refs/osk/installed, which no fetch writes. An update moves only to a higher
+# refs/osk-dns-watcher/installed, which no fetch writes. An update moves only to a higher
 # signed release, checked with the key of the installed one, so a new key
 # reaches a copy only through a release that a key of the copy signed.
 #
-# OSK_UNVERIFIED=1 builds the folder as it is, with no check, to work on osk
+# OSK_UNVERIFIED=1 builds the folder as it is, with no check, to work on osk-dns-watcher
 # itself; an update ignores it. OSK_COMPOSE_EXTRA names one more Compose file,
 # for a lab. Each prints a line when it is used.
 set -eu
@@ -94,7 +94,7 @@ releases() {
 	git for-each-ref --format='%(refname) %(objectname)' "$@" >"$work/refs" || return 1
 	while read -r ref oid; do
 		name=${ref##*/}
-		[ "$ref" = "refs/tags/$name" ] || [ "$ref" = "refs/osk-fetched/$name" ] || continue
+		[ "$ref" = "refs/tags/$name" ] || [ "$ref" = "refs/osk-dns-watcher/fetched/$name" ] || continue
 		[ "$name" != "${name#v}" ] && sh "$top/build/version.sh" "${name#v}" 2>/dev/null || continue
 		printf '%s %s %s\n' "$(order "${name#v}")" "$name" "$oid"
 	done <"$work/refs" | LC_ALL=C sort -r | cut -d ' ' -f 2,3 >"$out"
@@ -122,7 +122,7 @@ advise() {
 git checkout $commit"
 		fi
 	else
-		releases "$work/all" refs/tags refs/osk-fetched || stop "git for-each-ref failed (see above)."
+		releases "$work/all" refs/tags refs/osk-dns-watcher/fetched || stop "git for-each-ref failed (see above)."
 		while read -r name oid; do
 			if commit=$(verified "$name" "$oid" 2>/dev/null); then
 				stop "This copy is not at a signed release. Check out the newest signed release here, ${name#v}, with: git checkout $commit"
@@ -137,7 +137,7 @@ git checkout $commit"
 work=
 cleanup() {
 	case $work in
-	*/osk-start.????????) rm -rf -- "$work" ;;
+	*/osk-dns-watcher-start.????????) rm -rf -- "$work" ;;
 	esac
 }
 
@@ -152,7 +152,7 @@ if [ -n "${OSK_COMPOSE_EXTRA:-}" ]; then
 	echo "OSK_COMPOSE_EXTRA=$OSK_COMPOSE_EXTRA: this Compose file is added to the release and can change what runs."
 fi
 if [ -z "${1:-}" ] && [ "${OSK_UNVERIFIED:-}" = 1 ]; then
-	echo "OSK_UNVERIFIED=1: the signature of this copy is not checked; use this only to work on osk."
+	echo "OSK_UNVERIFIED=1: the signature of this copy is not checked; use this only to work on osk-dns-watcher."
 	OSK_VERSION=0.0.0-dev
 	tree=$(cd .. && pwd -P)
 else
@@ -167,7 +167,7 @@ else
 	# docker compose reads more files in deploy/ when someone runs it there.
 	extra=$(git status --porcelain --untracked-files=all --ignored -- .) || stop "git status failed (see above)."
 	[ -z "$extra" ] || stop "deploy/ holds files that are not part of the release, and docker compose would read them: $(printf '%s' "$extra" | tr '\n' ' ')Remove them, then run start.sh again."
-	work=$(mktemp -d "${TMPDIR:-/tmp}/osk-start.XXXXXXXX") || stop "start.sh cannot make a temporary folder."
+	work=$(mktemp -d "${TMPDIR:-/tmp}/osk-dns-watcher-start.XXXXXXXX") || stop "start.sh cannot make a temporary folder."
 	trap cleanup EXIT
 	# The key that decides is read from the commit of the copy, before any
 	# fetch, and nothing that the fetch brings can change this file.
@@ -178,8 +178,8 @@ else
 	# with no record yet (git clone, then git checkout of a tag) gets one from
 	# a release tag on HEAD.
 	installed= recorded=
-	if record=$(git rev-parse -q --verify refs/osk/installed); then
-		body=$(git cat-file tag "$record") || stop "refs/osk/installed is not a tag object."
+	if record=$(git rev-parse -q --verify refs/osk-dns-watcher/installed); then
+		body=$(git cat-file tag "$record") || stop "refs/osk-dns-watcher/installed is not a tag object."
 		recorded=$(printf '%s\n' "$body" | sed -n '/^$/q; s/^tag //p')
 		# The record is checked by its signature, with the key of HEAD, on
 		# every run.
@@ -191,22 +191,22 @@ else
 			# take, by the key of the recorded release, is taken and recorded.
 			git cat-file blob "$record^{commit}:release/allowed_signers" >"$work/recorded-keys" 2>/dev/null ||
 				stop "The recorded release has no release/allowed_signers."
-			releases "$work/here" --points-at HEAD refs/tags refs/osk-fetched || stop "git for-each-ref failed (see above)."
+			releases "$work/here" --points-at HEAD refs/tags refs/osk-dns-watcher/fetched || stop "git for-each-ref failed (see above)."
 			while read -r name oid; do
 				later "${name#v}" "${recorded#v}" || break
 				if commit=$(signed_by "$work/recorded-keys" "$name" "$oid" 2>/dev/null) && [ "$commit" = "$head" ] &&
 					verified "$name" "$oid" >/dev/null 2>&1; then
-					git update-ref refs/osk/installed "$oid" || stop "git update-ref failed (see above)."
+					git update-ref refs/osk-dns-watcher/installed "$oid" || stop "git update-ref failed (see above)."
 					installed=$name
 					break
 				fi
 			done <"$work/here"
 		fi
 	else
-		releases "$work/here" --points-at HEAD refs/tags refs/osk-fetched || stop "git for-each-ref failed (see above)."
+		releases "$work/here" --points-at HEAD refs/tags refs/osk-dns-watcher/fetched || stop "git for-each-ref failed (see above)."
 		while read -r name oid; do
 			if commit=$(verified "$name" "$oid" 2>/dev/null) && [ "$commit" = "$head" ]; then
-				git update-ref refs/osk/installed "$oid" || stop "git update-ref failed (see above)."
+				git update-ref refs/osk-dns-watcher/installed "$oid" || stop "git update-ref failed (see above)."
 				installed=$name
 				break
 			fi
@@ -218,11 +218,11 @@ else
 		# This namespace holds only what this fetch brings: the installed
 		# release has its own record and only a higher release is taken, so
 		# emptying it loses nothing, and no stale ref can block the fetch.
-		git for-each-ref --format='delete %(refname)' refs/osk-fetched >"$work/stale" &&
-			git update-ref --stdin <"$work/stale" || stop "git could not empty refs/osk-fetched (see above)."
-		git -c fetch.prune=false -c fetch.pruneTags=false fetch --quiet --no-prune --no-tags origin '+refs/tags/*:refs/osk-fetched/*' ||
-			stop "git fetch failed (see above), so osk was not updated; $installed keeps running."
-		releases "$work/fetched" refs/osk-fetched || stop "git for-each-ref failed (see above)."
+		git for-each-ref --format='delete %(refname)' refs/osk-dns-watcher/fetched >"$work/stale" &&
+			git update-ref --stdin <"$work/stale" || stop "git could not empty refs/osk-dns-watcher/fetched (see above)."
+		git -c fetch.prune=false -c fetch.pruneTags=false fetch --quiet --no-prune --no-tags origin '+refs/tags/*:refs/osk-dns-watcher/fetched/*' ||
+			stop "git fetch failed (see above), so osk-dns-watcher was not updated; $installed keeps running."
+		releases "$work/fetched" refs/osk-dns-watcher/fetched || stop "git for-each-ref failed (see above)."
 		target= skipped= count=0
 		while read -r name oid; do
 			later "${name#v}" "${installed#v}" || break
@@ -238,8 +238,8 @@ else
 			exit 0
 		fi
 		git -c advice.detachedHead=false checkout --quiet --detach "$target" ||
-			stop "git checkout of the release $name failed (see above), so osk was not updated."
-		git update-ref refs/osk/installed "$oid" || stop "git update-ref failed (see above)."
+			stop "git checkout of the release $name failed (see above), so osk-dns-watcher was not updated."
+		git update-ref refs/osk-dns-watcher/installed "$oid" || stop "git update-ref failed (see above)."
 		cleanup
 		trap - EXIT
 		# The start.sh of the new release does the rest, and checks again.
@@ -250,8 +250,8 @@ else
 	mkdir "$tree" || stop "start.sh cannot make a temporary folder."
 	sh "$top/release/export.sh" "$head" "$tree" || stop "start.sh cannot copy the files of the release $installed (see above)."
 fi
-# compose.yaml passes the version to the build, so osk version shows it. Its
-# name, osk, gives the project, the volume osk_data and the images, wherever
+# compose.yaml passes the version to the build, so osk-dns-watcher version shows it. Its
+# name, osk-dns-watcher, gives the project, the volume osk-dns-watcher_data and the images, wherever
 # the file is.
 export OSK_VERSION
 compose() {
@@ -260,14 +260,14 @@ compose() {
 docker compose version >/dev/null 2>&1 ||
 	stop "start.sh needs Docker with the Compose plugin: 'docker compose version' does not work here."
 compose --profile setup build </dev/null ||
-	stop "The build of osk failed (see above)."
+	stop "The build of osk-dns-watcher failed (see above)."
 compose run --rm init ||
-	stop "The setup was not written (see above), so osk was not started. Fix what is said above, then run start.sh again."
+	stop "The setup was not written (see above), so osk-dns-watcher was not started. Fix what is said above, then run start.sh again."
 compose up --detach --wait </dev/null ||
-	stop "osk did not start or is not healthy. Its log: docker compose logs osk"
-compose exec -T osk osk test-alert --config /data/osk.json </dev/null || {
+	stop "osk-dns-watcher did not start or is not healthy. Its log: docker compose logs watcher"
+compose exec -T watcher osk-dns-watcher test-alert --config /data/config.json </dev/null || {
 	echo "The test message did not get through. Find out why with:" >&2
-	echo "  docker compose exec osk osk doctor --config /data/osk.json" >&2
+	echo "  docker compose exec watcher osk-dns-watcher doctor --config /data/config.json" >&2
 	exit 1
 }
-echo "osk is running. Your channel has a test message from it."
+echo "osk-dns-watcher is running. Your channel has a test message from it."

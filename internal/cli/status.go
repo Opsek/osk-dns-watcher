@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 type statusJSON struct {
@@ -36,7 +36,7 @@ type openJSON struct {
 	Opened   string    `json:"opened"`
 }
 
-// Status runs "osk status": the health of the service as its last beat
+// Status runs "osk-dns-watcher status": the health of the service as its last beat
 // stored it, and the open alerts. Exit 1 when it is not healthy.
 func Status(args []string, stdout, stderr io.Writer) int {
 	o, msg := statusCommand.parseNoArgs(args)

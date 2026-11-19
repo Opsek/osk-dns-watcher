@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // The fuzz bytes are a program that builds observations of corp.test. and
@@ -312,7 +312,7 @@ func FuzzSnapshot(f *testing.F) {
 			}
 		}
 		// The text is a fixed point of Parse, also with the comments that
-		// osk snapshot writes around it.
+		// osk-dns-watcher snapshot writes around it.
 		comments := "# Snapshot of corp.test. as seen now.\n"
 		for _, s := range skips {
 			if !sfzPrintable(s.Why) || s.Why == "" {

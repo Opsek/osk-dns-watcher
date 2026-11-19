@@ -239,7 +239,7 @@ func grdCert(t *testing.T, names []string, ips ...net.IP) (*tls.Config, *x509.Ce
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "osk test server"},
+		Subject:      pkix.Name{CommonName: "osk-dns-watcher test server"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		DNSNames:     names,

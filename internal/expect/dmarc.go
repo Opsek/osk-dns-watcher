@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 const maxDMARCAddresses = 16 // for each of rua and ruf
@@ -22,7 +22,7 @@ var dmarcPick = recordProblems{
 // dmarcActions are the values of p, sp and np, from the least strict.
 var dmarcActions = []string{"none", "quarantine", "reject"}
 
-// dmarcRead are the tags that osk reads; no other tag changes who passes or
+// dmarcRead are the tags that osk-dns-watcher reads; no other tag changes who passes or
 // who hears.
 var dmarcRead = []string{"p", "sp", "np", "pct", "t", "adkim", "aspf", "psd", "rua", "ruf"}
 
@@ -77,7 +77,7 @@ func dmarcWeaker(was, now dmarcPolicy) []string {
 	if now.psd != was.psd {
 		words = append(words, change("psd", now.psd, was.psd))
 	}
-	// osk reads the first value; a receiver that keeps the last one may read
+	// osk-dns-watcher reads the first value; a receiver that keeps the last one may read
 	// a weaker policy.
 	for _, tag := range dmarcRead {
 		if slices.Contains(now.twice, tag) && !slices.Contains(was.twice, tag) {

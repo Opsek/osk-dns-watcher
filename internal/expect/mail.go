@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // MailKind is the mail policy that the TXT records at an owner hold.
@@ -22,7 +22,7 @@ const (
 const MaxWords = 12
 
 const (
-	// maxText is the longest record text that osk reads. Each reader says
+	// maxText is the longest record text that osk-dns-watcher reads. Each reader says
 	// what a longer one means.
 	maxText = 4096
 	// maxWordLen bounds a word: a domain-spec, a report address or a key
@@ -92,7 +92,7 @@ func weaker(k MailKind, owner dnswire.Name, was, now []dnswire.RData) []string {
 	default:
 		return nil
 	}
-	// A CNAME hands the record to another zone, which osk does not follow:
+	// A CNAME hands the record to another zone, which osk-dns-watcher does not follow:
 	// the set reads as no record, and the words name the CNAME in place of
 	// the word for no record.
 	if len(cnameTargets(was)) > 0 {
@@ -108,7 +108,7 @@ func weaker(k MailKind, owner dnswire.Name, was, now []dnswire.RData) []string {
 	}
 	named := make([]string, len(targets))
 	for i, t := range targets {
-		named[i] = "a CNAME to " + t + ": another zone holds the record, and osk does not read it"
+		named[i] = "a CNAME to " + t + ": another zone holds the record, and osk-dns-watcher does not read it"
 	}
 	return named
 }

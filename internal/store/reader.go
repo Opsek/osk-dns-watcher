@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
 )
 
-// Reader reads the store of a folder while osk run writes it. Open it only
+// Reader reads the store of a folder while osk-dns-watcher run writes it. Open it only
 // in a process that holds no Store of the same folder, for the reason given
 // at create. No method holds a transaction, so a Reader never takes the
 // write lock and never holds back the writer's checkpoints for long.
@@ -30,14 +30,14 @@ func OpenReader(dir string) (*Reader, error) {
 	if err := checkName(dir); err != nil {
 		return nil, err
 	}
-	path := dir + "/osk.db"
+	path := dir + "/state.db"
 	err := CheckFolder(dir)
 	if err == nil {
 		_, err = os.Stat(path)
 		err = wrap(err)
 	}
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("store: no state in %s yet; start osk run there first", dir)
+		return nil, fmt.Errorf("store: no state in %s yet; start osk-dns-watcher run there first", dir)
 	}
 	if err != nil {
 		return nil, err

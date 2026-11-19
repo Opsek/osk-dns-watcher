@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // A weaker DMARC tag gives its word wherever it stands in the record.

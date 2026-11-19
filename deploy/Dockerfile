@@ -1,7 +1,7 @@
-# osk in a container: the binary, Alpine's CA certificates and an empty
+# osk-dns-watcher in a container: the binary, Alpine's CA certificates and an empty
 # /data for an ordinary user. The stage runtime holds all of it but the
 # binary; the two stages after it add the binary. The last stage, the default
-# and the one of the quick start, builds osk from source the way
+# and the one of the quick start, builds osk-dns-watcher from source the way
 # build/static.sh builds it for a release. The stage release copies the file
 # of a release, with the release folder as the build context; release/image.sh
 # builds it with --target release, which fails on any other name.
@@ -21,21 +21,21 @@ COPY internal internal
 ARG VERSION=0.0.0-dev
 # No build cache that other builds share: what they put there would be linked
 # into this binary. So each build of a new commit compiles SQLite again.
-RUN build/static.sh "$(go env GOARCH)" "$VERSION" && cp out/osk-linux-* /osk
+RUN build/static.sh "$(go env GOARCH)" "$VERSION" && cp out/osk-dns-watcher-linux-* /osk-dns-watcher
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime
-# osk refuses root, and its state folder must be private to its user.
+# osk-dns-watcher refuses root, and its state folder must be private to its user.
 RUN mkdir -m 700 /data && chown 10001:10001 /data
 USER 10001:10001
 WORKDIR /data
 HEALTHCHECK --interval=10s --timeout=10s --start-period=30s --retries=3 \
-	CMD ["osk", "status", "--config", "/data/osk.json"]
-ENTRYPOINT ["osk"]
-CMD ["run", "--config", "/data/osk.json"]
+	CMD ["osk-dns-watcher", "status", "--config", "/data/config.json"]
+ENTRYPOINT ["osk-dns-watcher"]
+CMD ["run", "--config", "/data/config.json"]
 
 FROM runtime AS release
 ARG TARGETARCH
-COPY osk-linux-${TARGETARCH} /usr/local/bin/osk
+COPY osk-dns-watcher-linux-${TARGETARCH} /usr/local/bin/osk-dns-watcher
 
 FROM runtime AS source
-COPY --from=build /osk /usr/local/bin/osk
+COPY --from=build /osk-dns-watcher /usr/local/bin/osk-dns-watcher

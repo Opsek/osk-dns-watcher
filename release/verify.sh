@@ -33,12 +33,12 @@ else
 fi
 [ -f "$dir/SHA256SUMS" ] || stop "$dir/SHA256SUMS is missing"
 [ -f "$dir/SHA256SUMS.sig" ] || stop "$dir/SHA256SUMS.sig is missing: this release is not signed"
-grep -q '^osk-release ' release/allowed_signers 2>/dev/null || stop "release/allowed_signers has no key for osk-release"
-ssh-keygen -Y verify -f release/allowed_signers -I osk-release -n file -s "$dir/SHA256SUMS.sig" <"$dir/SHA256SUMS" ||
+grep -q '^osk-dns-watcher-release ' release/allowed_signers 2>/dev/null || stop "release/allowed_signers has no key for osk-dns-watcher-release"
+ssh-keygen -Y verify -f release/allowed_signers -I osk-dns-watcher-release -n file -s "$dir/SHA256SUMS.sig" <"$dir/SHA256SUMS" ||
 	stop "the signature of $dir/SHA256SUMS does not verify with release/allowed_signers"
 # A file that SHA256SUMS leaves out would go unchecked.
-[ "$(sed 's/^[0-9a-f]\{64\}  //' "$dir/SHA256SUMS" | sort | tr '\n' ' ')" = "CONTENTS osk-linux-amd64 osk-linux-arm64 " ] ||
-	stop "$dir/SHA256SUMS must list CONTENTS, osk-linux-amd64 and osk-linux-arm64"
+[ "$(sed 's/^[0-9a-f]\{64\}  //' "$dir/SHA256SUMS" | sort | tr '\n' ' ')" = "CONTENTS osk-dns-watcher-linux-amd64 osk-dns-watcher-linux-arm64 " ] ||
+	stop "$dir/SHA256SUMS must list CONTENTS, osk-dns-watcher-linux-amd64 and osk-dns-watcher-linux-arm64"
 # shellcheck disable=SC2086
 (cd "$dir" && $check SHA256SUMS) || stop "the files of $dir do not match SHA256SUMS (lines above)"
 # Signed files of another release in this folder would name another image.

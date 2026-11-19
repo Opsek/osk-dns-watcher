@@ -27,8 +27,8 @@ esac
 # From a folder below the top, git archive and git ls-tree see that folder only.
 cd "$(git rev-parse --show-toplevel)" || exit 2
 # Only a path of the form that mktemp gave is removed.
-lists=$(mktemp -d "${TMPDIR:-/tmp}/osk-export.XXXXXXXX") || exit 2
-trap 'case $lists in */osk-export.????????) rm -rf -- "$lists" ;; esac' EXIT
+lists=$(mktemp -d "${TMPDIR:-/tmp}/osk-dns-watcher-export.XXXXXXXX") || exit 2
+trap 'case $lists in */osk-dns-watcher-export.????????) rm -rf -- "$lists" ;; esac' EXIT
 
 # Each git command writes a file of its own, so that its failure shows.
 git archive -o "$lists/tree.tar" "$commit" || fail "git archive of $commit failed (see above)"

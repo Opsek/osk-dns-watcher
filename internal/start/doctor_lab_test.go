@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
 )
 
 // The lab test runs doctor in the runner of the lab, which trusts the lab's
@@ -111,7 +111,7 @@ func TestDoctorSaysWhatIsWrong(t *testing.T) {
 	}
 	docChmod(t, s.state, 0o700)
 	setRoot := func(root string) {
-		s.config = s.write(t, "osk.json", fmt.Sprintf(docLabConfig, s.state, root, lab+"0/24"))
+		s.config = s.write(t, "config.json", fmt.Sprintf(docLabConfig, s.state, root, lab+"0/24"))
 	}
 	setRoot(lab + "2")
 

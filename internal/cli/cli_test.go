@@ -19,12 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // cliT0 is the time of the events and notices that tests write when the
@@ -32,7 +32,7 @@ import (
 var cliT0 = time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 
 // cliChildEnv makes the test binary act as a second process that holds the
-// store of the folder it names, as osk run does, and writes to it on
+// store of the folder it names, as osk-dns-watcher run does, and writes to it on
 // request. A Reader and a Store of one folder must never be open in one
 // process: closing a descriptor of the database would drop the store's
 // locks.
@@ -55,11 +55,11 @@ const (
 )
 
 var cliUsage = map[string]string{
-	"validate":   "usage: osk validate --config <file> [--json]",
-	"status":     "usage: osk status --config <file> [--json]",
-	"watch":      "usage: osk watch --config <file> [--json]",
-	"accept":     "usage: osk accept --config <file> [--write <code>] [--json] <alert id>",
-	"test-alert": "usage: osk test-alert --config <file> [--json]",
+	"validate":   "usage: osk-dns-watcher validate --config <file> [--json]",
+	"status":     "usage: osk-dns-watcher status --config <file> [--json]",
+	"watch":      "usage: osk-dns-watcher watch --config <file> [--json]",
+	"accept":     "usage: osk-dns-watcher accept --config <file> [--write <code>] [--json] <alert id>",
+	"test-alert": "usage: osk-dns-watcher test-alert --config <file> [--json]",
 }
 
 // cliRun runs one command in this process. Watch and test-alert get a
@@ -118,9 +118,9 @@ const cliNetwork = `,
   "network": {"root_servers": ["10.53.0.2", "192.0.2.1:5353"], "extra_ranges": ["10.53.0.0/24"]}`
 
 var cliWarnings = []string{
-	"network.root_servers is set: osk starts its walk at 10.53.0.2:53, 192.0.2.1:5353 instead of the root servers" +
+	"network.root_servers is set: osk-dns-watcher starts its walk at 10.53.0.2:53, 192.0.2.1:5353 instead of the root servers" +
 		" of the internet, so these servers decide every answer. Use it only in a lab or a private network.",
-	"network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to 10.53.0.0/24." +
+	"network.extra_ranges is set: data from DNS can now make osk-dns-watcher send queries and HTTPS requests for MTA-STS policy files to 10.53.0.0/24." +
 		" Use it only in a lab or a private network.",
 }
 
@@ -157,7 +157,7 @@ func cliWriteFile(t testing.TB, path, text string) {
 func cliNewWorld(t testing.TB, network bool) *cliWorld {
 	t.Helper()
 	dir := t.TempDir()
-	w := &cliWorld{dir: dir, config: filepath.Join(dir, "osk.json"), state: filepath.Join(dir, "state"),
+	w := &cliWorld{dir: dir, config: filepath.Join(dir, "config.json"), state: filepath.Join(dir, "state"),
 		corp: filepath.Join(dir, "corp.test.expect"), shop: filepath.Join(dir, "shop.test.expect")}
 	extra := ""
 	if network {
@@ -548,13 +548,13 @@ func TestEveryWrongUseExits2WithItsTextAndTheUsageOfItsCommand(t *testing.T) {
 				use{args: []string{"--config", missing, "one"}, msg: `"one" is not an alert id`},
 			)
 		} else {
-			uses = append(uses, use{args: []string{"--config", missing, "extra"}, msg: "osk " + cmd + " takes no arguments"})
+			uses = append(uses, use{args: []string{"--config", missing, "extra"}, msg: "osk-dns-watcher " + cmd + " takes no arguments"})
 		}
 		for _, u := range uses {
 			code, out, errOut := cliRun(5*time.Second, cmd, u.args...)
 			lines := strings.Split(errOut, "\n")
 			first := lines[0]
-			prefix := "osk " + cmd + ": "
+			prefix := "osk-dns-watcher " + cmd + ": "
 			okText := strings.HasPrefix(first, prefix) && len(first) > len(prefix) &&
 				(u.msg == "" || first == prefix+u.msg) && strings.HasSuffix(first, u.end)
 			if code != 2 || out != "" || !okText || !slices.Contains(lines, cliUsage[cmd]) {
@@ -562,7 +562,7 @@ func TestEveryWrongUseExits2WithItsTextAndTheUsageOfItsCommand(t *testing.T) {
 				if u.msg == "" {
 					want = prefix + "<a text>" + u.end
 				}
-				t.Errorf("osk %s %q: exit code %d, output %q, errors:\n%s\nwant 2, nothing, and the errors %q and %q",
+				t.Errorf("osk-dns-watcher %s %q: exit code %d, output %q, errors:\n%s\nwant 2, nothing, and the errors %q and %q",
 					cmd, u.args, code, out, errOut, want, cliUsage[cmd])
 			}
 		}
@@ -573,7 +573,7 @@ func TestEveryWrongUseExits2WithItsTextAndTheUsageOfItsCommand(t *testing.T) {
 // validate prints them as its output, which its own tests check.
 func TestReadingCommandsPrintTheProblemsOfTheConfigAndExit1(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "osk.json")
+	path := filepath.Join(dir, "config.json")
 	state := filepath.Join(dir, "state")
 	cliWriteFile(t, path, "{\n  \"state\": \""+state+"\",\n  \"slak\": 1,\n  \"domains\": []\n}\n")
 	_, problems := config.Read(path)
@@ -582,7 +582,7 @@ func TestReadingCommandsPrintTheProblemsOfTheConfigAndExit1(t *testing.T) {
 	}
 	var want []string
 	for _, p := range problems {
-		want = append(want, "osk: "+p.String())
+		want = append(want, "osk-dns-watcher: "+p.String())
 	}
 	for _, cmd := range []string{"status", "watch", "accept", "test-alert"} {
 		args := []string{"--config", path}
@@ -591,7 +591,7 @@ func TestReadingCommandsPrintTheProblemsOfTheConfigAndExit1(t *testing.T) {
 		}
 		code, out, errOut := cliRun(5*time.Second, cmd, args...)
 		if code != 1 || out != "" || errOut != cliLines(want...) {
-			t.Errorf("osk %s: exit code %d, output %q, errors:\n%s\nwant 1, nothing and:\n%s", cmd, code, out, errOut, cliLines(want...))
+			t.Errorf("osk-dns-watcher %s: exit code %d, output %q, errors:\n%s\nwant 1, nothing and:\n%s", cmd, code, out, errOut, cliLines(want...))
 		}
 	}
 	if _, err := os.Lstat(state); err == nil {
@@ -604,7 +604,7 @@ func TestReadingCommandsNeedTheStateOfARunningService(t *testing.T) {
 	if err := os.Mkdir(w.state, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	want := "osk: store: no state in " + w.state + " yet; start osk run there first\n"
+	want := "osk-dns-watcher: store: no state in " + w.state + " yet; start osk-dns-watcher run there first\n"
 	for _, cmd := range []string{"status", "watch", "accept", "test-alert"} {
 		args := []string{"--config", w.config}
 		if cmd == "accept" {
@@ -612,7 +612,7 @@ func TestReadingCommandsNeedTheStateOfARunningService(t *testing.T) {
 		}
 		code, out, errOut := cliRun(5*time.Second, cmd, args...)
 		if code != 1 || out != "" || errOut != want {
-			t.Errorf("osk %s: exit code %d, output %q, errors %q; want 1, nothing and %q", cmd, code, out, errOut, want)
+			t.Errorf("osk-dns-watcher %s: exit code %d, output %q, errors %q; want 1, nothing and %q", cmd, code, out, errOut, want)
 		}
 	}
 	if entries, err := os.ReadDir(w.state); err != nil || len(entries) != 0 {
@@ -626,7 +626,7 @@ func TestReadingCommandsRefuseAStateFolderOpenToOthers(t *testing.T) {
 	if err := os.Chmod(w.state, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("osk: store: %s is open to other users (mode 0755); run chmod 700 %s\n", w.state, w.state)
+	want := fmt.Sprintf("osk-dns-watcher: store: %s is open to other users (mode 0755); run chmod 700 %s\n", w.state, w.state)
 	for _, cmd := range []string{"status", "watch", "accept", "test-alert"} {
 		args := []string{"--config", w.config}
 		if cmd == "accept" {
@@ -634,7 +634,7 @@ func TestReadingCommandsRefuseAStateFolderOpenToOthers(t *testing.T) {
 		}
 		code, out, errOut := cliRun(5*time.Second, cmd, args...)
 		if code != 1 || out != "" || errOut != want {
-			t.Errorf("osk %s: exit code %d, output %q, errors %q; want 1, nothing and %q", cmd, code, out, errOut, want)
+			t.Errorf("osk-dns-watcher %s: exit code %d, output %q, errors %q; want 1, nothing and %q", cmd, code, out, errOut, want)
 		}
 	}
 	if _, err := os.Lstat(filepath.Join(w.state, "test-alert")); err == nil {
@@ -660,13 +660,13 @@ func TestReadingCommandsRunBesideTheServiceAndLeaveItWriting(t *testing.T) {
 	start := time.Now()
 	code, out, errOut := cliRun(5*time.Second, "status", "--config", w.config)
 	if code != 0 || errOut != "" || !strings.HasPrefix(out, "healthy\n") || time.Since(start) > 2*time.Second {
-		t.Errorf("osk status beside the service: exit code %d after %v, errors %q, output:\n%s\nwant 0 within 2s, none and healthy",
+		t.Errorf("osk-dns-watcher status beside the service: exit code %d after %v, errors %q, output:\n%s\nwant 0 within 2s, none and healthy",
 			code, time.Since(start), errOut, out)
 	}
 	cliNoMarker(t, out, errOut)
 	code, out, errOut = cliRun(5*time.Second, "accept", "--config", w.config, fmt.Sprint(id))
 	if code != 0 || errOut != "" {
-		t.Errorf("osk accept beside the service: exit code %d, errors %q, output:\n%s\nwant 0 and none", code, errOut, out)
+		t.Errorf("osk-dns-watcher accept beside the service: exit code %d, errors %q, output:\n%s\nwant 0 and none", code, errOut, out)
 	}
 	cliNoMarker(t, out, errOut)
 	if got := child.do(t, "beat"); got != "ok" {
@@ -708,12 +708,12 @@ func TestReadingCommandsRefuseFilesThatAreNotRegular(t *testing.T) {
 		case o := <-done:
 			return o
 		case <-time.After(2 * time.Second):
-			t.Fatalf("osk %s %q did not return within 2s", cmd, args)
+			t.Fatalf("osk-dns-watcher %s %q did not return within 2s", cmd, args)
 			return outcome{}
 		}
 	}
 	const refused = "is not a regular file"
-	fifo := filepath.Join(t.TempDir(), "osk.json")
+	fifo := filepath.Join(t.TempDir(), "config.json")
 	cliFIFO(t, fifo)
 	for _, cmd := range []string{"validate", "status", "watch", "accept", "test-alert"} {
 		args := []string{"--config", fifo}
@@ -722,7 +722,7 @@ func TestReadingCommandsRefuseFilesThatAreNotRegular(t *testing.T) {
 		}
 		o := within(cmd, args...)
 		if text := map[bool]string{true: o.out, false: o.errOut}[cmd == "validate"]; o.code != 1 || !strings.Contains(text, refused) {
-			t.Errorf("osk %s with a FIFO as the config: exit code %d, output %q, errors %q; want 1 and %q", cmd, o.code, o.out, o.errOut, refused)
+			t.Errorf("osk-dns-watcher %s with a FIFO as the config: exit code %d, output %q, errors %q; want 1 and %q", cmd, o.code, o.out, o.errOut, refused)
 		}
 	}
 
@@ -734,20 +734,20 @@ func TestReadingCommandsRefuseFilesThatAreNotRegular(t *testing.T) {
 	}
 	cliFIFO(t, key)
 	if o := within("validate", "--config", w.config); o.code != 1 || !strings.Contains(o.out, "webhooks[0].key: ") || !strings.Contains(o.out, refused) {
-		t.Errorf("osk validate with a FIFO as the key file: exit code %d, output %q; want 1 and the key file %s", o.code, o.out, refused)
+		t.Errorf("osk-dns-watcher validate with a FIFO as the key file: exit code %d, output %q; want 1 and the key file %s", o.code, o.out, refused)
 	}
 	if err := errors.Join(os.Remove(key), os.Rename(key+".saved", key), os.Remove(w.corp)); err != nil {
 		t.Fatal(err)
 	}
 	cliFIFO(t, w.corp)
 	if o := within("validate", "--config", w.config); o.code != 1 || !strings.Contains(o.out, w.corp+": ") || !strings.Contains(o.out, refused) {
-		t.Errorf("osk validate with a FIFO as an expectations file: exit code %d, output %q; want 1 and %s %s", o.code, o.out, w.corp, refused)
+		t.Errorf("osk-dns-watcher validate with a FIFO as an expectations file: exit code %d, output %q; want 1 and %s %s", o.code, o.out, w.corp, refused)
 	}
 	if err := errors.Join(os.Remove(w.corp), os.Symlink("/dev/zero", w.corp)); err != nil {
 		t.Fatal(err)
 	}
 	if o := within("validate", "--config", w.config); o.code != 1 || !strings.Contains(o.out, w.corp+": ") || !strings.Contains(o.out, refused) {
-		t.Errorf("osk validate with /dev/zero as an expectations file: exit code %d, output %q; want 1 and %s %s", o.code, o.out, w.corp, refused)
+		t.Errorf("osk-dns-watcher validate with /dev/zero as an expectations file: exit code %d, output %q; want 1 and %s %s", o.code, o.out, w.corp, refused)
 	}
 }
 

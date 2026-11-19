@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // Bounds on the work that one CAA set can ask for when two policies are
@@ -456,7 +456,7 @@ func certifiable(domain, name dnswire.Name) bool {
 // set (no data or no such name) takes the policy that the file states above
 // the name, as the climb of an authority does. An alias takes it too: an
 // authority would follow the alias and read the set of its target, which
-// osk does not read.
+// osk-dns-watcher does not read.
 func caa(f *expect.File, o obs.Observation) (judged bool, found []Finding) {
 	if o.Key.Type != dnswire.TypeCAA || !covers(f, o) {
 		return false, nil

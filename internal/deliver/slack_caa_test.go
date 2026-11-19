@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // caaCase is one caa alert: the check name, the line that governs (Expected),

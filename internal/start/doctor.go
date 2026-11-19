@@ -14,18 +14,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/cli"
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/cli"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
-const doctorUsage = "usage: osk doctor --config <file> [--json]\n"
+const doctorUsage = "usage: osk-dns-watcher doctor --config <file> [--json]\n"
 
 // The texts of the results, in the order doctor gives them.
 const (
@@ -35,10 +35,10 @@ const (
 	textNotFolder  = "%s is not a folder"
 	textFolderOpen = "%s is open to other users. Run: chmod 700 %s"
 	textFilesOK    = "no other user can change the config or the expectations, or read the secrets or the state"
-	textDNSOK      = "its parent zone answers; osk found it from the root servers, without this machine's resolver"
+	textDNSOK      = "its parent zone answers; osk-dns-watcher found it from the root servers, without this machine's resolver"
 	textDNSFail    = "no answer from the root servers or its parent zone (%s). " +
-		"osk asks them itself on port 53, over UDP and TCP: allow that traffic to the internet."
-	textSent      = "%s answered %d; a test message from osk doctor was sent"
+		"osk-dns-watcher asks them itself on port 53, over UDP and TCP: allow that traffic to the internet."
+	textSent      = "%s answered %d; a test message from osk-dns-watcher doctor was sent"
 	textRefused   = "%s answered %d%s. Check the URL in %s: a deleted or revoked webhook answers like this."
 	textUnreached = "no answer from %s: %s. Check that this machine can reach %s over HTTPS."
 	textClockOK   = "%v from the time of %s"
@@ -57,14 +57,14 @@ const maxSkew = 30 * time.Second
 // A test sets the authority of its own servers.
 var doctorRoots *x509.CertPool
 
-// Doctor runs "osk doctor": it checks this machine and the setup that osk run
+// Doctor runs "osk-dns-watcher doctor": it checks this machine and the setup that osk-dns-watcher run
 // would use, and says what to fix. It opens no store, so it runs beside the
 // service. The exit code is 0 when no check failed, 1 when one did, 2 on
 // wrong use.
 func Doctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	path, asJSON, msg := parseDoctor(args)
 	if msg != "" {
-		_, _ = io.WriteString(stderr, "osk doctor: "+msg+"\n"+doctorUsage)
+		_, _ = io.WriteString(stderr, "osk-dns-watcher doctor: "+msg+"\n"+doctorUsage)
 		return 2
 	}
 	r := &report{w: stdout, json: asJSON}
@@ -109,7 +109,7 @@ func parseDoctor(args []string) (path string, asJSON bool, msg string) {
 	case file == nil || *file == "":
 		return "", false, "--config is required"
 	case flags.NArg() > 0:
-		return "", false, "osk doctor takes no arguments"
+		return "", false, "osk-dns-watcher doctor takes no arguments"
 	}
 	return *file, asJSON, ""
 }
@@ -172,7 +172,7 @@ func (r *report) end(stderr io.Writer) int {
 	}{"result", r.problems})
 	switch {
 	case r.err != nil:
-		_, _ = io.WriteString(stderr, "osk: "+r.err.Error()+"\n")
+		_, _ = io.WriteString(stderr, "osk-dns-watcher: "+r.err.Error()+"\n")
 		return 1
 	case r.problems > 0:
 		return 1
@@ -188,7 +188,7 @@ type setup struct {
 	problems []config.Problem
 }
 
-// readSetup reads the config, its secrets and the expectations as osk run
+// readSetup reads the config, its secrets and the expectations as osk-dns-watcher run
 // does at its start.
 func readSetup(path string) setup {
 	c, problems := config.Read(path)
@@ -227,7 +227,7 @@ func proxyCheck(ctx context.Context, c *config.Config) (res result, proxied bool
 }
 
 // configCheck reports every problem; with one, doctor checks nothing else,
-// since it would not know which hosts and domains osk run would use.
+// since it would not know which hosts and domains osk-dns-watcher run would use.
 func configCheck(s setup) []result {
 	var results []result
 	for _, p := range s.problems {
@@ -245,7 +245,7 @@ func configCheck(s setup) []result {
 }
 
 // filesCheck reads the mode bits only: telling the owner of a file needs
-// syscall, which osk does not use. A file that cannot be read was reported by
+// syscall, which osk-dns-watcher does not use. A file that cannot be read was reported by
 // the config check already.
 func filesCheck(c *config.Config) []result {
 	var results []result
@@ -262,7 +262,7 @@ func filesCheck(c *config.Config) []result {
 			add(textSecretOpen, path, path)
 		}
 	}
-	// A state folder that does not exist yet is no problem: osk run makes it.
+	// A state folder that does not exist yet is no problem: osk-dns-watcher run makes it.
 	if info, err := os.Stat(c.State); err == nil {
 		switch {
 		case !info.IsDir():
@@ -353,10 +353,10 @@ type sent struct {
 // They go one after another, each within the client's time limit, so a
 // receiver that several channels share gets them in channel order. The
 // heartbeat gets none: a beat from doctor would tell the outside service that
-// osk run is healthy.
+// osk-dns-watcher run is healthy.
 func sendTests(ctx context.Context, c *config.Config, v config.Values) []sent {
 	sends := targets(c, v)
-	n := store.Notice{Kind: store.NoticeTest, Lines: []string{"from      osk doctor"}, At: time.Now()}
+	n := store.Notice{Kind: store.NoticeTest, Lines: []string{"from      osk-dns-watcher doctor"}, At: time.Now()}
 	for i, ch := range Channels(c, v, httpclient.New(v.Hosts(), doctorRoots)) {
 		body := ch.Notice(n)
 		sends[i].t0 = time.Now()
@@ -406,7 +406,7 @@ func webhookCheck(s sent) result {
 }
 
 // clockCheck compares this machine's clock with the Date of the first answer
-// that has one, the only outside time osk may ask for: it posts to no host
+// that has one, the only outside time osk-dns-watcher may ask for: it posts to no host
 // but those of the config. The middle of the request stands for the moment
 // the server read its clock.
 func clockCheck(sends []sent) result {

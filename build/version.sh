@@ -1,5 +1,5 @@
 #!/bin/sh
-# build/version.sh <text> exits 0 when the text is a version of osk, and 2
+# build/version.sh <text> exits 0 when the text is a version of osk-dns-watcher, and 2
 # otherwise. A version is three numbers with no leading zero, then optionally
 # "-" and words of ASCII letters and digits separated by dots, where a word
 # of digits only is a number with no leading zero: 0.1.0, 0.1.0-rc.1. The

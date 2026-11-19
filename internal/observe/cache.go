@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // These bound the memory of the cache, and how long a cut stays in it,

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 var stsPick = recordProblems{
@@ -154,7 +154,7 @@ func ParseSTSPolicy(body []byte) (p STSPolicy, problem string) {
 }
 
 // stsExtension reports whether key names an extension field of a policy file
-// (RFC 8461 section 3.2): a key of that form that osk does not read. Senders
+// (RFC 8461 section 3.2): a key of that form that osk-dns-watcher does not read. Senders
 // ignore such a field, so its line is skipped whole.
 func stsExtension(key string) bool {
 	switch key {
@@ -168,7 +168,7 @@ func stsExtension(key string) bool {
 // field: valid UTF-8 (RFC 8461 section 3.2), with no control character other
 // than tab and no Unicode line or paragraph separator. A reader may end a
 // line, or the text, at one of those, and then read what follows as a key
-// that osk skips. The range loop gives U+FFFD for each octet that is not
+// that osk-dns-watcher skips. The range loop gives U+FFFD for each octet that is not
 // valid UTF-8, so invalid UTF-8 is refused with it; so is a written U+FFFD.
 func stsExtValue(v string) bool {
 	for _, r := range v {

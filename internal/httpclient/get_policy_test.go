@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 )
 
 // mtsCert is a self-signed server certificate for names and a pool that
@@ -33,7 +33,7 @@ func mtsCert(t *testing.T, names ...string) (tls.Certificate, *x509.CertPool) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "osk test server"},
+		Subject:      pkix.Name{CommonName: "osk-dns-watcher test server"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		DNSNames:     names,

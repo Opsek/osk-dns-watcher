@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 type problemJSON struct {
@@ -34,7 +34,7 @@ type resultJSON struct {
 	Channels []string `json:"channels"`
 }
 
-// Validate runs "osk validate": it prints every problem of the config, of
+// Validate runs "osk-dns-watcher validate": it prints every problem of the config, of
 // its secrets as this process sees them, of the expectations files and of the
 // state folder. A service started with another environment may see other
 // secrets.
@@ -78,7 +78,7 @@ func deeperProblems(c *config.Config) (problems []config.Problem, warnings []str
 			warnings = append(warnings, w)
 		}
 	}
-	// A missing folder is no problem: osk run makes it.
+	// A missing folder is no problem: osk-dns-watcher run makes it.
 	if _, err := os.Stat(c.State); errors.Is(err, fs.ErrNotExist) {
 		return problems, warnings
 	}
@@ -90,7 +90,7 @@ func deeperProblems(c *config.Config) (problems []config.Problem, warnings []str
 
 // CertLinesWarning gives the warning for a file whose issuer and certname
 // lines nothing judges, because the config does not read the certificate
-// logs; "" when there is none, also for a nil file. osk run prints it too.
+// logs; "" when there is none, also for a nil file. osk-dns-watcher run prints it too.
 func CertLinesWarning(c *config.Config, f *expect.File) string {
 	if c.Certificates != nil || f == nil || len(f.Issuers) == 0 && len(f.CertNames) == 0 {
 		return ""

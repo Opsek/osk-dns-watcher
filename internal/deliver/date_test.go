@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 )
 
 // Both channels pass on the Date of the answer, also of a refusal, and the

@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // The text that a refused key gives, and the one of a URL that the client refuses.
@@ -233,7 +233,7 @@ func mtsNewCA(t *testing.T) *mtsCA {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "osk test authority"},
+		Subject:               pkix.Name{CommonName: "osk-dns-watcher test authority"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
@@ -267,7 +267,7 @@ func (ca *mtsCA) leaf(t *testing.T, notAfter time.Time, names []string, ips ...n
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "osk test server"},
+		Subject:      pkix.Name{CommonName: "osk-dns-watcher test server"},
 		NotBefore:    time.Now().Add(-2 * time.Hour),
 		NotAfter:     notAfter,
 		DNSNames:     names,

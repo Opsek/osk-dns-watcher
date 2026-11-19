@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // A row is given up after MaxAttempts failures; with Delay between them that
@@ -84,7 +84,7 @@ func NoticeWrites(n store.Notice, channels []Channel) []store.Delivery {
 
 // Next gives the state of row r after one attempt with outcome o. A 3xx or a
 // 4xx other than 408 and 429 refuses the URL or the payload, so a retry
-// cannot help. No jitter: osk is the only sender of its rows.
+// cannot help. No jitter: osk-dns-watcher is the only sender of its rows.
 func Next(r store.Row, o Outcome, now time.Time) store.Done {
 	n := r.Attempts + 1
 	if o.Status >= 200 && o.Status <= 299 {

@@ -9,10 +9,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // stfRunner is the observer of the retry tests. The nth run of a check gives
@@ -106,8 +106,8 @@ func stfCounts(t *testing.T, r *stfRunner, domains []string, twice ...string) {
 }
 
 func stfWarning(d string) string {
-	return "warning osk cannot watch the nameservers of " + d + " yet. Until its file has an NS line, " +
-		"a change of the nameservers gives no critical alert, only an update of the alert about the missing line; osk sends that alert at its first check.\n"
+	return "warning osk-dns-watcher cannot watch the nameservers of " + d + " yet. Until its file has an NS line, " +
+		"a change of the nameservers gives no critical alert, only an update of the alert about the missing line; osk-dns-watcher sends that alert at its first check.\n"
 }
 
 // stfBlock is iniBlock of a domain that has no NS line: its warning ends it.
@@ -266,7 +266,7 @@ func stfNoNSSkip(d string) string {
 		iniNS2Addr + " ns2.example.net. gives none"
 }
 
-// A set without an NS line means that osk cannot see a change of the
+// A set without an NS line means that osk-dns-watcher cannot see a change of the
 // nameservers: init says so under the sets that it leaves out. A server of
 // the domain that gives the apex no NS set, or another type, leaves no set
 // that a line could accept. Nothing failed, so nothing runs twice.
@@ -301,7 +301,7 @@ func TestInitWarnsWhenTheApexNSSetGetsNoLine(t *testing.T) {
 // servers given, each as "<addr> <host> (<reason>)".
 func stfNSNoAnswer(d string, servers ...string) string {
 	return "warning " + strings.Join(servers, ", ") + " gave no answer about the nameservers of " + d +
-		", so its NS line holds what the other servers gave. If they hold another set, osk alerts at its first check.\n"
+		", so its NS line holds what the other servers gave. If they hold another set, osk-dns-watcher alerts at its first check.\n"
 }
 
 // A failed answer of a server of the domain is left out of the NS line, even
@@ -360,7 +360,7 @@ func TestInitWarnsWhenTheServersGiveDifferentNSSets(t *testing.T) {
 		expect.NSSource{Text: "ns1.example.net. | ns2.example.net.", Parent: []string{iniParentAddr + " " + iniParentHost},
 			Zone: []string{iniNS1Addr + " ns1.example.net."}})
 	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d))+warning)+"yes\n"+s.wrote(d))
-	if strings.Contains(out, "warning osk cannot watch") {
+	if strings.Contains(out, "warning osk-dns-watcher cannot watch") {
 		t.Errorf("the output holds the warning about a missing NS line:\n%s", out)
 	}
 	data := s.written(d)["example.com.expect"]
@@ -534,7 +534,7 @@ func TestInitUsesTheSecondObservationOnlyWhenItIsNotWorse(t *testing.T) {
 		if code != 0 {
 			t.Errorf("exit code %d; want 0; output:\n%s", code, out)
 		}
-		if strings.Contains(out, "got no answer about") || !strings.Contains(out, d+" as osk sees it now.") {
+		if strings.Contains(out, "got no answer about") || !strings.Contains(out, d+" as osk-dns-watcher sees it now.") {
 			t.Errorf("init refused the domain, or did not show it:\n%s", out)
 		}
 		stfCounts(t, r, []string{d}, dkey)
@@ -546,7 +546,7 @@ func TestInitUsesTheSecondObservationOnlyWhenItIsNotWorse(t *testing.T) {
 // of the block of d.
 func stfTail(out, d string) []string {
 	all := strings.Split(out, "\n")
-	i := slices.Index(all, d+" as osk sees it now. Once you confirm, osk alerts when the servers differ from these lines:")
+	i := slices.Index(all, d+" as osk-dns-watcher sees it now. Once you confirm, osk-dns-watcher alerts when the servers differ from these lines:")
 	if i < 0 {
 		return nil
 	}
@@ -559,7 +559,7 @@ func stfTail(out, d string) []string {
 }
 
 func stfNothingCompared(d string) string {
-	return "warning osk watches no record set of " + d + " yet: each one is listed above with its reason. " +
+	return "warning osk-dns-watcher watches no record set of " + d + " yet: each one is listed above with its reason. " +
 		"Until its file has those lines, a change of them gives no alert.\n"
 }
 
@@ -590,7 +590,7 @@ func stfNoNS(seq map[string][][]obs.Answer, d string) map[string][][]obs.Answer 
 	return seq
 }
 
-// When a file holds no line but NS and DS, osk compares nothing: init says
+// When a file holds no line but NS and DS, osk-dns-watcher compares nothing: init says
 // so after the warning about the nameservers, when both apply. A failed NS
 // set of the apex still gets the line of the parent's set, and its warning
 // names the servers that gave no answer.
@@ -656,7 +656,7 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 		if tail := stfTail(out, org); len(tail) < 1 || tail[0] != strings.TrimSuffix(stfNothingCompared(org), "\n") {
 			t.Errorf("the block of %s ends with %q; want its second warning alone", org, tail)
 		}
-		if strings.Contains(out, stfWarning(org)) || strings.Count(out, "warning osk ") != 3 {
+		if strings.Contains(out, stfWarning(org)) || strings.Count(out, "warning osk-dns-watcher ") != 3 {
 			t.Errorf("the output holds the wrong warnings:\n%s", out)
 		}
 	})

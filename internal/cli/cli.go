@@ -1,5 +1,5 @@
 // Package cli holds the commands that check a config and read the state of
-// a running osk: validate, status, watch, accept and test-alert. Each runs in
+// a running osk-dns-watcher: validate, status, watch, accept and test-alert. Each runs in
 // its own process beside the service. It opens the state only through a
 // store.Reader, never reads standard input and never waits for a person, so
 // it can never hold up the service.
@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 const (
@@ -41,15 +41,15 @@ func PrintJSON(w io.Writer, v any) error {
 type command struct{ name, usage string }
 
 var (
-	validateCommand  = command{"validate", "osk validate --config <file> [--json]"}
-	statusCommand    = command{"status", "osk status --config <file> [--json]"}
-	watchCommand     = command{"watch", "osk watch --config <file> [--json]"}
-	acceptCommand    = command{"accept", "osk accept --config <file> [--write <code>] [--json] <alert id>"}
-	testAlertCommand = command{"test-alert", "osk test-alert --config <file> [--json]"}
+	validateCommand  = command{"validate", "osk-dns-watcher validate --config <file> [--json]"}
+	statusCommand    = command{"status", "osk-dns-watcher status --config <file> [--json]"}
+	watchCommand     = command{"watch", "osk-dns-watcher watch --config <file> [--json]"}
+	acceptCommand    = command{"accept", "osk-dns-watcher accept --config <file> [--write <code>] [--json] <alert id>"}
+	testAlertCommand = command{"test-alert", "osk-dns-watcher test-alert --config <file> [--json]"}
 )
 
 func (c command) wrongUse(stderr io.Writer, msg string) int {
-	return fail(stderr, 2, "osk "+c.name+": "+msg+"\nusage: "+c.usage+"\n")
+	return fail(stderr, 2, "osk-dns-watcher "+c.name+": "+msg+"\nusage: "+c.usage+"\n")
 }
 
 type options struct {
@@ -78,7 +78,7 @@ func (c command) parse(args []string, withWrite bool) (options, string) {
 	if withWrite {
 		flags.Func("write", "write the change whose code the dry run printed", func(s string) error {
 			if s == "" {
-				return errors.New("want the code that osk accept printed")
+				return errors.New("want the code that osk-dns-watcher accept printed")
 			}
 			o.code = s
 			return nil
@@ -97,7 +97,7 @@ func (c command) parse(args []string, withWrite bool) (options, string) {
 func (c command) parseNoArgs(args []string) (options, string) {
 	o, msg := c.parse(args, false)
 	if msg == "" && len(o.args) > 0 {
-		msg = "osk " + c.name + " takes no arguments"
+		msg = "osk-dns-watcher " + c.name + " takes no arguments"
 	}
 	return o, msg
 }
@@ -210,7 +210,7 @@ func problemsErr(problems []config.Problem) error {
 func failErr(stderr io.Writer, err error) int {
 	var b strings.Builder
 	for line := range strings.SplitSeq(err.Error(), "\n") {
-		b.WriteString("osk: " + line + "\n")
+		b.WriteString("osk-dns-watcher: " + line + "\n")
 	}
 	return fail(stderr, 1, b.String())
 }

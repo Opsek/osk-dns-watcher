@@ -33,13 +33,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // The tests run doctor against a fake root server and fake webhook services
@@ -50,24 +50,24 @@ import (
 const (
 	docFilesOK = "ok   files: no other user can change the config or the expectations, or read the secrets or the state"
 	docProxy   = "FAIL dns: The network between this machine and the DNS root servers answers DNS queries itself " +
-		"(a VPN, router or provider does this). osk must reach the root servers directly on port 53, over UDP and TCP. " +
-		"Run osk on another network or machine."
+		"(a VPN, router or provider does this). osk-dns-watcher must reach the root servers directly on port 53, over UDP and TCP. " +
+		"Run osk-dns-watcher on another network or machine."
 	docClockSkip = "skip clock: no webhook answered, so there is no outside time to compare with"
-	docUsage     = "usage: osk doctor --config <file> [--json]"
-	docFrom      = "from      osk doctor"
+	docUsage     = "usage: osk-dns-watcher doctor --config <file> [--json]"
+	docFrom      = "from      osk-dns-watcher doctor"
 )
 
 func docDNSOK(domain string) string {
-	return "ok   dns " + domain + ": its parent zone answers; osk found it from the root servers, without this machine's resolver"
+	return "ok   dns " + domain + ": its parent zone answers; osk-dns-watcher found it from the root servers, without this machine's resolver"
 }
 
 func docDNSFail(domain, words string) string {
 	return "FAIL dns " + domain + ": no answer from the root servers or its parent zone (" + words +
-		"). osk asks them itself on port 53, over UDP and TCP: allow that traffic to the internet."
+		"). osk-dns-watcher asks them itself on port 53, over UDP and TCP: allow that traffic to the internet."
 }
 
 func docSent(channel, host string) string {
-	return "ok   webhook " + channel + ": " + host + " answered 200; a test message from osk doctor was sent"
+	return "ok   webhook " + channel + ": " + host + " answered 200; a test message from osk-dns-watcher doctor was sent"
 }
 
 // docAnswered is the line of a channel whose service answered with a status
@@ -125,7 +125,7 @@ func docNewCert() (tls.Certificate, *x509.CertPool) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "osk doctor test"},
+		Subject:      pkix.Name{CommonName: "osk-dns-watcher doctor test"},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(24 * time.Hour),
 		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
@@ -476,7 +476,7 @@ func docStart(t *testing.T, w docWorld) *docSetup {
 		t.Fatal(err)
 	}
 	docChmod(t, s.state, 0o700)
-	s.config = s.write(t, "osk.json", fmt.Sprintf(docConfig, slackSecret, s.dns.addr))
+	s.config = s.write(t, "config.json", fmt.Sprintf(docConfig, slackSecret, s.dns.addr))
 	return s
 }
 
@@ -519,7 +519,7 @@ func (s *docSetup) edit(t *testing.T, old, new string) {
 	if !bytes.Contains(data, []byte(old)) {
 		t.Fatalf("the config holds no %q", old)
 	}
-	s.write(t, "osk.json", strings.Replace(string(data), old, new, 1))
+	s.write(t, "config.json", strings.Replace(string(data), old, new, 1))
 }
 
 // docDoctor runs doctor and gives its exit code, standard output and
@@ -847,7 +847,7 @@ func docFromJSON(t *testing.T, lines []string) []string {
 // When every check passes, doctor says so in one line each, exits 0, and
 // puts exactly one test notice in each channel through its own code, signed
 // for the webhook. It posts no heartbeat: that would tell the outside
-// service that osk run is healthy.
+// service that osk-dns-watcher run is healthy.
 func TestDoctorAllPassSendsOneTestNoticePerChannel(t *testing.T) {
 	s := docStart(t, docWorld{slackEnv: true})
 	s.check(t, s.want(t, nil))
@@ -1304,7 +1304,7 @@ func TestDoctorWrongUseChecksNothing(t *testing.T) {
 	} {
 		code, out, errOut := docDoctor(args...)
 		lines := strings.Split(strings.TrimSuffix(errOut, "\n"), "\n")
-		if code != 2 || out != "" || len(lines) != 2 || !strings.HasPrefix(lines[0], "osk doctor: ") || lines[1] != docUsage {
+		if code != 2 || out != "" || len(lines) != 2 || !strings.HasPrefix(lines[0], "osk-dns-watcher doctor: ") || lines[1] != docUsage {
 			t.Errorf("doctor %q: exit code %d, output %q, errors %q; want 2, nothing, and the reason and %q",
 				args, code, out, errOut, docUsage)
 		}
@@ -1316,7 +1316,7 @@ func TestDoctorWrongUseChecksNothing(t *testing.T) {
 }
 
 // The channels are Slack, when set, then each webhook in config order, as
-// osk run builds them: their names, minimum severities and notice bodies.
+// osk-dns-watcher run builds them: their names, minimum severities and notice bodies.
 func TestChannelsGivesSlackThenEachWebhook(t *testing.T) {
 	const withSlack = `{"state": "state", "domains": [{"name": "corp.test.", "expect": "corp.test.expect"}],
 	  "slack": {"url": {"env": "A"}, "min_severity": "high"},
@@ -1328,7 +1328,7 @@ func TestChannelsGivesSlackThenEachWebhook(t *testing.T) {
 	slackBody, _ := json.Marshal(struct {
 		Text string `json:"text"`
 	}{deliver.NoticeText(n)})
-	path := filepath.Join(t.TempDir(), "osk.json")
+	path := filepath.Join(t.TempDir(), "config.json")
 	for _, c := range []struct {
 		data   string
 		values config.Values

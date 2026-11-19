@@ -20,7 +20,7 @@ import (
 // statement runs on one connection, so its own writes run one at a time.
 type Store struct {
 	db   *sql.DB
-	lock *sql.DB // osk.lock, kept in an exclusive transaction
+	lock *sql.DB // state.lock, kept in an exclusive transaction
 	held *sql.Tx
 }
 
@@ -135,11 +135,11 @@ func CheckFolder(dir string) error {
 	return nil
 }
 
-// lockFolder holds an exclusive transaction on dir/osk.lock. SQLite keeps it
+// lockFolder holds an exclusive transaction on dir/state.lock. SQLite keeps it
 // with a lock of the operating system, which the system drops when the
 // process dies, so a crash leaves no stale lock.
 func lockFolder(dir string) (*sql.DB, *sql.Tx, error) {
-	path := dir + "/osk.lock"
+	path := dir + "/state.lock"
 	if err := create(path); err != nil {
 		return nil, nil, wrap(err)
 	}
@@ -154,7 +154,7 @@ func lockFolder(dir string) (*sql.DB, *sql.Tx, error) {
 	if err != nil {
 		var e sqlite3.Error
 		if errors.As(err, &e) && e.Code == sqlite3.ErrBusy {
-			err = fmt.Errorf("store: %s is in use by another osk process", dir)
+			err = fmt.Errorf("store: %s is in use by another osk-dns-watcher process", dir)
 		} else {
 			err = fmt.Errorf("store: %s: %w", path, err)
 		}
@@ -164,7 +164,7 @@ func lockFolder(dir string) (*sql.DB, *sql.Tx, error) {
 }
 
 func openData(dir string) (*sql.DB, error) {
-	path := dir + "/osk.db"
+	path := dir + "/state.db"
 	if err := create(path); err != nil {
 		return nil, wrap(err)
 	}
@@ -226,7 +226,7 @@ func prepare(db *sql.DB, path string) error {
 }
 
 func notStore(path string, version int) error {
-	return fmt.Errorf("store: %s is not a store of this osk (schema %d)", path, version)
+	return fmt.Errorf("store: %s is not a store of this osk-dns-watcher (schema %d)", path, version)
 }
 
 // migrate runs ddl in one transaction, so that a failed upgrade leaves the

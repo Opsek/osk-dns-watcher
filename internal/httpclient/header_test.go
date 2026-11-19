@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 )
 
 // Extra headers reach the server with their names and values, beside the

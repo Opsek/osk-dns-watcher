@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // SchemaVersion is the "schema" of every webhook body. It changes only when a
@@ -22,7 +22,7 @@ import (
 const SchemaVersion = 1
 
 // Webhook posts JSON to a receiver of the user's own. Each request is signed
-// with a key that osk and the receiver share, so the receiver can refuse a
+// with a key that osk-dns-watcher and the receiver share, so the receiver can refuse a
 // forged or replayed body.
 type Webhook struct {
 	name string

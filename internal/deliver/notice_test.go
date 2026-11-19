@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // The text of a notice as the message rules describe it, written apart from
@@ -21,7 +21,7 @@ import (
 
 const ntcTimeLayout = "2006-01-02 15:04:05 UTC"
 
-// ntcDownFor is how long osk did not run, from the two lines of a down
+// ntcDownFor is how long osk-dns-watcher did not run, from the two lines of a down
 // notice: the last beat and the start. Lines that do not give both times
 // give "an unknown time".
 func ntcDownFor(n store.Notice) string {
@@ -49,10 +49,10 @@ var ntcLabels = map[store.NoticeKind][]string{
 
 func ntcText(n store.Notice) string {
 	words := map[store.NoticeKind][2]string{
-		store.NoticeTest: {":test_tube: *TEST* · osk can send to this channel",
-			"Nothing to do: this message only tests the path from osk to this channel."},
-		store.NoticeDown: {":warning: *DOWN* · osk did not run for " + ntcDownFor(n),
-			"Changes in this time were not seen when they happened. If you did not stop osk, find out who did."},
+		store.NoticeTest: {":test_tube: *TEST* · osk-dns-watcher can send to this channel",
+			"Nothing to do: this message only tests the path from osk-dns-watcher to this channel."},
+		store.NoticeDown: {":warning: *DOWN* · osk-dns-watcher did not run for " + ntcDownFor(n),
+			"Changes in this time were not seen when they happened. If you did not stop osk-dns-watcher, find out who did."},
 		store.NoticeExpectations: {":memo: *CHANGED* · the expectations of `" + dlvClean(n.Domain, 100) + "` changed",
 			"If you did not make this change, find out who did and restore the file."},
 	}[n.Kind]
@@ -85,7 +85,7 @@ func ntcTest() store.Notice {
 	return store.Notice{Kind: store.NoticeTest, Lines: []string{"request   0123456789abcdef0123456789abcdef"}, At: ntcAt}
 }
 
-// ntcDown is the notice of a start after osk was down from beat to started.
+// ntcDown is the notice of a start after osk-dns-watcher was down from beat to started.
 // Its time is the start, so it holds no fraction of a second.
 func ntcDown(beat, started time.Time) store.Notice {
 	return store.Notice{Kind: store.NoticeDown, At: started, Lines: []string{
@@ -109,14 +109,14 @@ func TestNoticeTextForEachKind(t *testing.T) {
 		n    store.Notice
 		want string
 	}{
-		{ntcTest(), ":test_tube: *TEST* · osk can send to this channel\n\n" +
+		{ntcTest(), ":test_tube: *TEST* · osk-dns-watcher can send to this channel\n\n" +
 			"```\nrequest    0123456789abcdef0123456789abcdef\n```\n\n" +
 			":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
-			":point_right: Nothing to do: this message only tests the path from osk to this channel."},
-		{ntcDown(time.Date(2026, 11, 13, 7, 59, 0, 0, time.UTC), started), ":warning: *DOWN* · osk did not run for 2 h 1 min\n\n" +
+			":point_right: Nothing to do: this message only tests the path from osk-dns-watcher to this channel."},
+		{ntcDown(time.Date(2026, 11, 13, 7, 59, 0, 0, time.UTC), started), ":warning: *DOWN* · osk-dns-watcher did not run for 2 h 1 min\n\n" +
 			"```\nlast beat  2026-11-13 07:59:00 UTC\nstarted    2026-11-13 10:00:05 UTC\n```\n\n" +
 			":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
-			":point_right: Changes in this time were not seen when they happened. If you did not stop osk, find out who did."},
+			":point_right: Changes in this time were not seen when they happened. If you did not stop osk-dns-watcher, find out who did."},
 		{ntcExpectations(), ":memo: *CHANGED* · the expectations of `corp.test.` changed\n\n" +
 			"```\n- www.corp.test. A 10.53.0.81\n+ mail.corp.test. A 10.53.0.82\nclosed high record-set records www.corp.test. A\n```\n\n" +
 			":clock3: 10:00:05 · 13 Nov 2026 UTC\n\n" +
@@ -150,7 +150,7 @@ func TestNoticeTextDownTellsTheTimeAway(t *testing.T) {
 	} {
 		n := ntcDown(started.Add(-c.away), started)
 		head, _, _ := strings.Cut(deliver.NoticeText(n), "\n")
-		if want := ":warning: *DOWN* · osk did not run for " + c.want; head != want {
+		if want := ":warning: *DOWN* · osk-dns-watcher did not run for " + c.want; head != want {
 			t.Errorf("down for %v: headline %q, want %q", c.away, head, want)
 		}
 	}
@@ -167,7 +167,7 @@ func TestNoticeTextDownWithoutTimesTellsUnknownTime(t *testing.T) {
 	} {
 		n := store.Notice{Kind: store.NoticeDown, Lines: lines, At: ntcAt}
 		head, _, _ := strings.Cut(deliver.NoticeText(n), "\n")
-		if want := ":warning: *DOWN* · osk did not run for an unknown time"; head != want {
+		if want := ":warning: *DOWN* · osk-dns-watcher did not run for an unknown time"; head != want {
 			t.Errorf("lines %q: headline %q, want %q", lines, head, want)
 		}
 	}

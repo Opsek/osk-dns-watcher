@@ -17,12 +17,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // The ordinary tests run init with a fake observer, which sends nothing, and
@@ -37,16 +37,16 @@ import (
 // alias, which an A line cannot hold.
 
 const (
-	iniHello    = "Set up osk: two questions, then osk shows what it sees. Nothing is written until you type yes.\n\n"
+	iniHello    = "Set up osk-dns-watcher: two questions, then osk-dns-watcher shows what it sees. Nothing is written until you type yes.\n\n"
 	iniDomainsQ = "Domains to watch, separated by spaces: "
 	iniURLQ     = "Slack incoming webhook URL (hidden): "
 	iniAsking   = "Asking the servers of your domains, starting from the root servers ...\n"
 	iniNothing  = "Nothing was written.\n"
 	iniBadURL   = "That is not an https URL with a host and no user name. Try again.\n"
 	iniProxy    = "The network between this machine and the DNS root servers answers DNS queries itself (a VPN, router or provider does this).\n" +
-		"osk must reach the root servers directly on port 53, over UDP and TCP. Run osk on another network or machine.\n"
+		"osk-dns-watcher must reach the root servers directly on port 53, over UDP and TCP. Run osk-dns-watcher on another network or machine.\n"
 	// iniStamp is the first line of each expectations file, at iniNow.
-	iniStamp = "# Written by osk init at 2026-11-15 14:02:07 UTC from what the servers gave. Edit a line to change what osk trusts.\n"
+	iniStamp = "# Written by osk-dns-watcher init at 2026-11-15 14:02:07 UTC from what the servers gave. Edit a line to change what osk-dns-watcher trusts.\n"
 
 	// iniMark is in the webhook URL, so that a test can find every copy of it.
 	iniMark = "q7Zm2Kx9Tv4P"
@@ -550,7 +550,7 @@ func iniNew(t *testing.T, answers ...string) *iniSetup {
 	t.Setenv("TMPDIR", tmp)
 	t.Chdir(cwd)
 	s := &iniSetup{t: t, dir: dir, folder: filepath.Join(dir, "setup"), watched: []string{dir, home, tmp, cwd}}
-	s.config = filepath.Join(s.folder, "osk.json")
+	s.config = filepath.Join(s.folder, "config.json")
 	s.roots = []*iniRoot{iniStartRoot(t, iniQR|iniAA, true, true), iniStartRoot(t, iniQR|iniAA, true, true)}
 	s.runner = &iniRunner{}
 	s.out = &iniOut{}
@@ -654,7 +654,7 @@ func (s *iniSetup) nothingWritten() {
 // gives their texts by name.
 func (s *iniSetup) written(domains ...string) map[string]string {
 	s.t.Helper()
-	want := []string{"osk.json", "slack-url"}
+	want := []string{"config.json", "slack-url"}
 	for _, d := range domains {
 		want = append(want, strings.TrimSuffix(d, ".")+".expect")
 	}
@@ -705,7 +705,7 @@ func (s *iniSetup) holding(text string) []string {
 // iniBlock is how init shows the snapshot of one domain.
 func iniBlock(d string, lines []string, skips ...string) string {
 	var b strings.Builder
-	b.WriteString("\n" + d + " as osk sees it now. Once you confirm, osk alerts when the servers differ from these lines:\n")
+	b.WriteString("\n" + d + " as osk-dns-watcher sees it now. Once you confirm, osk-dns-watcher alerts when the servers differ from these lines:\n")
 	for _, l := range lines {
 		b.WriteString("  " + l + "\n")
 	}
@@ -735,7 +735,7 @@ func iniSetsWarning(d string, sets ...expect.NSSource) string {
 		}
 	}
 	b.WriteString("If a name in these sets is not one of your nameservers, do not type yes. Else make the sets equal " +
-		"at your registrar and DNS provider, then run osk snapshot " + d + " and put its NS line in the file.\n")
+		"at your registrar and DNS provider, then run osk-dns-watcher snapshot " + d + " and put its NS line in the file.\n")
 	return b.String()
 }
 
@@ -749,7 +749,7 @@ func (s *iniSetup) warnings() string {
 		for _, a := range s.init.RootServers {
 			roots = append(roots, iniRootText(a))
 		}
-		w += "warning network.root_servers is set: osk starts its walk at " + strings.Join(roots, ", ") +
+		w += "warning network.root_servers is set: osk-dns-watcher starts its walk at " + strings.Join(roots, ", ") +
 			" instead of the root servers of the internet, so these servers decide every answer. Use it only in a lab or a private network.\n"
 	}
 	if len(s.init.ExtraRanges) > 0 {
@@ -757,7 +757,7 @@ func (s *iniSetup) warnings() string {
 		for _, p := range s.init.ExtraRanges {
 			ranges = append(ranges, p.String())
 		}
-		w += "warning network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to " +
+		w += "warning network.extra_ranges is set: data from DNS can now make osk-dns-watcher send queries and HTTPS requests for MTA-STS policy files to " +
 			strings.Join(ranges, ", ") + ". Use it only in a lab or a private network.\n"
 	}
 	return w
@@ -845,7 +845,7 @@ func iniList(items []string) string {
 // blanks, and the lines under "Not watched, and why".
 func iniShown(out, d string) (lines, skips []string) {
 	all := strings.Split(out, "\n")
-	i := slices.Index(all, d+" as osk sees it now. Once you confirm, osk alerts when the servers differ from these lines:")
+	i := slices.Index(all, d+" as osk-dns-watcher sees it now. Once you confirm, osk-dns-watcher alerts when the servers differ from these lines:")
 	if i < 0 {
 		return nil, nil
 	}
@@ -897,7 +897,7 @@ func iniSame(t *testing.T, what, got, want string) {
 
 // iniNoFindings checks that a check run right after init finds nothing in a
 // set that init wrote: decide judges each observation that init made of a
-// written set against the file as osk reads it.
+// written set against the file as osk-dns-watcher reads it.
 func iniNoFindings(t *testing.T, data string, seen []obs.Observation) {
 	t.Helper()
 	f, err := expect.Parse([]byte(data))
@@ -996,7 +996,7 @@ func TestInitWritesTheFilesItNamesPrivately(t *testing.T) {
 			t.Errorf("its mode is %v", info.Mode())
 		}
 	}
-	iniSame(t, "osk.json", files["osk.json"], s.configText(d))
+	iniSame(t, "config.json", files["config.json"], s.configText(d))
 	if files["slack-url"] != iniURL+"\n" {
 		t.Errorf("slack-url holds %q; want the URL and a line end", files["slack-url"])
 	}
@@ -1005,7 +1005,7 @@ func TestInitWritesTheFilesItNamesPrivately(t *testing.T) {
 	}
 }
 
-// The config is one that osk reads: it names each expectations file and the
+// The config is one that osk-dns-watcher reads: it names each expectations file and the
 // file of the URL, which give the domain's lines and the URL itself.
 func TestInitWritesAConfigThatOskReads(t *testing.T) {
 	s := iniNew(t, "example.com", iniURL, "yes")
@@ -1033,10 +1033,10 @@ func TestInitWritesAConfigThatOskReads(t *testing.T) {
 	if len(problems) != 0 {
 		t.Fatalf("Domain.Read: %v", problems)
 	}
-	iniSame(t, "the file as osk reads it", f.String(), strings.Join(iniLines("example.com."), "\n")+"\n")
+	iniSame(t, "the file as osk-dns-watcher reads it", f.String(), strings.Join(iniLines("example.com."), "\n")+"\n")
 }
 
-// The expectations file holds what the dialogue showed, under the stamp; osk
+// The expectations file holds what the dialogue showed, under the stamp; osk-dns-watcher
 // prints it back to the same text, and a check right after init finds
 // nothing in it.
 func TestInitWritesTheLinesItShowed(t *testing.T) {
@@ -1189,10 +1189,10 @@ func TestInitAsksAgainForDomainsThatAreNotValid(t *testing.T) {
 	for _, c := range []struct{ answer, problem string }{
 		{"a..b example.com", iniNameProblem(t, "a..b")},
 		{long, iniNameProblem(t, long)},
-		{".", "osk does not watch the root. Try again.\n"},
-		{"example.com .", "osk does not watch the root. Try again.\n"},
+		{".", "osk-dns-watcher does not watch the root. Try again.\n"},
+		{"example.com .", "osk-dns-watcher does not watch the root. Try again.\n"},
 		{"", "Name at least one domain. Try again.\n"},
-		{many, "osk watches at most 100 domains. Try again.\n"},
+		{many, "osk-dns-watcher watches at most 100 domains. Try again.\n"},
 	} {
 		want.WriteString(iniDomainsQ + c.answer + "\n" + c.problem)
 	}
@@ -1252,7 +1252,7 @@ func TestInitCleansAndDeduplicatesTheDomains(t *testing.T) {
 	iniSame(t, "the dialogue", out,
 		s.shown(answer, iniBlock(a, iniLines(a), iniAliasSkip(a)), iniBlock(b, iniLines(b), iniAliasSkip(b)))+"yes\n"+s.wrote(a, b))
 	files := s.written(a, b)
-	iniSame(t, "osk.json", files["osk.json"], s.configText(a, b))
+	iniSame(t, "config.json", files["config.json"], s.configText(a, b))
 	keys := s.runner.keys()
 	slices.Sort(keys)
 	if want := slices.Concat(iniKeys(a, true), iniKeys(b, true)); !slices.Equal(keys, slices.Sorted(slices.Values(want))) {
@@ -1266,11 +1266,11 @@ func TestInitTakesAtMostHundredDomains(t *testing.T) {
 	hundred := strings.Join(append(iniDomainsList(100), "D0.test."), " ")
 	s := iniNew(t, many, hundred, iniURL, "no")
 	code, out := s.run()
-	start := iniHello + iniDomainsQ + many + "\nosk watches at most 100 domains. Try again.\n" + iniDomainsQ + hundred + "\n" + iniURLQ + "[hidden]\n"
+	start := iniHello + iniDomainsQ + many + "\nosk-dns-watcher watches at most 100 domains. Try again.\n" + iniDomainsQ + hundred + "\n" + iniURLQ + "[hidden]\n"
 	if code != 1 || !strings.HasPrefix(out, start) {
 		t.Errorf("exit code %d, output starts:\n%s\nwant 1, and 101 domains asked again, 100 taken", code, out[:min(len(out), len(start)+100)])
 	}
-	if n := strings.Count(out, " as osk sees it now."); n != 100 {
+	if n := strings.Count(out, " as osk-dns-watcher sees it now."); n != 100 {
 		t.Errorf("init showed %d domains; want 100", n)
 	}
 	if n := s.runner.count(); n != 1400 {
@@ -1279,7 +1279,7 @@ func TestInitTakesAtMostHundredDomains(t *testing.T) {
 	s.nothingWritten()
 }
 
-// The checks of a domain are those of "osk snapshot" for the six sets, www,
+// The checks of a domain are those of "osk-dns-watcher snapshot" for the six sets, www,
 // the DMARC and MTA-STS names, the two challenge names and the wildcard name,
 // with the interval of the faster checks, and they run at once: the observer
 // answers no check before all fourteen have started.
@@ -1339,7 +1339,7 @@ func TestInitLeavesOutTheChecksUnderALongName(t *testing.T) {
 	// Its mail host could not be a name either.
 	s.runner.over = map[string][]obs.Answer{iniKey(d, d, dnswire.TypeMX): iniBoth(iniRecords(d, dnswire.TypeMX, "10 mail.example.net."))}
 	code, out := s.run()
-	if code != 1 || !strings.Contains(out, d+" as osk sees it now.") {
+	if code != 1 || !strings.Contains(out, d+" as osk-dns-watcher sees it now.") {
 		t.Errorf("exit code %d, output:\n%s\nwant 1 and the snapshot of %s", code, out, d)
 	}
 	keys := s.runner.keys()
@@ -1350,7 +1350,7 @@ func TestInitLeavesOutTheChecksUnderALongName(t *testing.T) {
 }
 
 func iniNoAnswer(d, reasons string) string {
-	return "osk got no answer about " + d + " from its parent zone (" + reasons +
+	return "osk-dns-watcher got no answer about " + d + " from its parent zone (" + reasons +
 		"). Check the name, and that this machine may send DNS queries (port 53) to the internet."
 }
 
@@ -1719,7 +1719,7 @@ func TestInitRefusesAnExistingSetup(t *testing.T) {
 				t.Fatal(err)
 			}
 			code, out := s.run()
-			if want := "osk is set up already: " + s.config + " exists. Nothing to ask.\n"; code != 0 || out != want {
+			if want := "osk-dns-watcher is set up already: " + s.config + " exists. Nothing to ask.\n"; code != 0 || out != want {
 				t.Errorf("exit code %d, output %q; want 0 and %q", code, out, want)
 			}
 			if typed := s.in.typed(); typed != 0 || s.runner.count() != 0 {
@@ -1741,13 +1741,13 @@ func TestInitWritesAnEmptyListForAFlagNotGiven(t *testing.T) {
 		t.Errorf("exit code %d; want 0", code)
 	}
 	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
-	iniSame(t, "osk.json", s.written(d)["osk.json"], s.configText(d))
+	iniSame(t, "config.json", s.written(d)["config.json"], s.configText(d))
 	if _, problems := config.Read(s.config); len(problems) != 0 {
 		t.Errorf("config.Read: %v", problems)
 	}
 }
 
-// Flags that make a config osk refuses stop init before the question.
+// Flags that make a config osk-dns-watcher refuses stop init before the question.
 func TestInitStopsWhenTheFlagsMakeAConfigThatOskRefuses(t *testing.T) {
 	s := iniNew(t, "example.com", iniURL, "yes")
 	for port := range 15 {
@@ -1757,8 +1757,8 @@ func TestInitStopsWhenTheFlagsMakeAConfigThatOskRefuses(t *testing.T) {
 	lines := iniLinesOf(out)
 	n := len(lines)
 	if code != 1 || n < 2 || lines[n-1] != strings.TrimSuffix(iniNothing, "\n") ||
-		!strings.HasPrefix(lines[n-2], "osk: ") || !strings.Contains(lines[n-2], "want at most 16 root servers") {
-		t.Errorf("exit code %d, output:\n%s\nwant 1, the problem of the root servers as \"osk: ...\" and %q", code, out, iniNothing)
+		!strings.HasPrefix(lines[n-2], "osk-dns-watcher: ") || !strings.Contains(lines[n-2], "want at most 16 root servers") {
+		t.Errorf("exit code %d, output:\n%s\nwant 1, the problem of the root servers as \"osk-dns-watcher: ...\" and %q", code, out, iniNothing)
 	}
 	if strings.Contains(out, "Type yes") {
 		t.Errorf("init asked for yes")
@@ -1810,8 +1810,8 @@ func TestInitDoesNotReplaceAConfigWrittenMeanwhile(t *testing.T) {
 	}
 	code, out := s.run()
 	lines := iniLinesOf(out)
-	if code != 1 || len(lines) == 0 || !strings.HasPrefix(lines[len(lines)-1], "osk: ") || !strings.Contains(out, "Type yes: ") {
-		t.Errorf("exit code %d, output:\n%s\nwant 1, and a last line \"osk: ...\" after the question", code, out)
+	if code != 1 || len(lines) == 0 || !strings.HasPrefix(lines[len(lines)-1], "osk-dns-watcher: ") || !strings.Contains(out, "Type yes: ") {
+		t.Errorf("exit code %d, output:\n%s\nwant 1, and a last line \"osk-dns-watcher: ...\" after the question", code, out)
 	}
 	if data, err := os.ReadFile(s.config); err != nil || string(data) != other {
 		t.Errorf("the config now holds %q, %v; want %q", data, err, other)
@@ -1830,8 +1830,8 @@ func TestInitWriteErrorLeavesNoConfig(t *testing.T) {
 	}
 	code, out := s.run()
 	lines := iniLinesOf(out)
-	if code != 1 || len(lines) == 0 || !strings.HasPrefix(lines[len(lines)-1], "osk: ") || !strings.Contains(out, "Type yes: ") {
-		t.Errorf("exit code %d, output:\n%s\nwant 1, and a last line \"osk: ...\" after the question", code, out)
+	if code != 1 || len(lines) == 0 || !strings.HasPrefix(lines[len(lines)-1], "osk-dns-watcher: ") || !strings.Contains(out, "Type yes: ") {
+		t.Errorf("exit code %d, output:\n%s\nwant 1, and a last line \"osk-dns-watcher: ...\" after the question", code, out)
 	}
 	if _, err := os.Lstat(s.config); err == nil {
 		t.Errorf("a config was written")
@@ -1845,19 +1845,19 @@ func TestInitWriteErrorLeavesNoConfig(t *testing.T) {
 // to its folder.
 func TestInitGivesAbsolutePathsForARelativeConfig(t *testing.T) {
 	s := iniNew(t, "example.com", iniURL, "yes")
-	s.init.Config = filepath.Join("setup", "osk.json")
+	s.init.Config = filepath.Join("setup", "config.json")
 	folder, err := filepath.Abs("setup")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.folder, s.config = folder, filepath.Join(folder, "osk.json")
+	s.folder, s.config = folder, filepath.Join(folder, "config.json")
 	code, out := s.run()
 	d := "example.com."
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
 	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
-	iniSame(t, "osk.json", s.written(d)["osk.json"], s.configText(d))
+	iniSame(t, "config.json", s.written(d)["config.json"], s.configText(d))
 }
 
 // --- the challenge names and the wildcard name ---
@@ -1873,7 +1873,7 @@ func iniLongName(t *testing.T, n int) string {
 	return d
 }
 
-// The names under the domain follow www in the order that osk snapshot
+// The names under the domain follow www in the order that osk-dns-watcher snapshot
 // gives its sets, and every one is a records check.
 func TestLookKeysAsksTheChallengeAndWildcardNamesAfterWWW(t *testing.T) {
 	d := "example.com."

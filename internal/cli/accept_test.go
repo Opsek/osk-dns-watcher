@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // cliAcceptCorp has comments, a blank line, columns of blanks and tabs and
@@ -42,7 +42,7 @@ const cliAcceptShop = "domain shop.test.\nshop.test. NS ns1.dnshost.test. | ns2.
 // cliToWrite is the last line of a dry run of accept for the alert id whose
 // change of file replaces old (none: "") by line.
 func cliToWrite(w *cliWorld, id int64, file, old, line string) string {
-	return "To write this change: osk accept --config " + w.config + " --write " + cliChangeCode(id, file, old, line) + " " + strconv.FormatInt(id, 10)
+	return "To write this change: osk-dns-watcher accept --config " + w.config + " --write " + cliChangeCode(id, file, old, line) + " " + strconv.FormatInt(id, 10)
 }
 
 // cliAnyCode is a value of --write for a refusal, which comes before the
@@ -227,7 +227,7 @@ func TestAcceptWriteReplacesTheLineAtomicallyAndKeepsTheMode(t *testing.T) {
 
 	// The alert is still open, but the file no longer holds what it expected.
 	code, out, errOut = cliAccept(w, strconv.FormatInt(ids["www"], 10))
-	if want := "osk: the file changed since this alert: www.corp.test. A is now 10.53.0.99\n"; code != 1 || out != "" || errOut != want {
+	if want := "osk-dns-watcher: the file changed since this alert: www.corp.test. A is now 10.53.0.99\n"; code != 1 || out != "" || errOut != want {
 		t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 	}
 
@@ -330,13 +330,13 @@ func TestAcceptRefusesWhatItCannotAcceptAndChangesNothing(t *testing.T) {
 	} {
 		for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(ids[c.name], 10))...)
-			if want := "osk: " + c.want + "\n"; code != 1 || out != "" || errOut != want {
+			if want := "osk-dns-watcher: " + c.want + "\n"; code != 1 || out != "" || errOut != want {
 				t.Errorf("accept %q of %s: exit code %d, output %q, errors %q; want 1, nothing and %q", args, c.name, code, out, errOut, want)
 			}
 		}
 	}
 	code, out, errOut := cliAccept(w, "--write", cliAnyCode, "999")
-	if want := "osk: store: no alert 999\n"; code != 1 || out != "" || errOut != want {
+	if want := "osk-dns-watcher: store: no alert 999\n"; code != 1 || out != "" || errOut != want {
 		t.Errorf("accept of an unknown id: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 	}
 	if cliRead(t, w.corp) != cliAcceptCorp || cliRead(t, w.shop) != cliAcceptShop {
@@ -354,7 +354,7 @@ func TestAcceptPrintsTheProblemsOfAnExpectationsFileThatIsNotValid(t *testing.T)
 	}
 	var want []string
 	for _, p := range bad.Problems {
-		want = append(want, fmt.Sprintf("osk: %s:%d: %s", w.corp, p.Line, p.Text))
+		want = append(want, fmt.Sprintf("osk-dns-watcher: %s:%d: %s", w.corp, p.Line, p.Text))
 	}
 	code, out, errOut := cliAccept(w, "--write", cliAnyCode, strconv.FormatInt(ids["www"], 10))
 	if code != 1 || out != "" || errOut != cliLines(want...) {
@@ -391,7 +391,7 @@ func TestAcceptRefusesAnExpectationsFileThatIsNotRegular(t *testing.T) {
 	}()
 	select {
 	case o := <-done:
-		if want := "osk: " + w.corp + ": is not a regular file\n"; o.code != 1 || o.out != "" || o.errOut != want {
+		if want := "osk-dns-watcher: " + w.corp + ": is not a regular file\n"; o.code != 1 || o.out != "" || o.errOut != want {
 			t.Errorf("exit code %d, output %q, errors %q; want 1, nothing and %q", o.code, o.out, o.errOut, want)
 		}
 	case <-time.After(2 * time.Second):
@@ -575,7 +575,7 @@ func TestAcceptWritesOnlyTheChangeThatTheDryRunPrinted(t *testing.T) {
 	const old = "WWW.Corp.Test.\tA\t10.53.0.81"
 	seen := cliChangeCode(ids["www"], w.corp, old, "www.corp.test. A 10.53.0.99")
 	code, out, errOut := cliAccept(w, id)
-	if want := "To write this change: osk accept --config " + w.config + " --write " + seen + " " + id; code != 0 || errOut != "" ||
+	if want := "To write this change: osk-dns-watcher accept --config " + w.config + " --write " + seen + " " + id; code != 0 || errOut != "" ||
 		!strings.HasSuffix(out, "\n"+want+"\n") {
 		t.Fatalf("accept %s: exit code %d, output:\n%s\nerrors %q; want 0, the change and the line %q", id, code, out, errOut, want)
 	}
@@ -589,7 +589,7 @@ func TestAcceptWritesOnlyTheChangeThatTheDryRunPrinted(t *testing.T) {
 		cliApply(t, s, cliT0.Add(time.Minute), cliEvent(alert.EventUpdate, a, a.Severity, cliT0.Add(time.Minute)))
 	})
 	code, out, errOut = cliAccept(w, "--write", seen, id)
-	if want := "osk: the alert changed since you looked; run osk accept " + id + " again\n"; code != 1 || out != "" || errOut != want {
+	if want := "osk-dns-watcher: the alert changed since you looked; run osk-dns-watcher accept " + id + " again\n"; code != 1 || out != "" || errOut != want {
 		t.Errorf("accept --write with the code of the old set: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 	}
 	if cliRead(t, w.corp) != cliAcceptCorp {
@@ -603,10 +603,10 @@ func TestAcceptWritesOnlyTheChangeThatTheDryRunPrinted(t *testing.T) {
 	}
 
 	// --write takes the code; without it the use is wrong.
-	if code, out, errOut := cliAccept(w, id, "--write"); code != 2 || out != "" || !strings.HasPrefix(errOut, "osk accept: ") {
+	if code, out, errOut := cliAccept(w, id, "--write"); code != 2 || out != "" || !strings.HasPrefix(errOut, "osk-dns-watcher accept: ") {
 		t.Errorf("accept %s --write: exit code %d, output %q, errors %q; want 2, nothing and the wrong use", id, code, out, errOut)
 	}
-	if code, out, errOut := cliAccept(w, "--write"); code != 2 || out != "" || !strings.HasPrefix(errOut, "osk accept: ") {
+	if code, out, errOut := cliAccept(w, "--write"); code != 2 || out != "" || !strings.HasPrefix(errOut, "osk-dns-watcher accept: ") {
 		t.Errorf("accept --write: exit code %d, output %q, errors %q; want 2, nothing and the wrong use", code, out, errOut)
 	}
 }
@@ -692,7 +692,7 @@ func TestAcceptCodeCoversTheWholeChange(t *testing.T) {
 	if out := show("192.0.2.77 | 201.142.3.60 | 223.0.0.5", cliT0.Add(2*time.Minute)); !strings.HasSuffix(out, " --write "+forgedCode+" "+id+"\n") {
 		t.Errorf("the dry run of %s gave:\n%s\nwant the code %s", forged, out, forgedCode)
 	}
-	refused := "osk: the alert changed since you looked; run osk accept " + id + " again\n"
+	refused := "osk-dns-watcher: the alert changed since you looked; run osk-dns-watcher accept " + id + " again\n"
 	for _, c := range []string{seenCode, short(seen)} {
 		if code, out, errOut := cliAccept(w, "--write", c, id); code != 1 || out != "" || errOut != refused {
 			t.Errorf("accept --write %s: exit code %d, output %q, errors %q; want 1, nothing and %q", c, code, out, errOut, refused)
@@ -768,8 +768,8 @@ func TestAcceptRefusesGlueAndGoneAlerts(t *testing.T) {
 		id   int64
 		want string
 	}{
-		{"glue", glue, "osk: accept cannot change the file for a glue alert: edit the address line of each nameserver host that differs\n"},
-		{"gone", gone, "osk: accept cannot change the file for a gone alert: nothing to accept: the domain must exist at the parent zone\n"},
+		{"glue", glue, "osk-dns-watcher: accept cannot change the file for a glue alert: edit the address line of each nameserver host that differs\n"},
+		{"gone", gone, "osk-dns-watcher: accept cannot change the file for a gone alert: nothing to accept: the domain must exist at the parent zone\n"},
 	} {
 		for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(c.id, 10))...)
@@ -798,17 +798,17 @@ func TestAcceptRefusesTheDanglingRules(t *testing.T) {
 		want     string
 	}{
 		{decide.RuleDisagree, decide.SeverityMedium, rec("www.corp.test.", dnswire.TypeA), "in 10.53.0.0/24", "10.53.0.81",
-			"osk: accept cannot change the file for a disagree alert: nothing to accept: the servers give different sets; find the server that is wrong\n"},
+			"osk-dns-watcher: accept cannot change the file for a disagree alert: nothing to accept: the servers give different sets; find the server that is wrong\n"},
 		{decide.RuleAliasTarget, decide.SeverityHigh, rec("edge.dnshost.test.", dnswire.TypeA), "cdn.corp.test. CNAME edge.dnshost.test.", "no such name",
-			"osk: accept cannot change the file for an alias-target alert: nothing to accept: the name does not exist; change or remove the line that points at it\n"},
+			"osk-dns-watcher: accept cannot change the file for an alias-target alert: nothing to accept: the name does not exist; change or remove the line that points at it\n"},
 		{decide.RuleNameServerHost, decide.SeverityCritical, rec("ns3.dnshost.test.", dnswire.TypeA), "corp.test. NS ns3.dnshost.test.", "no such name",
-			"osk: accept cannot change the file for a nameserver-host alert: nothing to accept: the nameserver does not exist; change the delegation and the NS line\n"},
+			"osk-dns-watcher: accept cannot change the file for a nameserver-host alert: nothing to accept: the nameserver does not exist; change the delegation and the NS line\n"},
 		{decide.RuleMailTarget, decide.SeverityHigh, rec("mx.dnshost.test.", dnswire.TypeA), "corp.test. MX mx.dnshost.test.", "no such name",
-			"osk: accept cannot change the file for a mail-target alert: nothing to accept: the name does not exist; change or remove the line that points at it\n"},
+			"osk-dns-watcher: accept cannot change the file for a mail-target alert: nothing to accept: the name does not exist; change or remove the line that points at it\n"},
 		{decide.RuleChallenge, decide.SeverityHigh, rec("_acme-challenge.corp.test.", dnswire.TypeTXT), "none", `"t0ken1"`,
-			"osk: accept cannot change the file for a challenge alert: a challenge record changes with each certificate request; remove the line by hand if you use DNS challenges\n"},
+			"osk-dns-watcher: accept cannot change the file for a challenge alert: a challenge record changes with each certificate request; remove the line by hand if you use DNS challenges\n"},
 		{decide.RuleWildcard, decide.SeverityMedium, rec("corp.test.", dnswire.TypeA), "none", "10.53.0.66",
-			"osk: accept cannot change the file for a wildcard alert: write the lines of the wildcard by hand\n"},
+			"osk-dns-watcher: accept cannot change the file for a wildcard alert: write the lines of the wildcard by hand\n"},
 	}
 	ids := make([]int64, len(cases))
 	cliStore(t, w.state, func(s *store.Store) {
@@ -924,7 +924,7 @@ func TestAcceptEditsOrAppendsTheCAALine(t *testing.T) {
 			// The file now holds the set that the servers show, not the one that
 			// the alert expected.
 			code, out, errOut = cliAccept(w, idText)
-			wantErr := "osk: the file changed since this alert: the CAA policy for " + c.check + " is now " + form + "\n"
+			wantErr := "osk-dns-watcher: the file changed since this alert: the CAA policy for " + c.check + " is now " + form + "\n"
 			if code != 1 || out != "" || errOut != wantErr {
 				t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, wantErr)
 			}
@@ -970,7 +970,7 @@ func TestAcceptRefusesACAAAlertThatItCannotChange(t *testing.T) {
 			})
 			for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 				code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
-				if want := "osk: " + c.want + "\n"; code != 1 || out != "" || errOut != want {
+				if want := "osk-dns-watcher: " + c.want + "\n"; code != 1 || out != "" || errOut != want {
 					t.Errorf("accept %q: exit code %d, output %q, errors %q; want 1, nothing and %q", args, code, out, errOut, want)
 				}
 			}
@@ -1001,7 +1001,7 @@ func TestAcceptRefusesAnIssuerAlert(t *testing.T) {
 	w := cliNewWorld(t, false)
 	id := crtOpenAlert(t, w, decide.RuleIssuer, decide.SeverityHigh, "corp.test.",
 		`corp.test. CAA 0 issue "ca.test"`, "www.corp.test. from evil.test")
-	const want = "osk: accept cannot change the file for an issuer alert: the CAA lines and the issuer lines of the file decide which authorities may issue; change them by hand, or have the certificate revoked if it is not yours\n"
+	const want = "osk-dns-watcher: accept cannot change the file for an issuer alert: the CAA lines and the issuer lines of the file decide which authorities may issue; change them by hand, or have the certificate revoked if it is not yours\n"
 	for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 		code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
 		if code != 1 || out != "" || errOut != want {
@@ -1095,7 +1095,7 @@ func TestAcceptAppendsOneCertnameLineForEachUnknownName(t *testing.T) {
 
 			// The file lists every name now.
 			code, out, errOut = cliAccept(w, idText)
-			if want := "osk: the file lists every name of this alert now\n"; code != 1 || out != "" || errOut != want {
+			if want := "osk-dns-watcher: the file lists every name of this alert now\n"; code != 1 || out != "" || errOut != want {
 				t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 			}
 		})
@@ -1139,7 +1139,7 @@ func TestAcceptSaysThatTheFileListsEveryName(t *testing.T) {
 	for _, id := range []int64{wild, hosts} {
 		for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 			code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
-			if want := "osk: the file lists every name of this alert now\n"; code != 1 || out != "" || errOut != want {
+			if want := "osk-dns-watcher: the file lists every name of this alert now\n"; code != 1 || out != "" || errOut != want {
 				t.Errorf("accept %q of alert %d: exit code %d, output %q, errors %q; want 1, nothing and %q", args, id, code, out, errOut, want)
 			}
 		}
@@ -1209,7 +1209,7 @@ func TestAcceptEditsTheLineOfAMailRule(t *testing.T) {
 
 			// The file now holds the set that the servers show.
 			code, out, errOut = cliAccept(w, idText)
-			wantErr := "osk: the file changed since this alert: " + c.owner + " TXT is now " + c.seen + "\n"
+			wantErr := "osk-dns-watcher: the file changed since this alert: " + c.owner + " TXT is now " + c.seen + "\n"
 			if code != 1 || out != "" || errOut != wantErr {
 				t.Errorf("accept again: exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, wantErr)
 			}
@@ -1247,7 +1247,7 @@ func TestAcceptRefusesAMailRuleThatItCannotChange(t *testing.T) {
 			id := emlaOpen(t, w, decide.RuleDMARC, "_dmarc.corp.test.", `"v=DMARC1; p=reject"`, c.seen...)
 			for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 				code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
-				if want := "osk: " + c.error + "\n"; code != 1 || out != "" || errOut != want {
+				if want := "osk-dns-watcher: " + c.error + "\n"; code != 1 || out != "" || errOut != want {
 					t.Errorf("accept %q: exit code %d, output %q, errors %q; want 1, nothing and %q", args, code, out, errOut, want)
 				}
 			}
@@ -1269,7 +1269,7 @@ func TestAcceptWriteOfAMailRuleNeedsTheCodeOfItsChange(t *testing.T) {
 	idText := strconv.FormatInt(id, 10)
 	for _, code := range []string{cliAnyCode, cliChangeCode(id, w.corp, old, `corp.test. TXT "v=spf1 +all"`)} {
 		c, out, errOut := cliAccept(w, "--write", code, idText)
-		if want := "osk: the alert changed since you looked; run osk accept " + idText + " again\n"; c != 1 || out != "" || errOut != want {
+		if want := "osk-dns-watcher: the alert changed since you looked; run osk-dns-watcher accept " + idText + " again\n"; c != 1 || out != "" || errOut != want {
 			t.Errorf("--write %s: exit code %d, output %q, errors %q; want 1, nothing and %q", code, c, out, errOut, want)
 		}
 	}

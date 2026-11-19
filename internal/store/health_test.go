@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // ntcNow is the time at which the health tests look. Rows and beats are
@@ -94,7 +94,7 @@ func ntcEnded(state RowState, reason string, at time.Time) Done {
 func TestProblemsNamesEachProblemInOrder(t *testing.T) {
 	now := ntcNow
 	old := now.Add(-30*time.Second - time.Nanosecond)
-	since := "no beat from osk run since " + old.UTC().Format("2006-01-02 15:04:05") + " UTC"
+	since := "no beat from osk-dns-watcher run since " + old.UTC().Format("2006-01-02 15:04:05") + " UTC"
 	for _, c := range []struct {
 		name string
 		h    Health
@@ -102,7 +102,7 @@ func TestProblemsNamesEachProblemInOrder(t *testing.T) {
 	}{
 		{"a beat 30s old and pending rows that do not fail", Health{Beat: now.Add(-30 * time.Second),
 			Channels: []ChannelHealth{{Name: "slack", Pending: 3}}}, nil},
-		{"no beat yet", Health{}, []string{"no beat from osk run yet"}},
+		{"no beat yet", Health{}, []string{"no beat from osk-dns-watcher run yet"}},
 		{"a beat 30s and 1ns old", Health{Beat: old}, []string{since}},
 		{"the old beat in another zone", Health{Beat: old.In(stoZone)}, []string{since}},
 		{"a beat ahead of now", Health{Beat: now.Add(time.Minute)}, nil},
@@ -111,7 +111,7 @@ func TestProblemsNamesEachProblemInOrder(t *testing.T) {
 			{Name: "siem", Failing: true}, {Name: "slack"}, {Name: "hook", Failing: true, Reason: "status 503"}}},
 			[]string{"channel siem fails", "channel hook fails"}},
 		{"every problem", Health{Late: []string{"a", "b"}, Channels: []ChannelHealth{{Name: "slack", Failing: true}}},
-			[]string{"no beat from osk run yet", "2 checks late", "channel slack fails"}},
+			[]string{"no beat from osk-dns-watcher run yet", "2 checks late", "channel slack fails"}},
 	} {
 		if got := c.h.Problems(now); !slices.Equal(got, c.want) {
 			t.Errorf("%s: Problems = %q, want %q", c.name, got, c.want)
@@ -373,9 +373,9 @@ func TestHealthProperty(t *testing.T) {
 		var problems []string
 		switch {
 		case beat.IsZero():
-			problems = append(problems, "no beat from osk run yet")
+			problems = append(problems, "no beat from osk-dns-watcher run yet")
 		case now.Sub(beat) > 30*time.Second:
-			problems = append(problems, "no beat from osk run since "+beat.UTC().Format("2006-01-02 15:04:05")+" UTC")
+			problems = append(problems, "no beat from osk-dns-watcher run since "+beat.UTC().Format("2006-01-02 15:04:05")+" UTC")
 		}
 		if len(late) > 0 {
 			problems = append(problems, fmt.Sprintf("%d checks late", len(late)))

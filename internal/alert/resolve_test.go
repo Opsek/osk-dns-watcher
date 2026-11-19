@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
 )
 
 // rsvChange is a finding of the identity of a with another Expected, and

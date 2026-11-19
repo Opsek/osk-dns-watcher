@@ -3,7 +3,7 @@ package decide
 import (
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 func TestIsWildcardOwner(t *testing.T) {

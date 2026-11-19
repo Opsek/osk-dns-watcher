@@ -1,6 +1,6 @@
 #!/bin/sh
 # Makes the files of a release in the new folder out/release/<version>/:
-# osk-linux-amd64 and osk-linux-arm64, each built by build/static.sh in the
+# osk-dns-watcher-linux-amd64 and osk-dns-watcher-linux-arm64, each built by build/static.sh in the
 # build container of its platform, then CONTENTS and SHA256SUMS
 # (release/contents.sh). Runs on the host, where git is:
 #
@@ -26,7 +26,7 @@ sh build/version.sh "$version" || exit 2
 DOCKER=${DOCKER:-docker}
 repo=$(pwd)
 out=out/release/$version
-sum=$(cksum <gate/Dockerfile) || exit 2
+sum=$(cksum <dev/gate/Dockerfile) || exit 2
 image=osk-gate:${sum%% *}
 
 commit=$(git rev-parse --verify 'HEAD^{commit}') || stop "cannot read the commit; run this in a git checkout"

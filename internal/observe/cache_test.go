@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // walkCut is the cut name with one server, learned at the time given.

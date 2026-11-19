@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // emmRecordSetAlert is the open record-set alert of the finding that a mail

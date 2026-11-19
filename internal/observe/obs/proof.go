@@ -4,7 +4,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // Server is one address of one name server.

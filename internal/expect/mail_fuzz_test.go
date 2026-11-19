@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // emlFuzzSet cuts data at NUL octets into records, and each record into TXT

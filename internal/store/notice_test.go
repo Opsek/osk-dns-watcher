@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // ntcVersion3 is the schema that every store of version 3 must have, new or
@@ -357,7 +357,7 @@ func TestNewStoreHasTheShapeAndRulesOfVersion3(t *testing.T) {
 // and the store has the shape and the rules of a new store of version 3.
 func TestVersion2StoreIsMigratedToVersion3AndKeepsEveryRow(t *testing.T) {
 	dir := stoDir(t)
-	path := filepath.Join(dir, "osk.db")
+	path := filepath.Join(dir, "state.db")
 	ntcMakeVersion2(t, path)
 	var before string
 	beaWithFile(t, path, func(db *sql.DB) { before = beaRows(t, db) + ntcBeatRows(t, db) })
@@ -406,7 +406,7 @@ func TestFailedMigrationLeavesVersion2StoreAsItWas(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stoDir(t)
-			path := filepath.Join(dir, "osk.db")
+			path := filepath.Join(dir, "state.db")
 			ntcMakeVersion2(t, path)
 			beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, c.plant) })
 			before := ntcFile(t, path)
@@ -435,7 +435,7 @@ func TestFailedMigrationLeavesVersion2StoreAsItWas(t *testing.T) {
 // from 2 to 3 fails is left at version 2, with every row.
 func TestVersion1StoreWhoseUpgradeTo3FailsStaysAtVersion2(t *testing.T) {
 	dir := stoDir(t)
-	path := filepath.Join(dir, "osk.db")
+	path := filepath.Join(dir, "state.db")
 	beaMakeVersion1(t, path)
 	beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, "CREATE TABLE delivery_notice (x INTEGER)") })
 	var before string

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/schedule"
+	"github.com/Opsek/osk-dns-watcher/internal/schedule"
 )
 
 // fzMarker stands for a secret value: no fixed problem text holds it, so
@@ -17,10 +17,10 @@ import (
 const fzMarker = "zq7kx9secretvalue"
 
 const fzFull = `{
-  "state": "/var/lib/osk",
+  "state": "/var/lib/osk-dns-watcher",
   "domains": [
     {"name": "corp.test.", "expect": "corp.test.expect", "fast": ["www.corp.test.", "api.corp.test."]},
-    {"name": "Other.TEST.", "expect": "/etc/osk/other.expect"}
+    {"name": "Other.TEST.", "expect": "/etc/osk-dns-watcher/other.expect"}
   ],
   "intervals": {"serial": "15s", "parent": "1m", "fast": "30s", "other": "5m"},
   "slack": {"url": {"env": "OSK_SLACK_URL"}, "min_severity": "high"},

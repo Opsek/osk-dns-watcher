@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // Slack posts notices to a Slack incoming webhook.
@@ -142,13 +142,13 @@ var wordings = map[decide.Rule]wording{
 	decide.RuleCertName: {
 		phrase:   "a wildcard certificate for {D} holds a name that the expectations do not list",
 		resolved: "no valid certificate for {D} holds an unlisted wildcard",
-		action:   "If you did not ask for it, ask its authority to revoke it: it is valid for every name at its level. If it is yours, run osk accept to list it.",
+		action:   "If you did not ask for it, ask its authority to revoke it: it is valid for every name at its level. If it is yours, run osk-dns-watcher accept to list it.",
 		now:      "no such certificate is valid now",
 	},
 	decide.RuleHostnames: {
 		phrase:   "certificates name hosts under {D} that the expectations do not list",
 		resolved: "every host under {D} on a valid certificate is in the expectations",
-		action:   "Check that each host is yours. Run osk accept to list them, or add a line for each host that osk should watch.",
+		action:   "Check that each host is yours. Run osk-dns-watcher accept to list them, or add a line for each host that osk-dns-watcher should watch.",
 		now:      "no unlisted host on a valid certificate",
 	},
 	decide.RuleRecordSet: {
@@ -260,12 +260,12 @@ func SlackText(e alert.Event) string {
 	w := wordings[e.Alert.Rule]
 	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindCertificates {
 		// The words of a DNS check do not fit a certificate source.
-		w.action = "Find out why osk gets no usable answer from the certificate source; the log of osk names the reason. Until it does, a new certificate is not seen."
+		w.action = "Find out why osk-dns-watcher gets no usable answer from the certificate source; the log of osk-dns-watcher names the reason. Until it does, a new certificate is not seen."
 		w.now = "the source answers"
 	}
 	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindPolicy {
 		// The policy file comes from an HTTPS host, not from the DNS servers.
-		w.action = "Find out why osk cannot fetch the policy file from {N}; the log of osk names the reason. Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
+		w.action = "Find out why osk-dns-watcher cannot fetch the policy file from {N}; the log of osk-dns-watcher names the reason. Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
 	}
 	phrase, action, pointing := w.phrase, w.action, ""
 	if e.Kind == alert.EventResolve {

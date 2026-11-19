@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 const emlSeed = 20261117
@@ -23,7 +23,7 @@ const (
 const (
 	emlTailNeutral = ": receivers treat every sender as neutral"
 	emlTailPerm    = ": receivers give permerror, so no sender fails"
-	emlTailOsk     = ": osk does not read it and counts every sender as neutral"
+	emlTailOsk     = ": osk-dns-watcher does not read it and counts every sender as neutral"
 	emlNoSPF       = "no SPF record" + emlTailNeutral
 	emlBadTerm     = "an SPF term that cannot be read" + emlTailPerm
 	emlNoDMARC     = "no DMARC record: receivers apply no DMARC policy"
@@ -191,11 +191,11 @@ func emlSPFRows() []emlRow {
 		emlS("RFC 7208 4.6 first problem in field order: term first", base, emlSet("v=spf1 mx foo:bar redirect=a.test redirect=b.test"), emlBadTerm),
 		emlS("RFC 7208 4.6 first problem in field order: redirect twice first", base, emlSet("v=spf1 mx redirect=a.test redirect=b.test foo:bar"),
 			"redirect= or exp= given twice"+emlTailPerm),
-		emlS("osk bound 129 terms before the fields are read", base,
+		emlS("osk-dns-watcher bound 129 terms before the fields are read", base,
 			emlSet("v=spf1 foo:bar "+emlTerms(127, func(i int) string { return fmt.Sprintf("ip4:10.1.%d.1", i) })+" -all"), "more than 128 SPF terms"+emlTailOsk),
-		emlS("osk bound 4097 octets with two records", base, emlSet(emlPad("v=spf1 mx -all x=", 4097), "v=spf1 +all"),
+		emlS("osk-dns-watcher bound 4097 octets with two records", base, emlSet(emlPad("v=spf1 mx -all x=", 4097), "v=spf1 +all"),
 			"two or more SPF records"+emlTailPerm),
-		emlS("osk bound a text of 5000 octets that is no record", base, emlSet(emlPad("x=", 5000), "v=spf1 mx -all")).rev(),
+		emlS("osk-dns-watcher bound a text of 5000 octets that is no record", base, emlSet(emlPad("x=", 5000), "v=spf1 mx -all")).rev(),
 		emlS("RFC 7208 6 redirect twice", base, emlSet("v=spf1 mx redirect=a.test redirect=b.test"),
 			"redirect= or exp= given twice"+emlTailPerm),
 		emlS("RFC 7208 6 redirect twice in other case", base, emlSet("v=spf1 mx redirect=a.test REDIRECT=b.test"),
@@ -230,8 +230,8 @@ func emlSPFRows() []emlRow {
 		emlS("RFC 7208 5.1 something to lose", emlSet("v=spf1 include:any.test -all"), emlSet("v=spf1 +all"), "all gives pass in place of fail"),
 		emlS("RFC 7208 4.7 from no record to pass all", nil, emlSet("v=spf1 +all"), "all gives pass in place of neutral"),
 		emlS("RFC 7208 4.7 from no record to fail all", nil, emlSet("v=spf1 -all")),
-		emlS("osk bound 4096 octets accepted", base, emlSet(emlPad("v=spf1 mx -all x=", 4096))).rev(),
-		emlS("osk bound 4097 octets", base, emlSet(emlPad("v=spf1 mx -all x=", 4097)),
+		emlS("osk-dns-watcher bound 4096 octets accepted", base, emlSet(emlPad("v=spf1 mx -all x=", 4096))).rev(),
+		emlS("osk-dns-watcher bound 4097 octets", base, emlSet(emlPad("v=spf1 mx -all x=", 4097)),
 			"an SPF record longer than 4096 octets"+emlTailOsk),
 
 		// Qualifiers and results (RFC 7208 4.6.2, 4.7).
@@ -331,7 +331,7 @@ func emlSPFRows() []emlRow {
 		emlS("RFC 7208 4.5 no record on both sides", nil, emlSet("google-site-verification=x")),
 		emlS("RFC 7208 4.5 empty set both sides", nil, nil),
 
-		// Bounds: terms and lookups (RFC 7208 4.6.4 and osk bounds).
+		// Bounds: terms and lookups (RFC 7208 4.6.4 and osk-dns-watcher bounds).
 		emlS("RFC 7208 4.6.4 ten lookups", emlSet("v=spf1 -all"),
 			emlSet("v=spf1 "+emlTerms(10, func(i int) string { return fmt.Sprintf("-include:i%d.test", i) })+" -all")),
 		emlS("RFC 7208 4.6.4 ten lookups, words", emlSet("v=spf1 -all"),
@@ -364,7 +364,7 @@ func emlSPFRows() []emlRow {
 			"more than 10 SPF terms that need a DNS lookup"+emlTailPerm),
 		emlS("RFC 7208 4.6.4 ten lookups and a redirect beside all", emlSet("v=spf1 -all"),
 			emlSet("v=spf1 "+emlTerms(10, func(i int) string { return fmt.Sprintf("-include:i%d.test", i) })+" redirect=r.test -all")),
-		emlS("osk bound 128 terms", emlSet("v=spf1 -all"),
+		emlS("osk-dns-watcher bound 128 terms", emlSet("v=spf1 -all"),
 			emlSet("v=spf1 "+emlTerms(127, func(i int) string { return fmt.Sprintf("ip4:10.1.%d.1", i) })+" -all"),
 			append(func() []string {
 				var w []string
@@ -373,10 +373,10 @@ func emlSPFRows() []emlRow {
 				}
 				return w
 			}(), "and 116 more")...),
-		emlS("osk bound 129 terms", emlSet("v=spf1 -all"),
+		emlS("osk-dns-watcher bound 129 terms", emlSet("v=spf1 -all"),
 			emlSet("v=spf1 "+emlTerms(128, func(i int) string { return fmt.Sprintf("ip4:10.1.%d.1", i) })+" -all"),
 			"more than 128 SPF terms"+emlTailOsk),
-		emlS("osk bound 128 terms with blanks", emlSet("v=spf1 -all"),
+		emlS("osk-dns-watcher bound 128 terms with blanks", emlSet("v=spf1 -all"),
 			emlSet("v=spf1   "+emlTerms(128, func(int) string { return "-all   " })+" -all"), "more than 128 SPF terms"+emlTailOsk)}
 	// The cap on the words: 12 words stay, 13 give 11 and a count.
 	rows = append(rows,
@@ -402,7 +402,7 @@ func emlSPFRows() []emlRow {
 // emlCNAMEWord is the word for a CNAME at the owner of a policy that is not
 // DKIM.
 func emlCNAMEWord(target string) string {
-	return "a CNAME to " + target + ": another zone holds the record, and osk does not read it"
+	return "a CNAME to " + target + ": another zone holds the record, and osk-dns-watcher does not read it"
 }
 
 // emlSPFCNAMERows: a CNAME hands the record to another zone.
@@ -726,12 +726,12 @@ func emlDMARCRows() []emlRow {
 	}
 	// Bounds: 4096 octets, 32 tags, 16 report addresses.
 	rows = append(rows,
-		emlD("osk bound 4096 octets accepted", was, emlSet(emlPad("v=DMARC1; p=quarantine; x=", 4096)), "p=quarantine in place of p=reject"),
-		emlD("osk bound 4097 octets with two records", was, emlSet(emlPad("v=DMARC1; p=quarantine; x=", 4097), emlDMARCBase),
+		emlD("osk-dns-watcher bound 4096 octets accepted", was, emlSet(emlPad("v=DMARC1; p=quarantine; x=", 4096)), "p=quarantine in place of p=reject"),
+		emlD("osk-dns-watcher bound 4097 octets with two records", was, emlSet(emlPad("v=DMARC1; p=quarantine; x=", 4097), emlDMARCBase),
 			"two or more DMARC records: "+off),
-		emlD("osk bound a text of 5000 octets that is no record", was, emlSet(emlPad("x=", 5000), emlDMARCBase)).rev(),
-		emlD("osk bound 4097 octets", was, emlSet(emlPad("v=DMARC1; p=quarantine; x=", 4097)), "a DMARC record longer than 4096 octets: "+off),
-		emlD("osk bound 32 tags", was, emlSet(emlDMARCBase+"; "+emlTerms(30, func(i int) string { return fmt.Sprintf("x%d=1;", i) })+" pct=10"),
+		emlD("osk-dns-watcher bound a text of 5000 octets that is no record", was, emlSet(emlPad("x=", 5000), emlDMARCBase)).rev(),
+		emlD("osk-dns-watcher bound 4097 octets", was, emlSet(emlPad("v=DMARC1; p=quarantine; x=", 4097)), "a DMARC record longer than 4096 octets: "+off),
+		emlD("osk-dns-watcher bound 32 tags", was, emlSet(emlDMARCBase+"; "+emlTerms(30, func(i int) string { return fmt.Sprintf("x%d=1;", i) })+" pct=10"),
 			"pct=10 in place of pct=100"),
 		emlD("no bound on tags: the 33rd is read", was, emlSet(emlDMARCBase+"; "+emlTerms(31, func(i int) string { return fmt.Sprintf("x%d=1;", i) })+" pct=10"),
 			"pct=10 in place of pct=100"),
@@ -739,14 +739,14 @@ func emlDMARCRows() []emlRow {
 			"pct=10 in place of pct=100"),
 		emlD("no bound on tags: a tag given twice after 38 others", was,
 			emlSet(emlDMARCBase+"; "+emlTerms(38, func(i int) string { return fmt.Sprintf("x%d=1;", i) })+" p=none"), emlTwice("p")),
-		emlD("osk bound 16 report addresses", was, emlSet(emlDMARCBase+"; rua="+emlAddrs(16)),
+		emlD("osk-dns-watcher bound 16 report addresses", was, emlSet(emlDMARCBase+"; rua="+emlAddrs(16)),
 			append(emlRuaWords(11), "and 5 more")...),
-		emlD("osk bound 17 report addresses", was, emlSet(emlDMARCBase+"; rua="+emlAddrs(17)),
+		emlD("osk-dns-watcher bound 17 report addresses", was, emlSet(emlDMARCBase+"; rua="+emlAddrs(17)),
 			append(emlRuaWords(11), "and 5 more")...),
-		emlD("osk bound 12 report addresses", was, emlSet(emlDMARCBase+"; rua="+emlAddrs(12)), emlRuaWords(12)...),
-		emlD("osk bound 17 failure report addresses", was, emlSet(emlDMARCBase+"; ruf="+emlAddrs(17)),
+		emlD("osk-dns-watcher bound 12 report addresses", was, emlSet(emlDMARCBase+"; rua="+emlAddrs(12)), emlRuaWords(12)...),
+		emlD("osk-dns-watcher bound 17 failure report addresses", was, emlSet(emlDMARCBase+"; ruf="+emlAddrs(17)),
 			append(emlRufWords(11), "and 5 more")...),
-		emlD("osk bound 16 addresses lost", emlSet(emlDMARCBase+"; rua="+emlAddrs(16)), was,
+		emlD("osk-dns-watcher bound 16 addresses lost", emlSet(emlDMARCBase+"; rua="+emlAddrs(16)), was,
 			append(emlRuaGoneWords(11), "and 5 more")...),
 	)
 	// A word of 240 octets stays, one of 241 is cut to 237 and "...".
@@ -771,7 +771,7 @@ func emlTwice(tag string) string {
 	return tag + "= given twice with different values: receivers may apply either one"
 }
 
-// emlDMARCTwiceRows: osk reads the first value of a tag, and a receiver that
+// emlDMARCTwiceRows: osk-dns-watcher reads the first value of a tag, and a receiver that
 // keeps the last may read another policy, so a tag that is given twice with
 // different values gets a word, unless the line holds the same duplicate.
 func emlDMARCTwiceRows() []emlRow {
@@ -792,7 +792,7 @@ func emlDMARCTwiceRows() []emlRow {
 			emlTwice("rua"), "rua also sends reports to mailto:a@corp.test"),
 		emlD("ruf given twice", was, emlSet("v=DMARC1; p=reject; ruf=mailto:a@corp.test; ruf=mailto:b@corp.test"),
 			emlTwice("ruf"), "ruf also sends failure reports to mailto:a@corp.test"),
-		emlD("a tag that osk does not read given twice gives no word", was, emlSet("v=DMARC1; p=reject; fo=0; fo=1")).rev(),
+		emlD("a tag that osk-dns-watcher does not read given twice gives no word", was, emlSet("v=DMARC1; p=reject; fo=0; fo=1")).rev(),
 		emlD("an unknown tag given twice gives no word", was, emlSet("v=DMARC1; p=reject; foo=a; foo=b")).rev(),
 		emlD("a part without an equal sign is not a tag given twice", was, emlSet("v=DMARC1; p=reject; p; p")).rev(),
 		emlD("a tag given twice three times is one word", was, emlSet("v=DMARC1; p=reject; p=none; p=quarantine"), emlTwice("p")),
@@ -1022,7 +1022,7 @@ func emlDKIMRows() []emlRow {
 
 // emlDKIMLong is the word for a record over 4096 octets that the file does
 // not hold.
-const emlDKIMLong = "a DKIM record longer than 4096 octets: osk does not read it and counts it as a key that the file does not list"
+const emlDKIMLong = "a DKIM record longer than 4096 octets: osk-dns-watcher does not read it and counts it as a key that the file does not list"
 
 func emlSTSRows() []emlRow {
 	was := emlSet("v=STSv1; id=20261117")
@@ -1072,15 +1072,15 @@ func emlSTSRows() []emlRow {
 		emlM("RFC 8461 3.1 version and a tab, no semicolon", was, emlSet("v=STSv1\tid=1"), emlBadSTS),
 		emlM("RFC 8461 3.1 every id must be valid", was, emlSet("v=STSv1; id=1; id=abc!"), emlBadSTS),
 		emlM("RFC 8461 3.1 every id must be valid, bad one first", was, emlSet("v=STSv1; id=abc!; id=1"), emlBadSTS),
-		emlM("osk bound 4097 octets with two records", was, emlSet(emlPad("v=STSv1; id=1; x=", 4097), "v=STSv1; id=1"),
+		emlM("osk-dns-watcher bound 4097 octets with two records", was, emlSet(emlPad("v=STSv1; id=1; x=", 4097), "v=STSv1; id=1"),
 			"two or more MTA-STS records"+emlSTSTail),
-		emlM("osk bound: a text of 5000 octets that is no record", was, emlSet(emlPad("x=", 5000), "v=STSv1; id=1")).rev(),
+		emlM("osk-dns-watcher bound: a text of 5000 octets that is no record", was, emlSet(emlPad("x=", 5000), "v=STSv1; id=1")).rev(),
 		emlM("RFC 8461 3.1 from no record", nil, emlSet("v=STSv1; id=1")),
 		emlM("RFC 8461 3.1 off to off", nil, nil),
 		emlM("RFC 8461 3.1 off to another off", emlSet("v=STSv1; id=!"), emlSet("v=STSv1; id=1", "v=STSv1; id=2")),
 		emlM("RFC 8461 3.1 off with a problem to on", emlSet("v=STSv1; id=!"), was),
-		emlM("osk bound 4096 octets", was, emlSet(emlPad("v=STSv1; id=1; x=", 4096))).rev(),
-		emlM("osk bound 4097 octets", was, emlSet(emlPad("v=STSv1; id=1; x=", 4097)),
+		emlM("osk-dns-watcher bound 4096 octets", was, emlSet(emlPad("v=STSv1; id=1; x=", 4096))).rev(),
+		emlM("osk-dns-watcher bound 4097 octets", was, emlSet(emlPad("v=STSv1; id=1; x=", 4097)),
 			"an MTA-STS record longer than 4096 octets"+emlSTSTail),
 	}
 	cname := []dnswire.RData{emlCNAME("sts.evil.test.")}

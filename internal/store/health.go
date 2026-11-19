@@ -33,9 +33,9 @@ type Health struct {
 func (h Health) Problems(now time.Time) []string {
 	var problems []string
 	if h.Beat.IsZero() {
-		problems = append(problems, "no beat from osk run yet")
+		problems = append(problems, "no beat from osk-dns-watcher run yet")
 	} else if now.Sub(h.Beat) > BeatLimit {
-		problems = append(problems, "no beat from osk run since "+h.Beat.UTC().Format("2006-01-02 15:04:05 UTC"))
+		problems = append(problems, "no beat from osk-dns-watcher run since "+h.Beat.UTC().Format("2006-01-02 15:04:05 UTC"))
 	}
 	if len(h.Late) > 0 {
 		problems = append(problems, fmt.Sprintf("%d checks late", len(h.Late)))

@@ -33,7 +33,7 @@ DOCKER=${DOCKER:-docker}
 BUILD_FLAGS=${BUILD_FLAGS:-}
 repo=$(pwd)
 dir=out/release/$version
-sum=$(cksum <gate/Dockerfile) || exit 2
+sum=$(cksum <dev/gate/Dockerfile) || exit 2
 box=osk-gate:${sum%% *}
 
 why=$(sh release/commit.sh "$version") || stop "$why"

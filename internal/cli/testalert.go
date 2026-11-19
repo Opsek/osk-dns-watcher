@@ -12,8 +12,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // testEvery and testLimit pace test-alert; a test shortens them.
@@ -30,7 +30,7 @@ type attempt struct {
 	Next    string `json:"next"`
 }
 
-// TestAlert runs "osk test-alert": it asks the running service, through a
+// TestAlert runs "osk-dns-watcher test-alert": it asks the running service, through a
 // request file in the state folder, to send a test notice to every channel,
 // and prints what each channel did with it.
 func TestAlert(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -65,7 +65,7 @@ func TestAlert(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	case err != nil:
 		return failErr(stderr, err)
 	case !taken:
-		return fail(stderr, 1, "osk: osk run did not take the test within 30s; is it running on "+c.State+"?\n")
+		return fail(stderr, 1, "osk-dns-watcher: osk-dns-watcher run did not take the test within 30s; is it running on "+c.State+"?\n")
 	}
 	return printAttempts(c, rows, o.json, stdout, stderr)
 }
@@ -89,7 +89,7 @@ func request(path string) (string, error) {
 	// A temporary file left behind harms nothing: the service reads only path.
 	_ = os.Remove(tmp.Name())
 	if errors.Is(err, fs.ErrExist) {
-		return "", errors.New("a test is already waiting for osk run")
+		return "", errors.New("a test is already waiting for osk-dns-watcher run")
 	}
 	if err != nil {
 		return "", err

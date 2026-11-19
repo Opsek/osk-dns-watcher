@@ -1,4 +1,4 @@
-module github.com/Opsek/dns-monitoring
+module github.com/Opsek/osk-dns-watcher
 
 go 1.27
 

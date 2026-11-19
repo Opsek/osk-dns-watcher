@@ -1,8 +1,8 @@
-# osk as a Compose service. Its config, expectations, webhook URL and
+# osk-dns-watcher as a Compose service. Its config, expectations, webhook URL and
 # history live in the volume "data", which updates keep. start.sh sets it up.
-name: osk
+name: osk-dns-watcher
 
-x-osk: &osk
+x-osk-dns-watcher: &osk-dns-watcher
   build:
     context: ..
     dockerfile: deploy/Dockerfile
@@ -13,13 +13,13 @@ x-osk: &osk
     - data:/data
 
 services:
-  osk:
-    <<: *osk
+  watcher:
+    <<: *osk-dns-watcher
     restart: unless-stopped
   init:
-    <<: *osk
+    <<: *osk-dns-watcher
     profiles: [setup]
-    command: [init, --config, /data/osk.json]
+    command: [init, --config, /data/config.json]
 
 volumes:
   data:

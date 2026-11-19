@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // Config holds the settings of an Observer. The zero Config asks the

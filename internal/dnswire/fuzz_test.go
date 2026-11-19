@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // wireParseSeeds returns messages of every layout that the decoder reads and

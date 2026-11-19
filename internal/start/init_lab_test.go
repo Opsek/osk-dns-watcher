@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // iniLab gives the start of every lab address, "10.53.<LAB_ID>.", and puts
@@ -44,7 +44,7 @@ func iniLabctl(t *testing.T, args ...string) {
 	}
 }
 
-// iniLabNew is init as "osk init --root-server <root> --extra-range
+// iniLabNew is init as "osk-dns-watcher init --root-server <root> --extra-range
 // 10.53.N.0/24" runs it, with the real observer, in a fresh folder.
 func iniLabNew(t *testing.T, n, root string, answers ...string) *iniSetup {
 	t.Helper()
@@ -114,7 +114,7 @@ func TestInitAsksShowsThenWrites(t *testing.T) {
 	if info, err := os.Stat(s.folder); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("the folder that init made: %v; want mode 0700", err)
 	}
-	iniSame(t, "osk.json", files["osk.json"], s.configText(d))
+	iniSame(t, "config.json", files["config.json"], s.configText(d))
 	iniSame(t, "corp.test.expect", files["corp.test.expect"], iniStamp+strings.Join(iniLabLines(n), "\n")+"\n")
 	c, problems := config.Read(s.config)
 	if len(problems) != 0 {
@@ -190,7 +190,7 @@ func TestInitAsksShowsThenWrites(t *testing.T) {
 		again := iniLabNew(t, n, n+"2", "corp.test", url, "yes")
 		again.init.Config = s.config
 		code, out := again.run()
-		if want := "osk is set up already: " + s.config + " exists. Nothing to ask.\n"; code != 0 || out != want {
+		if want := "osk-dns-watcher is set up already: " + s.config + " exists. Nothing to ask.\n"; code != 0 || out != want {
 			t.Errorf("exit code %d, output %q; want 0 and %q", code, out, want)
 		}
 		if changed := iniChanged(before, iniTree(s.folder)); len(changed) > 0 {
@@ -199,7 +199,7 @@ func TestInitAsksShowsThenWrites(t *testing.T) {
 	})
 }
 
-// A check right after init, as "osk check --expect" makes it for each file
+// A check right after init, as "osk-dns-watcher check --expect" makes it for each file
 // of the config, finds nothing and gets an answer from every server.
 func TestInitSetupChecksWithoutFindings(t *testing.T) {
 	n := iniLab(t)

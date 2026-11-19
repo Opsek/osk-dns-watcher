@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // schEndDue starts every check that is due at now and ends each with a usable

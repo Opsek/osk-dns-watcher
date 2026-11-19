@@ -1,4 +1,4 @@
-// Package start sets osk up: init asks two questions, shows what the servers
+// Package start sets osk-dns-watcher up: init asks two questions, shows what the servers
 // give now and writes the setup; doctor checks a setup and says what to fix.
 package start
 
@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // Runner runs one check; *observe.Observer is one.
@@ -30,7 +30,7 @@ type Runner interface {
 	Run(ctx context.Context, c observe.Check) (obs.Observation, error)
 }
 
-// Init is "osk init". It reads one answer per line of In, so a pipe can
+// Init is "osk-dns-watcher init". It reads one answer per line of In, so a pipe can
 // answer as a person does.
 type Init struct {
 	Config      string           // as given
@@ -45,59 +45,59 @@ type Init struct {
 
 // The words of the dialogue, in the order a person meets them.
 const (
-	textSetUp = "osk is set up already: %s exists. Nothing to ask.\n"
+	textSetUp = "osk-dns-watcher is set up already: %s exists. Nothing to ask.\n"
 	textProxy = "The network between this machine and the DNS root servers answers DNS queries itself (a VPN, router or provider does this).\n" +
-		"osk must reach the root servers directly on port 53, over UDP and TCP. Run osk on another network or machine.\n"
-	textHeader = "Set up osk: two questions, then osk shows what it sees. Nothing is written until you type yes.\n\n"
+		"osk-dns-watcher must reach the root servers directly on port 53, over UDP and TCP. Run osk-dns-watcher on another network or machine.\n"
+	textHeader = "Set up osk-dns-watcher: two questions, then osk-dns-watcher shows what it sees. Nothing is written until you type yes.\n\n"
 
 	askDomains   = "Domains to watch, separated by spaces: "
 	textNotPlain = `A domain name holds only letters, digits, "-", "_" and ".". ` +
 		"Write an international name in its xn-- form, and do not paste a URL here. Try again.\n"
 	textBadName  = "%q is not a domain name (%v). Try again.\n"
-	textRoot     = "osk does not watch the root. Try again.\n"
+	textRoot     = "osk-dns-watcher does not watch the root. Try again.\n"
 	textNoDomain = "Name at least one domain. Try again.\n"
-	textMany     = "osk watches at most %d domains. Try again.\n"
+	textMany     = "osk-dns-watcher watches at most %d domains. Try again.\n"
 
 	askURL     = "Slack incoming webhook URL (hidden): "
 	textHidden = "[hidden]\n"
 	textBadURL = "That is not an https URL with a host and no user name. Try again.\n"
 
 	textAsking   = "\nAsking the servers of your domains, starting from the root servers ...\n"
-	textNoAnswer = "osk got no answer about %s from its parent zone (%s). " +
+	textNoAnswer = "osk-dns-watcher got no answer about %s from its parent zone (%s). " +
 		"Check the name, and that this machine may send DNS queries (port 53) to the internet.\n"
 	textNotDelegated = "The parent zone says that %s does not exist or has no nameservers. Check the name.\n"
 
-	textSees     = "\n%s as osk sees it now. Once you confirm, osk alerts when the servers differ from these lines:\n"
+	textSees     = "\n%s as osk-dns-watcher sees it now. Once you confirm, osk-dns-watcher alerts when the servers differ from these lines:\n"
 	textSkips    = "Not watched, and why:\n"
 	textNotAsked = "Not asked: %s of the servers, which this machine cannot reach.\n"
 	textOneIPv6  = "1 IPv6 address"
 	textIPv6     = "%d IPv6 addresses"
-	textNoNS     = "warning osk cannot watch the nameservers of %s yet. Until its file has an NS line, " +
+	textNoNS     = "warning osk-dns-watcher cannot watch the nameservers of %s yet. Until its file has an NS line, " +
 		"a change of the nameservers gives no critical alert, only an update of the alert about the missing line; " +
-		"osk sends that alert at its first check.\n"
+		"osk-dns-watcher sends that alert at its first check.\n"
 	textNSNoAnswer = "warning %s gave no answer about the nameservers of %s, so its NS line holds what the other servers gave. " +
-		"If they hold another set, osk alerts at its first check.\n"
-	textNSNoPath = "warning osk could not reach the servers of %s (the walk from the root found no path to them), " +
-		"so its NS line holds what the parent zone gave. If the servers hold another set, osk alerts at its first check.\n"
+		"If they hold another set, osk-dns-watcher alerts at its first check.\n"
+	textNSNoPath = "warning osk-dns-watcher could not reach the servers of %s (the walk from the root found no path to them), " +
+		"so its NS line holds what the parent zone gave. If the servers hold another set, osk-dns-watcher alerts at its first check.\n"
 	textNSSets = "warning the servers of %s give different nameserver sets now. The NS line above accepts each set below; " +
 		"a change of the nameservers to any other set gives an alert:\n"
 	textNSSet    = "  %s\n"
 	textNSParent = "    given by the parent zone: %s\n"
 	textNSZone   = "    given by the servers of %s: %s\n"
 	textNSFix    = "If a name in these sets is not one of your nameservers, do not type yes. Else make the sets equal " +
-		"at your registrar and DNS provider, then run osk snapshot %s and put its NS line in the file.\n"
-	textManyHosts = "warning osk does not watch the addresses of the nameservers of %s, because its NS line names more than %d hosts " +
+		"at your registrar and DNS provider, then run osk-dns-watcher snapshot %s and put its NS line in the file.\n"
+	textManyHosts = "warning osk-dns-watcher does not watch the addresses of the nameservers of %s, because its NS line names more than %d hosts " +
 		"inside the domain. Add their A and AAAA lines by hand.\n"
-	textNoSets = "warning osk watches no record set of %s yet: each one is listed above with its reason. " +
+	textNoSets = "warning osk-dns-watcher watches no record set of %s yet: each one is listed above with its reason. " +
 		"Until its file has those lines, a change of them gives no alert.\n"
 	textWarning = "warning %s\n"
 
 	askTrust    = "\nTrust these lines and write the setup to %s? Type yes: "
 	textNothing = "Nothing was written.\n"
-	textError   = "osk: %v\n"
+	textError   = "osk-dns-watcher: %v\n"
 	textWrote   = "Wrote %s and %s.\n"
 
-	textExpectHeader = "# Written by osk init at %s from what the servers gave. Edit a line to change what osk trusts.\n"
+	textExpectHeader = "# Written by osk-dns-watcher init at %s from what the servers gave. Edit a line to change what osk-dns-watcher trusts.\n"
 )
 
 // Terminal codes: concealed text on and off, and the cursor up one line to
@@ -333,7 +333,7 @@ func plainNames(answer string) bool {
 }
 
 // refusal gives why a domain cannot be set up, or "" when it can. Without
-// an answer from its parent zone, osk would trust nothing it could check.
+// an answer from its parent zone, osk-dns-watcher would trust nothing it could check.
 func refusal(v view) string {
 	if decide.Failed(v.delegation) {
 		return fmt.Sprintf(textNoAnswer, v.domain, strings.Join(failureWords(v.delegation), ","))

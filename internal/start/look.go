@@ -6,13 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
-// checkInterval is the interval of each check, as osk snapshot gives it: a
+// checkInterval is the interval of each check, as osk-dns-watcher snapshot gives it: a
 // check ends after three quarters of it.
 const checkInterval = 60 * time.Second
 
@@ -56,7 +56,7 @@ func look(ctx context.Context, r Runner, domain dnswire.Name) view {
 	keys := lookKeys(domain)
 	observations := runKeys(ctx, r, keys)
 	// The first answers say what else to ask. A domain that has set up no
-	// MTA-STS record is not asked for a policy file: osk must not connect to
+	// MTA-STS record is not asked for a policy file: osk-dns-watcher must not connect to
 	// a host that the domain never set up.
 	more, fewHosts := NameServerKeys(domain, observations)
 	if policy, ok := WantsPolicy(domain, observations); ok {
@@ -74,7 +74,7 @@ func look(ctx context.Context, r Runner, domain dnswire.Name) view {
 // NameServerKeys gives the checks of the addresses, A and AAAA, of each
 // nameserver host at or under domain that the NS line of a snapshot of the
 // observations names, less those that the observations hold already. With
-// those lines in the file, osk compares the glue at the parent zone. ok is
+// those lines in the file, osk-dns-watcher compares the glue at the parent zone. ok is
 // false, and there is no check, when the line names more than maxNSHosts
 // such hosts.
 func NameServerKeys(domain dnswire.Name, observations []obs.Observation) (keys []obs.Key, ok bool) {
@@ -187,7 +187,7 @@ func worthRetry(a obs.Answer) bool {
 		func(f obs.Failure) bool { return f.Reason != obs.ReasonNetwork || !a.Server.Addr.Addr().Is6() })
 }
 
-// lookKeys gives the delegation first, then the checks that osk snapshot
+// lookKeys gives the delegation first, then the checks that osk-dns-watcher snapshot
 // makes of "<d> A <d> AAAA <d> MX <d> TXT <d> CAA www.<d> A
 // _dmarc.<d> TXT _mta-sts.<d> TXT", then the names where a wildcard or a certificate challenge would show. A name longer than
 // a name may be is left out.

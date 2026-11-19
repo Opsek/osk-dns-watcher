@@ -1,6 +1,6 @@
 #!/bin/sh
 # Writes CONTENTS and SHA256SUMS into the current folder, which holds
-# osk-linux-amd64 and osk-linux-arm64. Runs in the build container, which has
+# osk-dns-watcher-linux-amd64 and osk-dns-watcher-linux-arm64. Runs in the build container, which has
 # no git, so the commit comes from the caller:
 #
 #   release/contents.sh <version> <commit> [<image> <index> <amd64> <arm64>]
@@ -39,17 +39,17 @@ for digest; do
 	esac
 	printf '%s\n' "$digest" | grep -Eqx 'sha256:[0-9a-f]{64}' || stop "a digest is sha256:<64 hex digits>"
 done
-for f in osk-linux-amd64 osk-linux-arm64; do
+for f in osk-dns-watcher-linux-amd64 osk-dns-watcher-linux-arm64; do
 	[ -f "$f" ] || stop "$f is missing"
 done
 
 # The Go and SQLite versions are those that the binary reports.
-versions=$("./osk-linux-$(go env GOARCH)" version)
+versions=$("./osk-dns-watcher-linux-$(go env GOARCH)" version)
 {
 	echo "version $version"
 	echo "commit $commit"
 	printf '%s\n' "$versions" | grep -E '^(go|sqlite) '
-	for f in osk-linux-amd64 osk-linux-arm64; do
+	for f in osk-dns-watcher-linux-amd64 osk-dns-watcher-linux-arm64; do
 		echo "file $f $(stat -c %s "$f") $(sha256sum "$f" | cut -d ' ' -f 1)"
 	done
 	if [ -n "$image" ]; then
@@ -58,6 +58,6 @@ versions=$("./osk-linux-$(go env GOARCH)" version)
 		echo "image-digest linux/amd64 $2"
 		echo "image-digest linux/arm64 $3"
 	fi
-	go version -m osk-linux-amd64 osk-linux-arm64
+	go version -m osk-dns-watcher-linux-amd64 osk-dns-watcher-linux-arm64
 } >CONTENTS
-sha256sum osk-linux-amd64 osk-linux-arm64 CONTENTS >SHA256SUMS
+sha256sum osk-dns-watcher-linux-amd64 osk-dns-watcher-linux-arm64 CONTENTS >SHA256SUMS

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/schedule"
-	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
+	"github.com/Opsek/osk-dns-watcher/internal/certlog"
+	"github.com/Opsek/osk-dns-watcher/internal/schedule"
 )
 
 const (
@@ -288,12 +288,12 @@ func TestCertificatesValuesGiveTheURLAndTheHostIsListed(t *testing.T) {
 	}
 }
 
-// The host is written either as osk keeps it for the HTTPS client or without
+// The host is written either as osk-dns-watcher keeps it for the HTTPS client or without
 // the default port 443; the text of the warning holds no interval.
 func crtWarnings(hosts ...string) []string {
 	var texts []string
 	for _, h := range hosts {
-		texts = append(texts, "certificates is set: osk sends the name of each watched domain to "+h+
+		texts = append(texts, "certificates is set: osk-dns-watcher sends the name of each watched domain to "+h+
 			", which learns which domains you watch.")
 	}
 	return texts

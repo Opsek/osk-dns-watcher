@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // cliNow is the time that status sees in these tests. It has a part below
@@ -59,9 +59,9 @@ func cliStatusIs(t *testing.T, w *cliWorld, code int, text []string, js cliStatu
 	t.Helper()
 	got, out, errOut := cliRun(5*time.Second, "status", "--config", w.config)
 	if got != code || errOut != "" {
-		t.Errorf("osk status: exit code %d, errors %q; want %d and none", got, errOut, code)
+		t.Errorf("osk-dns-watcher status: exit code %d, errors %q; want %d and none", got, errOut, code)
 	}
-	cliSame(t, "osk status", out, text...)
+	cliSame(t, "osk-dns-watcher status", out, text...)
 
 	js.Type = "status"
 	for _, l := range []*[]string{&js.Problems, &js.Late, &js.Warnings} {
@@ -77,9 +77,9 @@ func cliStatusIs(t *testing.T, w *cliWorld, code int, text []string, js cliStatu
 	}
 	got, out, errOut = cliRun(5*time.Second, "status", "--config", w.config, "--json")
 	if got != code || errOut != "" {
-		t.Errorf("osk status --json: exit code %d, errors %q; want %d and none", got, errOut, code)
+		t.Errorf("osk-dns-watcher status --json: exit code %d, errors %q; want %d and none", got, errOut, code)
 	}
-	cliSame(t, "osk status --json", out, cliMarshal(t, js))
+	cliSame(t, "osk-dns-watcher status --json", out, cliMarshal(t, js))
 }
 
 func cliRecordsCheck(name, rtype string) cliCheck {
@@ -135,11 +135,11 @@ func TestStatusWithoutABeatIsUnhealthy(t *testing.T) {
 	w := cliNewWorld(t, false)
 	cliStore(t, w.state, func(*store.Store) {})
 	cliStatusIs(t, w, 1, []string{
-		"unhealthy: no beat from osk run yet",
+		"unhealthy: no beat from osk-dns-watcher run yet",
 		"beat none",
 		"channel slack ok, 0 pending",
 		"channel siem ok, 0 pending",
-	}, cliStatusJSON{Problems: []string{"no beat from osk run yet"}, Channels: cliHealthy()})
+	}, cliStatusJSON{Problems: []string{"no beat from osk-dns-watcher run yet"}, Channels: cliHealthy()})
 }
 
 // A beat of exactly 30 s ago still counts; one nanosecond more does not.
@@ -159,7 +159,7 @@ func TestStatusTakesABeatOfAtMost30Seconds(t *testing.T) {
 		text := []string{"healthy", "beat " + cliText(beat), "channel slack ok, 0 pending", "channel siem ok, 0 pending"}
 		js := cliStatusJSON{Healthy: true, Beat: cliJSONTime(beat), Channels: cliHealthy()}
 		if c.code == 1 {
-			problem := "no beat from osk run since " + cliText(beat)
+			problem := "no beat from osk-dns-watcher run since " + cliText(beat)
 			text[0] = "unhealthy: " + problem
 			js.Healthy, js.Problems = false, []string{problem}
 		}
@@ -355,7 +355,7 @@ func TestStatusJoinsEveryProblemInOneLineInOrder(t *testing.T) {
 		cliRecord(t, s, cliRows(t, s, "slack", cliNow)[0], store.Done{State: store.RowPending, Attempts: 1,
 			NextAt: cliNow.Add(time.Minute), Reason: "status 502", At: cliNow.Add(-time.Minute)})
 	})
-	problems := []string{"no beat from osk run since " + cliText(beat), "1 checks late", "channel slack fails", "channel siem fails"}
+	problems := []string{"no beat from osk-dns-watcher run since " + cliText(beat), "1 checks late", "channel slack fails", "channel siem fails"}
 	cliStatusIs(t, w, 1, []string{
 		"unhealthy: " + strings.Join(problems, "; "),
 		"beat " + cliText(beat),

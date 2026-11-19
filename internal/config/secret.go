@@ -10,7 +10,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 )
 
 const (
@@ -199,7 +199,7 @@ func checkAPIKey(value string) string {
 }
 
 // Hosts gives the host of each URL in the form that httpclient.New takes,
-// without repeats: the only hosts that osk may post to or read from.
+// without repeats: the only hosts that osk-dns-watcher may post to or read from.
 func (v Values) Hosts() []string {
 	urls := append([]string{v.SlackURL}, v.WebhookURLs...)
 	urls = append(urls, v.HeartbeatURL, v.CertificatesURL)

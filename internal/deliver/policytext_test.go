@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 const (
@@ -227,7 +227,7 @@ func pctFailing(t testing.TB, kind alert.EventKind, key obs.Key) alert.Event {
 // DNS servers.
 func TestPctSlackTextOfAFailingPolicyCheck(t *testing.T) {
 	const head = ":large_orange_circle: *MEDIUM* · the policy check of `mta-sts.corp.test. TXT` has had no usable answer for too long"
-	const action = ":point_right: Find out why osk cannot fetch the policy file from `mta-sts.corp.test.`; the log of osk names the reason. " +
+	const action = ":point_right: Find out why osk-dns-watcher cannot fetch the policy file from `mta-sts.corp.test.`; the log of osk-dns-watcher names the reason. " +
 		"Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
 	view := []string{"problem    no usable answer for 30m0s"}
 
@@ -257,7 +257,7 @@ func TestPctSlackTextOfOtherFailingChecksKeepsTheirWords(t *testing.T) {
 			"Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen.",
 			obs.RecordsKey(dlvName(t, "corp.test."), dlvName(t, "_mta-sts.corp.test."), dnswire.TypeTXT), 2},
 		{"certificates", ":large_orange_circle: *MEDIUM* · the certificates check of `corp.test.` has had no usable answer for too long",
-			"Find out why osk gets no usable answer from the certificate source; the log of osk names the reason. Until it does, a new certificate is not seen.",
+			"Find out why osk-dns-watcher gets no usable answer from the certificate source; the log of osk-dns-watcher names the reason. Until it does, a new certificate is not seen.",
 			obs.CertificatesKey(dlvName(t, "corp.test.")), 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {

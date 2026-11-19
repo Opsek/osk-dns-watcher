@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // The NS line of a new file and the address lines of the nameservers. The
@@ -416,8 +416,8 @@ func TestInitWritesTheParentSetWhenTheWalkToTheServersOfTheDomainFails(t *testin
 		t.Errorf("exit code %d; want 0", code)
 	}
 	lines := nswLinesWith(nswNames(nswHosts), nswHostLines(nswHosts)...)
-	noPath := "warning osk could not reach the servers of " + d + " (the walk from the root found no path to them), " +
-		"so its NS line holds what the parent zone gave. If the servers hold another set, osk alerts at its first check.\n"
+	noPath := "warning osk-dns-watcher could not reach the servers of " + d + " (the walk from the root found no path to them), " +
+		"so its NS line holds what the parent zone gave. If the servers hold another set, osk-dns-watcher alerts at its first check.\n"
 	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d))+noPath)+"yes\n"+s.wrote(d))
 	data := s.written(d)["example.com.expect"]
 	iniSame(t, "example.com.expect", data, iniStamp+strings.Join(lines, "\n")+"\n")
@@ -562,7 +562,7 @@ func TestInitAsksNoAddressOfANameServerOutsideTheDomain(t *testing.T) {
 }
 
 func nswManyHosts(d string) string {
-	return "warning osk does not watch the addresses of the nameservers of " + d + ", because its NS line names more than 8 hosts " +
+	return "warning osk-dns-watcher does not watch the addresses of the nameservers of " + d + ", because its NS line names more than 8 hosts " +
 		"inside the domain. Add their A and AAAA lines by hand.\n"
 }
 

@@ -30,7 +30,7 @@ esac
 DOCKER=${DOCKER:-docker}
 repo=$(pwd)
 dir=out/release/$version
-sum=$(cksum <gate/Dockerfile) || exit 2
+sum=$(cksum <dev/gate/Dockerfile) || exit 2
 box=osk-gate:${sum%% *}
 
 why=$(sh release/commit.sh "$version") || stop "$why"
@@ -57,14 +57,14 @@ done
 
 # The new files are written beside the old ones and take their place last.
 $DOCKER run --rm --network none -v "$repo/$dir":/release -w /release "$box" sh -euc '
-	grep -q "^file osk-linux-arm64 " CONTENTS
+	grep -q "^file osk-dns-watcher-linux-arm64 " CONTENTS
 	{
-		sed -n "1,/^file osk-linux-arm64 /p" CONTENTS
+		sed -n "1,/^file osk-dns-watcher-linux-arm64 /p" CONTENTS
 		echo "image $1"
 		echo "image-digest index $2"
 		echo "image-digest linux/amd64 $3"
 		echo "image-digest linux/arm64 $4"
-		sed "1,/^file osk-linux-arm64 /d" CONTENTS
+		sed "1,/^file osk-dns-watcher-linux-arm64 /d" CONTENTS
 	} >CONTENTS.new
 	sum=$(sha256sum <CONTENTS.new | cut -d " " -f 1)
 	{

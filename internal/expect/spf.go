@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 const (
@@ -17,7 +17,7 @@ const (
 // The ends of the word for a record that receivers cannot use.
 const (
 	spfPermerror = ": receivers give permerror, so no sender fails"
-	spfNotRead   = ": osk does not read it and counts every sender as neutral"
+	spfNotRead   = ": osk-dns-watcher does not read it and counts every sender as neutral"
 )
 
 const spfUnreadable = "an SPF term that cannot be read" + spfPermerror
@@ -185,7 +185,7 @@ func keptWord(m spfAtom, was spfRank) string {
 
 // readSPF reads the SPF policy of set, whose owner is owner. A record that
 // receivers cannot use gives neutral to every sender: RFC 7208 section 8.2
-// treats neutral as no policy, and osk treats permerror the same way.
+// treats neutral as no policy, and osk-dns-watcher treats permerror the same way.
 func readSPF(owner dnswire.Name, set []dnswire.RData) spfPolicy {
 	rest, problem := oneRecord(set, spfVersion, spfPick)
 	if problem != "" {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // cleOpenFiles counts the descriptors of this process that name the database
@@ -23,7 +23,7 @@ func cleOpenFiles(t *testing.T, state string) int {
 	n := 0
 	for _, e := range entries {
 		target, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
-		if err == nil && strings.HasPrefix(target, filepath.Join(state, "osk.db")) {
+		if err == nil && strings.HasPrefix(target, filepath.Join(state, "state.db")) {
 			n++
 		}
 	}
@@ -34,7 +34,7 @@ func cleOpenFiles(t *testing.T, state string) int {
 // process. The connection stays open: closing it would drop the locks of the
 // store that the child holds.
 func cleBreakNotices(state string) error {
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(state, "osk.db")+"?_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", "file:"+filepath.Join(state, "state.db")+"?_busy_timeout=5000")
 	if err != nil {
 		return err
 	}
@@ -52,17 +52,17 @@ func TestStatusAndAcceptLeaveNoDatabaseFileOpen(t *testing.T) {
 	}
 	cliSetClock(t, cliT0)
 	if code, _, errOut := cliRun(10*time.Second, "status", "--config", w.config); code > 1 {
-		t.Fatalf("osk status: exit code %d: %s", code, errOut)
+		t.Fatalf("osk-dns-watcher status: exit code %d: %s", code, errOut)
 	}
 	if n := cleOpenFiles(t, w.state); n != 0 {
-		t.Errorf("osk status left %d database files open, want 0", n)
+		t.Errorf("osk-dns-watcher status left %d database files open, want 0", n)
 	}
 	id := ids["www"]
 	if code, _, errOut := cliAccept(w, "--", strconv.FormatInt(id, 10)); code != 0 {
-		t.Fatalf("osk accept: exit code %d: %s", code, errOut)
+		t.Fatalf("osk-dns-watcher accept: exit code %d: %s", code, errOut)
 	}
 	if n := cleOpenFiles(t, w.state); n != 0 {
-		t.Errorf("osk accept left %d database files open, want 0", n)
+		t.Errorf("osk-dns-watcher accept left %d database files open, want 0", n)
 	}
 }
 
@@ -73,8 +73,8 @@ func TestAcceptRefusesAnIdBelow1(t *testing.T) {
 	for _, id := range []string{"0", "-3"} {
 		code, out, errOut := cliRun(5*time.Second, "accept", "--config", missing, "--", id)
 		first, _, _ := strings.Cut(errOut, "\n")
-		if want := `osk accept: "` + id + `" is not an alert id`; code != 2 || out != "" || first != want {
-			t.Errorf("osk accept %s: exit code %d, output %q, first error line %q; want 2, nothing and %q", id, code, out, first, want)
+		if want := `osk-dns-watcher accept: "` + id + `" is not an alert id`; code != 2 || out != "" || first != want {
+			t.Errorf("osk-dns-watcher accept %s: exit code %d, output %q, first error line %q; want 2, nothing and %q", id, code, out, first, want)
 		}
 	}
 }
@@ -109,7 +109,7 @@ func TestWrongFlagsWriteNothingOnTheProcessStandardError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	for _, cmd := range []string{"validate", "status", "watch", "accept", "test-alert"} {
 		if code, _, _ := cliRun(5*time.Second, cmd, "--nope", "--config", missing, "7"); code != 2 {
-			t.Errorf("osk %s --nope: exit code %d, want 2", cmd, code)
+			t.Errorf("osk-dns-watcher %s --nope: exit code %d, want 2", cmd, code)
 		}
 	}
 	if data, err := os.ReadFile(f.Name()); err != nil || len(data) != 0 {
@@ -123,8 +123,8 @@ func TestOnlyAcceptTakesTheWriteFlag(t *testing.T) {
 	for _, cmd := range []string{"validate", "status", "watch", "test-alert"} {
 		code, out, errOut := cliRun(5*time.Second, cmd, "--config", missing, "--write", "abc")
 		first, _, _ := strings.Cut(errOut, "\n")
-		if want := "osk " + cmd + ": flag provided but not defined: -write"; code != 2 || out != "" || first != want {
-			t.Errorf("osk %s --write: exit code %d, output %q, first error line %q; want 2, nothing and %q", cmd, code, out, first, want)
+		if want := "osk-dns-watcher " + cmd + ": flag provided but not defined: -write"; code != 2 || out != "" || first != want {
+			t.Errorf("osk-dns-watcher %s --write: exit code %d, output %q, first error line %q; want 2, nothing and %q", cmd, code, out, first, want)
 		}
 	}
 }
@@ -179,7 +179,7 @@ func TestTestAlertReportsAnUntakenTestWhenTheRequestIsAlreadyGone(t *testing.T) 
 		removed <- false
 	}()
 	code, out, errOut := cliRun(10*time.Second, "test-alert", "--config", w.config)
-	want := "osk: osk run did not take the test within 30s; is it running on " + w.state + "?\n"
+	want := "osk-dns-watcher: osk-dns-watcher run did not take the test within 30s; is it running on " + w.state + "?\n"
 	if code != 1 || out != "" || errOut != want {
 		t.Errorf("exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 	}
@@ -209,7 +209,7 @@ func TestTestAlertRemovesItsRequestWhenTheNoticesCannotBeRead(t *testing.T) {
 	code, out, errOut := cliRun(20*time.Second, "test-alert", "--config", w.config)
 	took := time.Since(start)
 	child.reply(t)
-	if code != 1 || out != "" || !strings.HasPrefix(errOut, "osk: ") || !strings.Contains(errOut, "notice ") || took > 5*time.Second {
+	if code != 1 || out != "" || !strings.HasPrefix(errOut, "osk-dns-watcher: ") || !strings.Contains(errOut, "notice ") || took > 5*time.Second {
 		t.Errorf("exit code %d, output %q, errors %q after %v; want 1 at once, nothing and the error of the read", code, out, errOut, took)
 	}
 	if _, err := os.Lstat(path); err == nil {

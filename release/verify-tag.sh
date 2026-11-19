@@ -3,7 +3,7 @@
 # the commit of a release tag and exits 0 when the tag is one: its name is
 # v<version> (build/version.sh); its object, the one given or else the one
 # that refs/tags/<name> names, read once, is a tag object of that same name
-# on a commit, whose message begins with the line "osk <version>"; and it
+# on a commit, whose message begins with the line "osk-dns-watcher <version>"; and it
 # carries one signature, an SSH signature by a key of the allowed-signers
 # file. Otherwise it prints why and exits 1. deploy/start.sh
 # and release/commit.sh use it, and so can anyone:
@@ -42,9 +42,9 @@ header=$(printf '%s\n' "$body" | sed '/^$/q')
 printf '%s\n' "$header" | grep -qxF "tag $name" || fail "the tag object of $name holds another name"
 printf '%s\n' "$header" | grep -qxF "type commit" || fail "the tag $name is not on a commit"
 # The same key signs tags of other projects: the signed message binds the
-# tag to osk and to its version.
-[ "$(printf '%s\n' "$body" | sed '1,/^$/d' | head -n 1)" = "osk ${name#v}" ] ||
-	fail "the message of the tag $name does not begin with the line \"osk ${name#v}\""
+# tag to osk-dns-watcher and to its version.
+[ "$(printf '%s\n' "$body" | sed '1,/^$/d' | head -n 1)" = "osk-dns-watcher ${name#v}" ] ||
+	fail "the message of the tag $name does not begin with the line \"osk-dns-watcher ${name#v}\""
 # git chooses the checker from the armor of the signature, and gpg would use
 # the user's keyring: only one signature, an SSH one, counts, and every other
 # checker is made unusable below.

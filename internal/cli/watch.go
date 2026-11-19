@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // watchEvery is the time between two reads of watch; a test shortens it.
@@ -47,7 +47,7 @@ type item struct {
 	json any
 }
 
-// Watch runs "osk watch": it prints each event and notice that the service
+// Watch runs "osk-dns-watcher watch": it prints each event and notice that the service
 // stores from now on, until ctx ends.
 func Watch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	o, msg := watchCommand.parseNoArgs(args)

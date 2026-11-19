@@ -3,7 +3,7 @@ package obs
 import (
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // Issuer is the authority that signed a certificate.

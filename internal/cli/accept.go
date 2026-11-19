@@ -12,12 +12,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // change is one line of an expectations file, before and after.
@@ -48,7 +48,7 @@ func writeCode(id int64, ch change) string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
-// Accept runs "osk accept": it prints the change of the expectations file
+// Accept runs "osk-dns-watcher accept": it prints the change of the expectations file
 // that makes what the servers of one open alert show the expected set, and
 // writes it only with --write and the code of the change that it printed.
 // The servers may show another set by then, and the operator must see each
@@ -76,7 +76,7 @@ func Accept(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case err != nil || o.code == "":
 	case o.code != ch.Code:
-		err = fmt.Errorf("the alert changed since you looked; run osk accept %d again", id)
+		err = fmt.Errorf("the alert changed since you looked; run osk-dns-watcher accept %d again", id)
 	default:
 		err = replaceFile(ch.File, ch.data)
 		ch.Written = err == nil
@@ -374,7 +374,7 @@ func (ch change) text(config string, id int64) string {
 	if ch.Written {
 		return strings.Join(append(lines, "written"), "\n")
 	}
-	return strings.Join(append(lines, "To write this change: osk accept --config "+config+" --write "+ch.Code+" "+strconv.FormatInt(id, 10)), "\n")
+	return strings.Join(append(lines, "To write this change: osk-dns-watcher accept --config "+config+" --write "+ch.Code+" "+strconv.FormatInt(id, 10)), "\n")
 }
 
 // replaceFile puts data in a new file beside path and renames it over path,

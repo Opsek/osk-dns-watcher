@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
-// someRoots are two of the root servers that osk starts its walk at, run by
+// someRoots are two of the root servers that osk-dns-watcher starts its walk at, run by
 // two operators. Any two serve: the check asks who answers for them.
 var someRoots = []netip.AddrPort{
 	netip.MustParseAddrPort("198.41.0.4:53"),   // a.root-servers.net.
@@ -22,7 +22,7 @@ const rootTimeout = 2 * time.Second
 
 // rootsAnswerDirectly reports whether the root servers themselves answer.
 // Some networks answer DNS queries in their place (the DNS proxy of a VPN,
-// a router or a provider), and then every answer osk sees comes from them.
+// a router or a provider), and then every answer osk-dns-watcher sees comes from them.
 // It asks two root servers, the first two of roots when given, at once.
 func rootsAnswerDirectly(ctx context.Context, roots []netip.AddrPort) bool {
 	servers := someRoots
@@ -42,7 +42,7 @@ func rootsAnswerDirectly(ctx context.Context, roots []netip.AddrPort) bool {
 }
 
 // answersDirectly asks server for the NS set of the root over UDP, then over
-// TCP, which osk needs for large answers. No answer over UDP proves nothing:
+// TCP, which osk-dns-watcher needs for large answers. No answer over UDP proves nothing:
 // the checks of the domains then report what is wrong.
 func answersDirectly(ctx context.Context, server netip.AddrPort) bool {
 	m, err := askRoot(ctx, server, false)

@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs osk-dns-watcher in the running service of the Compose file beside this
+# script, from any folder, for example:
+#
+#   deploy/osk-dns-watcher status
+#
+# A command that reads the config gets --config /data/config.json, the config
+# that start.sh writes, unless its arguments name one. Every argument passes
+# unchanged. When its input and its output are both a terminal, the command
+# gets a terminal too, so that it can ask questions and Ctrl-C reaches it; a
+# pipe gets the plain output.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd -P)
+case ${1-} in
+run | validate | status | watch | accept | test-alert | init | doctor)
+	given=
+	for arg; do
+		case $arg in
+		--config | --config=* | -config | -config=*) given=1 ;;
+		esac
+	done
+	if [ -z "$given" ]; then
+		command=$1
+		shift
+		set -- "$command" --config /data/config.json "$@"
+	fi
+	;;
+esac
+if [ -t 0 ] && [ -t 1 ]; then
+	exec docker compose -f "$here/compose.yaml" exec watcher osk-dns-watcher "$@"
+fi
+exec docker compose -f "$here/compose.yaml" exec -T watcher osk-dns-watcher "$@"

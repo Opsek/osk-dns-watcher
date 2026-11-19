@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/certlog"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // crtCase is one alert of a certificate rule: the check is the certificates
@@ -37,10 +37,10 @@ const (
 	crtIssuerAction    = "If you did not ask for this certificate, ask its authority to revoke it, and check your CAA records and your DNS provider account. If you did, allow the authority where the file restricts it: in your CAA records and their lines, and in the issuer lines."
 	crtIssuerResolved  = "no valid certificate for a name of `corp.test.` comes from an authority that the expectations do not permit"
 	crtCertNameHead    = "a wildcard certificate for `corp.test.` holds a name that the expectations do not list"
-	crtCertNameAction  = "If you did not ask for it, ask its authority to revoke it: it is valid for every name at its level. If it is yours, run osk accept to list it."
+	crtCertNameAction  = "If you did not ask for it, ask its authority to revoke it: it is valid for every name at its level. If it is yours, run osk-dns-watcher accept to list it."
 	crtCertNameResolve = "no valid certificate for `corp.test.` holds an unlisted wildcard"
 	crtHostsHead       = "certificates name hosts under `corp.test.` that the expectations do not list"
-	crtHostsAction     = "Check that each host is yours. Run osk accept to list them, or add a line for each host that osk should watch."
+	crtHostsAction     = "Check that each host is yours. Run osk-dns-watcher accept to list them, or add a line for each host that osk-dns-watcher should watch."
 	crtHostsResolved   = "every host under `corp.test.` on a valid certificate is in the expectations"
 
 	crtApexCAA = `corp.test. CAA 0 issue "ca.test"`
@@ -283,7 +283,7 @@ func TestSlackTextOfTheCertificatesCheckFailing(t *testing.T) {
 	open := dngEvent(t, alert.EventOpen, r)
 	open.Alert.Value = "no usable answer for 30m0s"
 	head := ":large_orange_circle: *MEDIUM* · the certificates check of `corp.test.` has had no usable answer for too long"
-	action := ":point_right: Find out why osk gets no usable answer from the certificate source; the log of osk names the reason. Until it does, a new certificate is not seen."
+	action := ":point_right: Find out why osk-dns-watcher gets no usable answer from the certificate source; the log of osk-dns-watcher names the reason. Until it does, a new certificate is not seen."
 	view := []string{"problem    no usable answer for 30m0s"}
 	dngCheck(t, open, dlvFull(head, view, dngOpenClock, action), 1)
 

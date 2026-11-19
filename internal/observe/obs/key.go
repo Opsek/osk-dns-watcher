@@ -3,7 +3,7 @@ package obs
 import (
 	"strconv"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // Kind is what a check looks at. The zero Kind is no kind, so a Key that was

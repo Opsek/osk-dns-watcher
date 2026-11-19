@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 var (
@@ -960,7 +960,7 @@ type alrState struct {
 	sev, peak decide.Severity
 }
 
-// alrModel is a copy of the table of Check in models/alert.tla, with two
+// alrModel is a copy of the table of Check in dev/models/alert.tla, with two
 // identities: the oracle of TestTransitionMatchesModelProperty.
 type alrModel struct {
 	remind bool

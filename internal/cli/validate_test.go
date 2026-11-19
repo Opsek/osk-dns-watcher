@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/config"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/config"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 func cliValidate(w *cliWorld, args ...string) (int, string, string) {
@@ -70,10 +70,10 @@ func TestValidateOfAValidConfigPrintsTheSummaryOnlyAndMakesNoStateFolder(t *test
 	if code != 0 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk validate", out, "valid: 2 domains, channels slack,siem")
+	cliSame(t, "osk-dns-watcher validate", out, "valid: 2 domains, channels slack,siem")
 	cliNoMarker(t, out, errOut)
 	if _, err := os.Lstat(w.state); err == nil {
-		t.Errorf("osk validate made the state folder %s", w.state)
+		t.Errorf("osk-dns-watcher validate made the state folder %s", w.state)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestValidatePrintsTheWarningsBeforeTheSummary(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk validate", out, append(cliPrefixed("warning ", cliWarnings), "valid: 2 domains, channels slack,siem")...)
+	cliSame(t, "osk-dns-watcher validate", out, append(cliPrefixed("warning ", cliWarnings), "valid: 2 domains, channels slack,siem")...)
 }
 
 // The problems of the config file are those of config.Read, each printed as
@@ -117,16 +117,16 @@ func TestValidatePrintsEachProblemOfTheConfigFileWithItsPlace(t *testing.T) {
 	if code != 1 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 1 and none", code, errOut)
 	}
-	cliSame(t, "osk validate", out, append(want, "5 problems")...)
+	cliSame(t, "osk-dns-watcher validate", out, append(want, "5 problems")...)
 
 	code, out, errOut = cliValidate(w, "--json")
 	if code != 1 || errOut != "" {
 		t.Errorf("--json: exit code %d, errors %q; want 1 and none", code, errOut)
 	}
-	cliSame(t, "osk validate --json", out, cliValidateJSON(t, wantJSON, nil,
+	cliSame(t, "osk-dns-watcher validate --json", out, cliValidateJSON(t, wantJSON, nil,
 		cliResultJSON{Valid: false, Problems: 5, Domains: 0, Channels: []string{}})...)
 	if _, err := os.Lstat(w.state); err == nil {
-		t.Errorf("osk validate made the state folder %s", w.state)
+		t.Errorf("osk-dns-watcher validate made the state folder %s", w.state)
 	}
 }
 
@@ -156,14 +156,14 @@ func TestValidatePrintsTheProblemsOfTheSecretsAndOfTheExpectationsFiles(t *testi
 	if code != 1 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 1 and none", code, errOut)
 	}
-	cliSame(t, "osk validate", out, append(append(want, cliPrefixed("warning ", cliWarnings)...), "4 problems")...)
+	cliSame(t, "osk-dns-watcher validate", out, append(append(want, cliPrefixed("warning ", cliWarnings)...), "4 problems")...)
 	cliNoMarker(t, out, errOut)
 
 	code, out, errOut = cliValidate(w, "--json")
 	if code != 1 || errOut != "" {
 		t.Errorf("--json: exit code %d, errors %q; want 1 and none", code, errOut)
 	}
-	cliSame(t, "osk validate --json", out, cliValidateJSON(t, []cliProblemJSON{
+	cliSame(t, "osk-dns-watcher validate --json", out, cliValidateJSON(t, []cliProblemJSON{
 		{File: w.config, Line: 8, Path: "slack.url", Text: "the environment variable is not set"},
 		{File: w.config, Line: 14, Path: "webhooks[0].key", Text: "the key is shorter than 32 octets"},
 		{File: w.corp, Line: p.Line, Text: p.Text},
@@ -186,7 +186,7 @@ func TestValidateNamesAnExpectationsFileThatCannotBeRead(t *testing.T) {
 	if code != 1 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 1 and none", code, errOut)
 	}
-	cliSame(t, "osk validate", out, w.shop+": cannot be read: "+openErr.Error(), "1 problems")
+	cliSame(t, "osk-dns-watcher validate", out, w.shop+": cannot be read: "+openErr.Error(), "1 problems")
 }
 
 // The state folder is checked as the store checks it, but only when it
@@ -203,12 +203,12 @@ func TestValidateChecksTheStateFolderWhenItExists(t *testing.T) {
 	if code != 1 || errOut != "" {
 		t.Errorf("open folder: exit code %d, errors %q; want 1 and none", code, errOut)
 	}
-	cliSame(t, "osk validate of a folder open to others", out, w.config+": state: "+text, "1 problems")
+	cliSame(t, "osk-dns-watcher validate of a folder open to others", out, w.config+": state: "+text, "1 problems")
 	code, out, _ = cliValidate(w, "--json")
 	if code != 1 {
 		t.Errorf("--json: exit code %d, want 1", code)
 	}
-	cliSame(t, "osk validate --json of a folder open to others", out, cliValidateJSON(t,
+	cliSame(t, "osk-dns-watcher validate --json of a folder open to others", out, cliValidateJSON(t,
 		[]cliProblemJSON{{File: w.config, Path: "state", Text: text}}, nil,
 		cliResultJSON{Valid: false, Problems: 1, Domains: 2, Channels: []string{"slack", "siem"}})...)
 
@@ -219,7 +219,7 @@ func TestValidateChecksTheStateFolderWhenItExists(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Errorf("private folder: exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk validate of a private folder", out, "valid: 2 domains, channels slack,siem")
+	cliSame(t, "osk-dns-watcher validate of a private folder", out, "valid: 2 domains, channels slack,siem")
 
 	if err := os.RemoveAll(w.state); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestValidateChecksTheStateFolderWhenItExists(t *testing.T) {
 	if code != 1 {
 		t.Errorf("a file as the state folder: exit code %d, want 1", code)
 	}
-	cliSame(t, "osk validate of a file as the state folder", out, w.config+": state: store: "+w.state+" is not a folder", "1 problems")
+	cliSame(t, "osk-dns-watcher validate of a file as the state folder", out, w.config+": state: store: "+w.state+" is not a folder", "1 problems")
 }
 
 func TestValidateJSONOfAValidConfigIsTheWarningsAndTheResult(t *testing.T) {
@@ -239,7 +239,7 @@ func TestValidateJSONOfAValidConfigIsTheWarningsAndTheResult(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk validate --json", out, cliValidateJSON(t, nil, cliWarnings,
+	cliSame(t, "osk-dns-watcher validate --json", out, cliValidateJSON(t, nil, cliWarnings,
 		cliResultJSON{Valid: true, Problems: 0, Domains: 2, Channels: []string{"slack", "siem"}})...)
 	cliNoMarker(t, out)
 }
@@ -248,7 +248,7 @@ func TestValidateJSONOfAValidConfigIsTheWarningsAndTheResult(t *testing.T) {
 // refuses it without repeating it, in text and in JSON.
 func TestValidateDoesNotRepeatAURLGivenAsAPath(t *testing.T) {
 	const mark = "pathurlmarker7"
-	path := filepath.Join(t.TempDir(), "osk.json")
+	path := filepath.Join(t.TempDir(), "config.json")
 	cliWriteFile(t, path, "{\n\"state\": \"https://hooks.example/state/"+mark+"\",\n"+
 		"\"domains\": [{\"name\": \"corp.test.\", \"expect\": \"https://hooks.example/expect/"+mark+"\"}],\n"+
 		"\"slack\": {\"url\": {\"env\": \"OSK_SLACK_URL\"}}\n}\n")
@@ -291,13 +291,13 @@ func TestValidateWarnsOfIssuerAndCertnameLinesWhenCertificatesIsNotSet(t *testin
 			if code != 0 || errOut != "" {
 				t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
 			}
-			cliSame(t, "osk validate", out, append(cliPrefixed("warning ", warnings), "valid: 2 domains, channels slack,siem")...)
+			cliSame(t, "osk-dns-watcher validate", out, append(cliPrefixed("warning ", warnings), "valid: 2 domains, channels slack,siem")...)
 
 			code, out, errOut = cliValidate(w, "--json")
 			if code != 0 || errOut != "" {
 				t.Errorf("--json: exit code %d, errors %q; want 0 and none", code, errOut)
 			}
-			cliSame(t, "osk validate --json", out, cliValidateJSON(t, nil, warnings, summary)...)
+			cliSame(t, "osk-dns-watcher validate --json", out, cliValidateJSON(t, nil, warnings, summary)...)
 		})
 	}
 }
@@ -318,5 +318,5 @@ func TestValidateDoesNotWarnOfIssuerAndCertnameLinesWhenCertificatesIsSet(t *tes
 	if code != 0 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk validate", out, "warning "+c.Warnings()[0], "valid: 2 domains, channels slack,siem")
+	cliSame(t, "osk-dns-watcher validate", out, "warning "+c.Warnings()[0], "valid: 2 domains, channels slack,siem")
 }

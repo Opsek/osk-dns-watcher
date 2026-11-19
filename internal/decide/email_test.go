@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 var emlServers = []struct{ host, addr string }{
@@ -133,7 +133,7 @@ func emlOne(t *testing.T, f *expect.File, o obs.Observation) Finding {
 func TestEmlRecordRuleRows(t *testing.T) {
 	rows := []struct {
 		name string
-		part string // the part of the contract that gives the row
+		part string // the part of the design that gives the row
 		line string
 		typ  dnswire.Type
 		now  string // what one server gives; it differs from the line

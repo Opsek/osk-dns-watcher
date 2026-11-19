@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 var cliRequest = regexp.MustCompile(`^[0-9a-f]{32}\n$`)
@@ -31,7 +31,7 @@ func cliDue(s *store.Store, channel string) ([]store.Row, error) {
 	return s.Due(channel, time.Now().Add(time.Minute))
 }
 
-// cliServe plays osk run in the child process: it takes the request of
+// cliServe plays osk-dns-watcher run in the child process: it takes the request of
 // test-alert, writes a notice that test-alert must pass over, one of
 // another kind with the same line, and then the test notice, with its rows
 // in the reverse order of the config. mode says what becomes of the row of
@@ -142,13 +142,13 @@ func TestTestAlertExits0WhenTheServiceSentTheTestToEveryChannel(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Errorf("exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk test-alert", out, "test slack sent", "test siem sent")
+	cliSame(t, "osk-dns-watcher test-alert", out, "test slack sent", "test siem sent")
 
 	code, out, errOut, _ = cliTestAlert(t, "sent", "--json")
 	if code != 0 || errOut != "" {
 		t.Errorf("--json: exit code %d, errors %q; want 0 and none", code, errOut)
 	}
-	cliSame(t, "osk test-alert --json", out, cliAttempts(t,
+	cliSame(t, "osk-dns-watcher test-alert --json", out, cliAttempts(t,
 		cliAttemptJSON{Channel: "slack", State: "sent"}, cliAttemptJSON{Channel: "siem", State: "sent"})...)
 }
 
@@ -157,13 +157,13 @@ func TestTestAlertExits1WithTheReasonAndNextTryOfAFailedChannel(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code %d, want 1", code)
 	}
-	cliSame(t, "osk test-alert", out, "test slack sent", "test siem failed: status 503; next try 2030-01-02T03:04:05Z")
+	cliSame(t, "osk-dns-watcher test-alert", out, "test slack sent", "test siem failed: status 503; next try 2030-01-02T03:04:05Z")
 
 	code, out, _, _ = cliTestAlert(t, "failed", "--json")
 	if code != 1 {
 		t.Errorf("--json: exit code %d, want 1", code)
 	}
-	cliSame(t, "osk test-alert --json", out, cliAttempts(t, cliAttemptJSON{Channel: "slack", State: "sent"},
+	cliSame(t, "osk-dns-watcher test-alert --json", out, cliAttempts(t, cliAttemptJSON{Channel: "slack", State: "sent"},
 		cliAttemptJSON{Channel: "siem", State: "failed", Reason: "status 503", Next: "2030-01-02T03:04:05Z"})...)
 }
 
@@ -173,13 +173,13 @@ func TestTestAlertExits1WithTheReasonOfAChannelThatGaveUp(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code %d, want 1", code)
 	}
-	cliSame(t, "osk test-alert", out, "test slack sent", "test siem given up: "+reason)
+	cliSame(t, "osk-dns-watcher test-alert", out, "test slack sent", "test siem given up: "+reason)
 
 	code, out, _, _ = cliTestAlert(t, "given-up", "--json")
 	if code != 1 {
 		t.Errorf("--json: exit code %d, want 1", code)
 	}
-	cliSame(t, "osk test-alert --json", out, cliAttempts(t, cliAttemptJSON{Channel: "slack", State: "sent"},
+	cliSame(t, "osk-dns-watcher test-alert --json", out, cliAttempts(t, cliAttemptJSON{Channel: "slack", State: "sent"},
 		cliAttemptJSON{Channel: "siem", State: "given-up", Reason: reason})...)
 }
 
@@ -190,7 +190,7 @@ func TestTestAlertReportsAChannelNotTriedWithin30Seconds(t *testing.T) {
 	if code != 1 || took < 29500*time.Millisecond || took > 32*time.Second {
 		t.Errorf("exit code %d after %v; want 1 after 30s", code, took)
 	}
-	cliSame(t, "osk test-alert", out, "test slack sent", "test siem not tried within 30s")
+	cliSame(t, "osk-dns-watcher test-alert", out, "test slack sent", "test siem not tried within 30s")
 }
 
 func TestTestAlertJSONReportsAChannelNotTriedWithin30Seconds(t *testing.T) {
@@ -199,7 +199,7 @@ func TestTestAlertJSONReportsAChannelNotTriedWithin30Seconds(t *testing.T) {
 	if code != 1 || took < 29500*time.Millisecond || took > 32*time.Second {
 		t.Errorf("exit code %d after %v; want 1 after 30s", code, took)
 	}
-	cliSame(t, "osk test-alert --json", out, cliAttempts(t, cliAttemptJSON{Channel: "slack", State: "sent"},
+	cliSame(t, "osk-dns-watcher test-alert --json", out, cliAttempts(t, cliAttemptJSON{Channel: "slack", State: "sent"},
 		cliAttemptJSON{Channel: "siem", State: "not-tried"})...)
 }
 
@@ -237,7 +237,7 @@ func TestTestAlertWithoutAServiceFailsAfter30SecondsAndRemovesItsRequest(t *test
 	}
 
 	r := <-done
-	want := "osk: osk run did not take the test within 30s; is it running on " + w.state + "?\n"
+	want := "osk-dns-watcher: osk-dns-watcher run did not take the test within 30s; is it running on " + w.state + "?\n"
 	if r.code != 1 || r.out != "" || r.errOut != want || r.took < 29500*time.Millisecond || r.took > 32*time.Second {
 		t.Errorf("exit code %d after %v, output %q, errors %q; want 1 after 30s, nothing and %q", r.code, r.took, r.out, r.errOut, want)
 	}
@@ -254,7 +254,7 @@ func TestTestAlertLeavesARequestThatIsAlreadyWaiting(t *testing.T) {
 	waiting := strings.Repeat("ab", 16) + "\n"
 	cliWriteFile(t, path, waiting)
 	code, out, errOut := cliRun(10*time.Second, "test-alert", "--config", w.config)
-	if want := "osk: a test is already waiting for osk run\n"; code != 1 || out != "" || errOut != want {
+	if want := "osk-dns-watcher: a test is already waiting for osk-dns-watcher run\n"; code != 1 || out != "" || errOut != want {
 		t.Errorf("exit code %d, output %q, errors %q; want 1, nothing and %q", code, out, errOut, want)
 	}
 	cliNoMarker(t, out, errOut)
@@ -285,9 +285,9 @@ func TestTestAlertStopsAtTheEndOfItsContextAndRemovesItsRequest(t *testing.T) {
 	var out, errOut strings.Builder
 	start := time.Now()
 	code := TestAlert(ctx, []string{"--config", w.config}, &out, &errOut)
-	if code != 1 || out.String() != "" || errOut.String() != "osk: context canceled\n" || time.Since(start) > 7*time.Second {
+	if code != 1 || out.String() != "" || errOut.String() != "osk-dns-watcher: context canceled\n" || time.Since(start) > 7*time.Second {
 		t.Errorf("exit code %d after %v, output %q, errors %q; want 1 soon after the end of the context, nothing and %q",
-			code, time.Since(start), out.String(), errOut.String(), "osk: context canceled\n")
+			code, time.Since(start), out.String(), errOut.String(), "osk-dns-watcher: context canceled\n")
 	}
 	if !<-seen {
 		t.Error("test-alert wrote no request")

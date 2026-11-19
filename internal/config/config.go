@@ -1,4 +1,4 @@
-// Package config reads the one config file of osk: strict JSON, with every
+// Package config reads the one config file of osk-dns-watcher: strict JSON, with every
 // problem named by its line and key path. The file never holds a secret: it
 // names an environment variable or a file for each, and Secrets reads them
 // only once the config is valid.
@@ -17,11 +17,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
-	"github.com/Opsek/dns-monitoring/internal/schedule"
-	"github.com/Opsek/dns-monitoring/internal/sources/certlog"
+	"github.com/Opsek/osk-dns-watcher/internal/certlog"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/schedule"
 )
 
 const (
@@ -181,7 +181,7 @@ var ErrNotRegular = errors.New("is not a regular file")
 // MaxExpectFile is the largest expectations file that expect.Parse takes.
 const MaxExpectFile = 4194304
 
-// ReadRegular reads every file that osk reads: at most limit + 1 octets, so
+// ReadRegular reads every file that osk-dns-watcher reads: at most limit + 1 octets, so
 // that the caller can tell a file that is too large without reading all of
 // it. Only a regular file is opened; a failed Stat is left to the open, whose
 // error names the path.
@@ -248,7 +248,7 @@ func (w *walker) state(path string) string {
 }
 
 // filePath reads a file or folder name. A relative one is read against the
-// folder of the config file, so that it does not depend on where osk was
+// folder of the config file, so that it does not depend on where osk-dns-watcher was
 // started. A URL there may be a secret pasted into the wrong field, so the
 // problem does not repeat it.
 func (w *walker) filePath(path string) (string, int64, bool) {

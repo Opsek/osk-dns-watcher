@@ -7,7 +7,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // cookieOption is the EDNS option code of DNS cookies (RFC 7873).

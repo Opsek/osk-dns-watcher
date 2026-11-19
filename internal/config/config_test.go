@@ -15,17 +15,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/schedule"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/schedule"
 )
 
 // cfgFile names every parsed text. It is absolute, so the relative paths in
 // a config are read against cfgDir and the expected paths are fixed.
 const (
-	cfgFile = "/etc/osk/osk.json"
-	cfgDir  = "/etc/osk"
+	cfgFile = "/etc/osk-dns-watcher/config.json"
+	cfgDir  = "/etc/osk-dns-watcher"
 )
 
 // cfgSeed fixes every generated input, so that a failure can be run again.
@@ -35,8 +35,8 @@ const cfgSeed = 7
 // and each member on its own line, so these are on lines 2, 3 and 4, and a
 // member after them starts on line 5.
 const (
-	cfgState   = `"state": "/var/lib/osk"`
-	cfgDomains = `"domains": [{"name": "corp.test.", "expect": "/etc/osk/corp.test.expect"}]`
+	cfgState   = `"state": "/var/lib/osk-dns-watcher"`
+	cfgDomains = `"domains": [{"name": "corp.test.", "expect": "/etc/osk-dns-watcher/corp.test.expect"}]`
 	cfgSlack   = `"slack": {"url": {"env": "OSK_SLACK_URL"}}`
 )
 
@@ -300,14 +300,14 @@ func TestProblemStringLeavesOutEmptyLineAndPath(t *testing.T) {
 		p    Problem
 		want string
 	}{
-		{Problem{File: "osk.json", Line: 3, Path: "webhooks[0].key.file", Text: "want a path"},
-			"osk.json:3: webhooks[0].key.file: want a path"},
-		{Problem{File: "osk.json", Line: 1, Text: cfgWantChannel},
-			"osk.json:1: " + cfgWantChannel},
-		{Problem{File: "/etc/osk/osk.json", Text: "cannot be read: open /etc/osk/osk.json: permission denied"},
-			"/etc/osk/osk.json: cannot be read: open /etc/osk/osk.json: permission denied"},
-		{Problem{File: "osk.json", Path: "slack.url", Text: "the environment variable OSK_SLACK_URL is not set or empty"},
-			"osk.json: slack.url: the environment variable OSK_SLACK_URL is not set or empty"},
+		{Problem{File: "config.json", Line: 3, Path: "webhooks[0].key.file", Text: "want a path"},
+			"config.json:3: webhooks[0].key.file: want a path"},
+		{Problem{File: "config.json", Line: 1, Text: cfgWantChannel},
+			"config.json:1: " + cfgWantChannel},
+		{Problem{File: "/etc/osk-dns-watcher/config.json", Text: "cannot be read: open /etc/osk-dns-watcher/config.json: permission denied"},
+			"/etc/osk-dns-watcher/config.json: cannot be read: open /etc/osk-dns-watcher/config.json: permission denied"},
+		{Problem{File: "config.json", Path: "slack.url", Text: "the environment variable OSK_SLACK_URL is not set or empty"},
+			"config.json: slack.url: the environment variable OSK_SLACK_URL is not set or empty"},
 	} {
 		if got := c.p.String(); got != c.want {
 			t.Errorf("%+v.String() = %q; want %q", c.p, got, c.want)
@@ -317,7 +317,7 @@ func TestProblemStringLeavesOutEmptyLineAndPath(t *testing.T) {
 
 // cfgExample is the example config of the format: two domains, Slack, one
 // webhook and a heartbeat.
-const cfgExample = `{"state": "/var/lib/osk",
+const cfgExample = `{"state": "/var/lib/osk-dns-watcher",
  "domains": [{"name": "example.com.", "expect": "example.com.expect", "fast": ["login.example.com."]},
              {"name": "example.org.", "expect": "example.org.expect"}],
  "slack": {"url": {"env": "OSK_SLACK_URL"}, "min_severity": "medium"},
@@ -331,11 +331,11 @@ func TestExampleConfigParsesToTheValuesWritten(t *testing.T) {
 	c := cfgOK(t, cfgExample)
 	want := &Config{
 		Path:  cfgFile,
-		State: "/var/lib/osk",
+		State: "/var/lib/osk-dns-watcher",
 		Domains: []Domain{
-			{Name: cfgName(t, "example.com."), Expect: "/etc/osk/example.com.expect",
+			{Name: cfgName(t, "example.com."), Expect: "/etc/osk-dns-watcher/example.com.expect",
 				Fast: []dnswire.Name{cfgName(t, "login.example.com.")}, Line: 2},
-			{Name: cfgName(t, "example.org."), Expect: "/etc/osk/example.org.expect", Line: 3},
+			{Name: cfgName(t, "example.org."), Expect: "/etc/osk-dns-watcher/example.org.expect", Line: 3},
 		},
 		Intervals: schedule.Intervals{Serial: 15 * time.Second, Parent: time.Minute, Fast: time.Minute, Other: 5 * time.Minute},
 		Slack:     &Slack{URL: Secret{Env: "OSK_SLACK_URL", Path: "slack.url", Line: 4}, MinSeverity: decide.SeverityMedium},
@@ -377,7 +377,7 @@ var cfgEvery = []string{
 	`, {`,
 	`"fast": []`,
 	`, "name": "example.org."`,
-	`, "expect": "/srv/osk/example.org.expect"`,
+	`, "expect": "/srv/osk-dns-watcher/example.org.expect"`,
 	`}`,
 	`]`,
 	`, "intervals": {`,
@@ -420,17 +420,17 @@ var cfgEvery = []string{
 func cfgEveryWant(t testing.TB) *Config {
 	return &Config{
 		Path:  cfgFile,
-		State: "/etc/osk/state",
+		State: "/etc/osk-dns-watcher/state",
 		Domains: []Domain{
-			{Name: cfgName(t, "Example.COM."), Expect: "/etc/osk/example.com.expect",
+			{Name: cfgName(t, "Example.COM."), Expect: "/etc/osk-dns-watcher/example.com.expect",
 				Fast: []dnswire.Name{cfgName(t, "login.example.com."), cfgName(t, "www.example.com.")}, Line: 6},
-			{Name: cfgName(t, "example.org."), Expect: "/srv/osk/example.org.expect", Line: 11},
+			{Name: cfgName(t, "example.org."), Expect: "/srv/osk-dns-watcher/example.org.expect", Line: 11},
 		},
 		Intervals: schedule.Intervals{Serial: 5 * time.Second, Parent: 24 * time.Hour, Fast: 90 * time.Second, Other: 90 * time.Minute},
 		Slack:     &Slack{URL: Secret{Env: "OSK_SLACK_URL", Path: "slack.url", Line: 25}, MinSeverity: decide.SeverityCritical},
 		Webhooks: []Webhook{
 			{Name: "siem-1", URL: Secret{File: "/run/secrets/siem_url", Path: "webhooks[0].url", Line: 31},
-				Key: Secret{File: "/etc/osk/siem_key", Path: "webhooks[0].key", Line: 32}, MinSeverity: decide.SeverityMedium},
+				Key: Secret{File: "/etc/osk-dns-watcher/siem_key", Path: "webhooks[0].key", Line: 32}, MinSeverity: decide.SeverityMedium},
 			{Name: "pager", URL: Secret{Env: "PAGER_URL", Path: "webhooks[1].url", Line: 37},
 				Key: Secret{Env: "PAGER_KEY", Path: "webhooks[1].key", Line: 38}, MinSeverity: decide.SeverityLow},
 		},
@@ -460,8 +460,8 @@ func TestDefaultsWhenOptionalKeysAreAbsent(t *testing.T) {
 	}
 	want := &Config{
 		Path:        cfgFile,
-		State:       "/var/lib/osk",
-		Domains:     []Domain{{Name: cfgName(t, "corp.test."), Expect: "/etc/osk/corp.test.expect", Line: 3}},
+		State:       "/var/lib/osk-dns-watcher",
+		Domains:     []Domain{{Name: cfgName(t, "corp.test."), Expect: "/etc/osk-dns-watcher/corp.test.expect", Line: 3}},
 		Intervals:   schedule.Defaults(),
 		Slack:       &Slack{URL: Secret{Env: "OSK_SLACK_URL", Path: "slack.url", Line: 4}, MinSeverity: decide.SeverityLow},
 		HistoryDays: 90,
@@ -509,25 +509,25 @@ func TestRelativePathsAreReadAgainstTheConfigFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, problems := Parse("conf/osk.json", []byte(cfgDoc(`"state": "state"`, cfgDomains, cfgSlack)))
+	c, problems := Parse("conf/config.json", []byte(cfgDoc(`"state": "state"`, cfgDomains, cfgSlack)))
 	if c == nil || len(problems) > 0 {
 		t.Fatalf("Parse gave %v", problems)
 	}
-	if want := filepath.Join(wd, "conf", "state"); c.State != want || c.Path != "conf/osk.json" {
+	if want := filepath.Join(wd, "conf", "state"); c.State != want || c.Path != "conf/config.json" {
 		t.Errorf("State %q, Path %q; want %q and the path as given", c.State, c.Path, want)
 	}
 }
 
 func TestStateIsAFolderWithoutQuestionMarkOrHash(t *testing.T) {
-	if c := cfgOK(t, cfgDoc(`"state": "/var/lib/osk-1"`, cfgDomains, cfgSlack)); c.State != "/var/lib/osk-1" {
-		t.Errorf("State = %q; want /var/lib/osk-1", c.State)
+	if c := cfgOK(t, cfgDoc(`"state": "/var/lib/osk-dns-watcher-1"`, cfgDomains, cfgSlack)); c.State != "/var/lib/osk-dns-watcher-1" {
+		t.Errorf("State = %q; want /var/lib/osk-dns-watcher-1", c.State)
 	}
 	for _, c := range []struct{ value, text string }{
 		{`""`, "want a path"},
 		{`5`, "want a string"},
-		{`["/var/lib/osk"]`, "want a string"},
-		{`"/var/lib/osk?mode=ro"`, "a folder name with ? or # cannot be used"},
-		{`"/var/lib/osk#1"`, "a folder name with ? or # cannot be used"},
+		{`["/var/lib/osk-dns-watcher"]`, "want a string"},
+		{`"/var/lib/osk-dns-watcher?mode=ro"`, "a folder name with ? or # cannot be used"},
+		{`"/var/lib/osk-dns-watcher#1"`, "a folder name with ? or # cannot be used"},
 	} {
 		cfgRefused(t, cfgDoc(`"state": `+c.value, cfgDomains, cfgSlack), cfgAt(2, "state", c.text))
 	}
@@ -628,8 +628,8 @@ func TestDomainExpectIsAPath(t *testing.T) {
 	doc := func(expect string) string {
 		return cfgDoc(cfgState, `"domains": [{"name": "corp.test.", "expect": `+expect+`}]`, cfgSlack)
 	}
-	if c := cfgOK(t, doc(`"corp.test.expect"`)); c.Domains[0].Expect != "/etc/osk/corp.test.expect" {
-		t.Errorf("Expect = %q; want /etc/osk/corp.test.expect", c.Domains[0].Expect)
+	if c := cfgOK(t, doc(`"corp.test.expect"`)); c.Domains[0].Expect != "/etc/osk-dns-watcher/corp.test.expect" {
+		t.Errorf("Expect = %q; want /etc/osk-dns-watcher/corp.test.expect", c.Domains[0].Expect)
 	}
 	cfgRefused(t, doc(`""`), cfgAt(3, "domains[0].expect", "want a path"))
 	cfgRefused(t, doc(`5`), cfgAt(3, "domains[0].expect", "want a string"))
@@ -937,7 +937,7 @@ func TestSecretIsAnObjectWithEnvOrFile(t *testing.T) {
 	}{
 		{`{"env": "OSK_SLACK_URL"}`, Secret{Env: "OSK_SLACK_URL", Path: "slack.url", Line: 4}},
 		{`{"file": "/run/secrets/slack"}`, Secret{File: "/run/secrets/slack", Path: "slack.url", Line: 4}},
-		{`{"file": "secrets/slack"}`, Secret{File: "/etc/osk/secrets/slack", Path: "slack.url", Line: 4}},
+		{`{"file": "secrets/slack"}`, Secret{File: "/etc/osk-dns-watcher/secrets/slack", Path: "slack.url", Line: 4}},
 	} {
 		if got := cfgOK(t, doc(c.secret)).Slack.URL; got != c.want {
 			t.Errorf("%s gave %+v; want %+v", c.secret, got, c.want)
@@ -982,10 +982,10 @@ func TestSecretIsAnObjectWithEnvOrFile(t *testing.T) {
 
 func TestUnknownKeyIsRefusedAndItsValueSkipped(t *testing.T) {
 	cfgRefused(t, cfgWith(`"slak": {"url": {"env": "OSK_SLACK_URL"}, "x": [1, {"y": null}]}`), cfgUnknown(5, "", "slak"))
-	cfgRefused(t, cfgWith(`"_comment": "the config of osk"`), cfgUnknown(5, "", "_comment"))
+	cfgRefused(t, cfgWith(`"_comment": "the config of osk-dns-watcher"`), cfgUnknown(5, "", "_comment"))
 	// The trust anchor is not a setting of this file: its key is refused like any other.
-	cfgRefused(t, cfgWith(`"dnssec": {"trust_anchor": "/etc/osk/root.key"}`), cfgUnknown(5, "", "dnssec"))
-	cfgRefused(t, cfgWith(`"network": {"trust_anchor": "/etc/osk/root.key"}`), cfgUnknown(5, "network", "trust_anchor"))
+	cfgRefused(t, cfgWith(`"dnssec": {"trust_anchor": "/etc/osk-dns-watcher/root.key"}`), cfgUnknown(5, "", "dnssec"))
+	cfgRefused(t, cfgWith(`"network": {"trust_anchor": "/etc/osk-dns-watcher/root.key"}`), cfgUnknown(5, "network", "trust_anchor"))
 	cfgRefused(t, cfgDoc(cfgState, `"domains": [{"name": "corp.test.", "expect": "/e", "fastt": []}]`, cfgSlack),
 		cfgUnknown(3, "domains[0]", "fastt"))
 	cfgRefused(t, cfgDoc(cfgState, cfgDomains, `"slack": {"url": {"env": "U"}, "channel": "#dns"}`), cfgUnknown(4, "slack", "channel"))
@@ -997,9 +997,9 @@ func TestUnknownKeyIsRefusedAndItsValueSkipped(t *testing.T) {
 }
 
 func TestKeyInAnotherCaseIsUnknown(t *testing.T) {
-	cfgRefused(t, cfgWith(`"State": "/tmp/osk"`), cfgUnknown(5, "", "State"))
-	cfgRefused(t, cfgWith(`"STATE": "/tmp/osk"`), cfgUnknown(5, "", "STATE"))
-	cfgRefused(t, cfgDoc(`"State": "/var/lib/osk"`, cfgDomains, cfgSlack), cfgUnknown(2, "", "State"), cfgRequired(1, "", "state"))
+	cfgRefused(t, cfgWith(`"State": "/tmp/osk-dns-watcher"`), cfgUnknown(5, "", "State"))
+	cfgRefused(t, cfgWith(`"STATE": "/tmp/osk-dns-watcher"`), cfgUnknown(5, "", "STATE"))
+	cfgRefused(t, cfgDoc(`"State": "/var/lib/osk-dns-watcher"`, cfgDomains, cfgSlack), cfgUnknown(2, "", "State"), cfgRequired(1, "", "state"))
 	cfgRefused(t, cfgDoc(cfgState, `"domains": [{"Name": "corp.test.", "name": "corp.test.", "expect": "/e"}]`, cfgSlack),
 		cfgUnknown(3, "domains[0]", "Name"))
 	cfgRefused(t, cfgWith(`"intervals": {"Fast": "10s"}`), cfgUnknown(5, "intervals", "Fast"))
@@ -1116,14 +1116,14 @@ func cfgSyntax(t *testing.T, text string) Problem {
 // leaves missing) are not reported.
 func TestSyntaxErrorGivesOneProblemAndNothingElse(t *testing.T) {
 	for _, text := range []string{
-		"{\n\"state\": \"/var/lib/osk\",\n\"domains\": ]\n\"slak\": 1, \"State\": 2}\n",
-		"{\n\"state\": \"/var/lib/osk\"\n\"domains\": [], \"zz\": 1}\n",
-		"{\n\"slak\": 1,\n\"history_days\": 0,\n\"state\" \"/var/lib/osk\"}\n",
-		"\n\n{\"state\": \"/var/lib/osk\",, \"slak\": 1}\n",
+		"{\n\"state\": \"/var/lib/osk-dns-watcher\",\n\"domains\": ]\n\"slak\": 1, \"State\": 2}\n",
+		"{\n\"state\": \"/var/lib/osk-dns-watcher\"\n\"domains\": [], \"zz\": 1}\n",
+		"{\n\"slak\": 1,\n\"history_days\": 0,\n\"state\" \"/var/lib/osk-dns-watcher\"}\n",
+		"\n\n{\"state\": \"/var/lib/osk-dns-watcher\",, \"slak\": 1}\n",
 		"{\"history_days\": tru}",
 		"{\"history_days\": 1.}",
-		"{'state': '/var/lib/osk'}",
-		"{\"state\": \"/var/lib/osk\", /* note */ \"domains\": []}",
+		"{'state': '/var/lib/osk-dns-watcher'}",
+		"{\"state\": \"/var/lib/osk-dns-watcher\", /* note */ \"domains\": []}",
 	} {
 		cfgSyntax(t, text)
 	}
@@ -1131,7 +1131,7 @@ func TestSyntaxErrorGivesOneProblemAndNothingElse(t *testing.T) {
 
 // A line break inside a string is the fault, and the line it ends is not.
 func TestRawLineBreakInAStringIsReportedOnTheNextLine(t *testing.T) {
-	text := "{\n\"state\": \"/var/lib\nosk\",\n" + cfgDomains + ",\n" + cfgSlack + "\n}\n"
+	text := "{\n\"state\": \"/var/lib\nosk-dns-watcher\",\n" + cfgDomains + ",\n" + cfgSlack + "\n}\n"
 	if p := cfgSyntax(t, text); p.Line != 3 {
 		t.Errorf("a line break in the string of line 2 gave line %d; want 3", p.Line)
 	}
@@ -1143,7 +1143,7 @@ func TestCutEmptyOrTrailingTextIsNotValidJSON(t *testing.T) {
 	valid := cfgDoc(cfgState, cfgDomains, cfgSlack)
 	for _, text := range []string{
 		valid[:len(valid)-3],
-		"{\"state\": \"/var/lib/osk\",",
+		"{\"state\": \"/var/lib/osk-dns-watcher\",",
 		"{\"state\": \"/var/lib",
 		valid + "x",
 		valid + "{}",
@@ -1153,13 +1153,13 @@ func TestCutEmptyOrTrailingTextIsNotValidJSON(t *testing.T) {
 	} {
 		cfgSyntax(t, text)
 	}
-	if c := cfgOK(t, "\r\n\t "+valid+" \r\n\n"); c.State != "/var/lib/osk" {
+	if c := cfgOK(t, "\r\n\t "+valid+" \r\n\n"); c.State != "/var/lib/osk-dns-watcher" {
 		t.Errorf("blanks around the object changed State to %q", c.State)
 	}
 }
 
 func TestTopLevelMustBeAnObject(t *testing.T) {
-	for _, v := range []string{`[]`, `"/var/lib/osk"`, `5`, `null`, `true`, `[{"state": "/var/lib/osk"}]`} {
+	for _, v := range []string{`[]`, `"/var/lib/osk-dns-watcher"`, `5`, `null`, `true`, `[{"state": "/var/lib/osk-dns-watcher"}]`} {
 		cfgRefused(t, "\n"+v+"\n", cfgAt(2, "", "want an object"))
 	}
 }
@@ -1242,11 +1242,11 @@ func TestProblemsAreSortedByLine(t *testing.T) {
 // order of their lines, so that a person fixes them from the top.
 func TestEveryProblemIsReportedInTheOrderOfTheFile(t *testing.T) {
 	text := cfgDoc(cfgState,
-		`"domains": [{"name": "corp.test.", "expect": "/etc/osk/corp.test.expect"}]`,
+		`"domains": [{"name": "corp.test.", "expect": "/etc/osk-dns-watcher/corp.test.expect"}]`,
 		`"slak": {"url": {"env": "OSK_SLACK_URL"}}`,
 		`"intervals": {"fast": "4s"}`,
 		`"webhooks": [{"name": "slack", "url": {"env": "HOOK_URL"}, "key": {"env": "HOOK_KEY"}}]`,
-		`"State": "/var/lib/osk"`,
+		`"State": "/var/lib/osk-dns-watcher"`,
 		cfgState)
 	want := []cfgP{
 		cfgUnknown(4, "", "slak"),
@@ -1264,7 +1264,7 @@ func TestEveryProblemIsReportedInTheOrderOfTheFile(t *testing.T) {
 			t.Errorf("problem %d is %+v; want %v", i, problems[i], w)
 		}
 	}
-	if got, want := problems[1].String(), "/etc/osk/osk.json:5: intervals.fast: 4s is below the floor of 5s"; got != want {
+	if got, want := problems[1].String(), "/etc/osk-dns-watcher/config.json:5: intervals.fast: 4s is below the floor of 5s"; got != want {
 		t.Errorf("String() = %q; want %q", got, want)
 	}
 }
@@ -1385,7 +1385,7 @@ func TestProblemsDoNotRepeatAPastedSecret(t *testing.T) {
 
 func TestReadParsesTheFileAgainstItsFolder(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "osk.json")
+	path := filepath.Join(dir, "config.json")
 	cfgWrite(t, path, cfgDoc(`"state": "state"`, `"domains": [{"name": "corp.test.", "expect": "corp.expect"}]`, cfgSlack))
 	c, problems := Read(path)
 	if len(problems) > 0 || c == nil {
@@ -1425,8 +1425,8 @@ func TestChannelsAreSlackThenTheWebhooksInOrder(t *testing.T) {
 }
 
 const (
-	cfgRootWarning  = "network.root_servers is set: osk starts its walk at 10.53.0.2:53, 10.53.0.3:5353, [fd00::2]:53, [fd00::3]:53 instead of the root servers of the internet, so these servers decide every answer. Use it only in a lab or a private network."
-	cfgRangeWarning = "network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to 10.53.0.0/24, fd00::/64. Use it only in a lab or a private network."
+	cfgRootWarning  = "network.root_servers is set: osk-dns-watcher starts its walk at 10.53.0.2:53, 10.53.0.3:5353, [fd00::2]:53, [fd00::3]:53 instead of the root servers of the internet, so these servers decide every answer. Use it only in a lab or a private network."
+	cfgRangeWarning = "network.extra_ranges is set: data from DNS can now make osk-dns-watcher send queries and HTTPS requests for MTA-STS policy files to 10.53.0.0/24, fd00::/64. Use it only in a lab or a private network."
 	cfgRoots        = `"root_servers": ["10.53.0.2", "10.53.0.3:5353", "[fd00::2]:53", "fd00::3"]`
 	cfgRanges       = `"extra_ranges": ["10.53.0.0/24", "fd00::/64"]`
 )
@@ -1629,7 +1629,7 @@ func TestMissingVariableOrFileIsNamed(t *testing.T) {
 	}
 
 	// A relative file is read against the folder of the config.
-	path := filepath.Join(dir, "osk.json")
+	path := filepath.Join(dir, "config.json")
 	c, ps := Parse(path, []byte(cfgSecretDoc(cfgEnvSlack, cfgEnvURL, `{"file": "keys/siem"}`, cfgEnvBeat)))
 	if len(ps) > 0 {
 		t.Fatal(ps)
@@ -1836,7 +1836,7 @@ func TestNothingIsReadWhileTheConfigHasProblems(t *testing.T) {
 	faulty := cfgDoc(append(members, `"history_days": 0`)...)
 	cfgRefused(t, faulty, cfgAt(6, "history_days", "want 1 to 3650"))
 
-	path := filepath.Join(dir, "osk.json")
+	path := filepath.Join(dir, "config.json")
 	cfgWrite(t, path, faulty)
 	c, problems := Read(path)
 	if c != nil || len(problems) != 1 || problems[0] != (Problem{File: path, Line: 6, Path: "history_days", Text: "want 1 to 3650"}) {
@@ -1973,7 +1973,7 @@ func TestDomainReadNamesAFileThatCannotBeRead(t *testing.T) {
 	}
 }
 
-// The file is read as osk check reads it: up to the size that expect.Parse
+// The file is read as osk-dns-watcher check reads it: up to the size that expect.Parse
 // takes, and one octet more so that Parse can tell a larger one.
 func TestDomainReadTakesFilesUpToTheLimitOfTheFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "corp.expect")

@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/deliver"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/deliver"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // emlwCase is one of the four mail rules: the line it watches, what the
@@ -352,7 +352,7 @@ func TestWebhookMessageCarriesTheMailRules(t *testing.T) {
 						words = append(words, fmt.Sprintf("word %d of %s", i, c.name))
 					}
 					if nwords == 12 {
-						// The line that stands for the words that osk left out.
+						// The line that stands for the words that osk-dns-watcher left out.
 						words[11] = "and 3 more"
 					}
 					lines := emlwServers(t, servers, c.seen)

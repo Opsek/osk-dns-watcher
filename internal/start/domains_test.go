@@ -117,7 +117,7 @@ func TestInitGoesOnAfterSeveralRefusedDomainAnswers(t *testing.T) {
 	s.written(d)
 }
 
-// The names that osk watched before stay allowed: both cases, digits, "-",
+// The names that osk-dns-watcher watched before stay allowed: both cases, digits, "-",
 // "_" and a trailing dot.
 func TestInitStillTakesTheCharactersOfADomainName(t *testing.T) {
 	s := iniNew(t, "_dmarc.example.com EXAMPLE.com. xn--bcher-kva.de 9-a_b.test", iniURL, "yes")
@@ -160,10 +160,10 @@ func TestParseDomainsRows(t *testing.T) {
 		// The older texts stay.
 		{"a..b", nil, iniNameProblem(t, "a..b")},
 		{long, nil, iniNameProblem(t, long)},
-		{".", nil, "osk does not watch the root. Try again.\n"},
+		{".", nil, "osk-dns-watcher does not watch the root. Try again.\n"},
 		{"", nil, "Name at least one domain. Try again.\n"},
 		{"   ", nil, "Name at least one domain. Try again.\n"},
-		{strings.Join(iniDomainsList(101), " "), nil, "osk watches at most 100 domains. Try again.\n"},
+		{strings.Join(iniDomainsList(101), " "), nil, "osk-dns-watcher watches at most 100 domains. Try again.\n"},
 		// The character check comes first.
 		{"a..b example.com/", nil, stfBadChars},
 		{". example.com/", nil, stfBadChars},

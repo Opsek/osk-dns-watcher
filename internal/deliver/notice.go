@@ -6,14 +6,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 // timeLayout is how the lines of a down notice write their times.
 const timeLayout = "2006-01-02 15:04:05 UTC"
 
 // noticeWording is the text of one kind of notice. {d} stands for the time
-// osk was down, {D} for the domain as inline code.
+// osk-dns-watcher was down, {D} for the domain as inline code.
 type noticeWording struct {
 	emoji, word, phrase, action string
 }
@@ -22,14 +22,14 @@ var noticeWordings = map[store.NoticeKind]noticeWording{
 	store.NoticeTest: {
 		emoji:  ":test_tube:",
 		word:   "TEST",
-		phrase: "osk can send to this channel",
-		action: "Nothing to do: this message only tests the path from osk to this channel.",
+		phrase: "osk-dns-watcher can send to this channel",
+		action: "Nothing to do: this message only tests the path from osk-dns-watcher to this channel.",
 	},
 	store.NoticeDown: {
 		emoji:  ":warning:",
 		word:   "DOWN",
-		phrase: "osk did not run for {d}",
-		action: "Changes in this time were not seen when they happened. If you did not stop osk, find out who did.",
+		phrase: "osk-dns-watcher did not run for {d}",
+		action: "Changes in this time were not seen when they happened. If you did not stop osk-dns-watcher, find out who did.",
 	},
 	store.NoticeExpectations: {
 		emoji:  ":memo:",

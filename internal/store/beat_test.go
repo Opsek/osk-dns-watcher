@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
 // beaVersion1 is the schema of a store of version 1, the last one without
@@ -289,7 +289,7 @@ func TestNewStoreHasSchemaVersion3WithTheBeatTable(t *testing.T) {
 // deliveries and the clean time of each check in a store of version 1.
 func TestVersion1StoreIsMigratedToVersion3AndKeepsEveryRow(t *testing.T) {
 	dir := stoDir(t)
-	path := filepath.Join(dir, "osk.db")
+	path := filepath.Join(dir, "state.db")
 	beaMakeVersion1(t, path)
 	var before string
 	beaWithFile(t, path, func(db *sql.DB) { before = beaRows(t, db) })
@@ -330,7 +330,7 @@ func TestVersion1StoreIsMigratedToVersion3AndKeepsEveryRow(t *testing.T) {
 // EXISTS, so this migration must fail and must leave nothing of itself.
 func TestFailedMigrationLeavesVersion1StoreAsItWas(t *testing.T) {
 	dir := stoDir(t)
-	path := filepath.Join(dir, "osk.db")
+	path := filepath.Join(dir, "state.db")
 	beaMakeVersion1(t, path)
 	beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, "CREATE INDEX beat ON check_state (last_clean)") })
 	before := beaFile(t, path)
@@ -359,7 +359,7 @@ func TestFailedMigrationLeavesVersion1StoreAsItWas(t *testing.T) {
 // but it holds tables; the store's tables must not be added to it.
 func TestForeignDatabaseOfVersion0IsRefusedAndLeftAsItIs(t *testing.T) {
 	dir := stoDir(t)
-	path := filepath.Join(dir, "osk.db")
+	path := filepath.Join(dir, "state.db")
 	beaWithFile(t, path, func(db *sql.DB) { beaExec(t, db, "CREATE TABLE other (x INTEGER)") })
 	before, err := os.ReadFile(path)
 	if err != nil {
@@ -367,7 +367,7 @@ func TestForeignDatabaseOfVersion0IsRefusedAndLeftAsItIs(t *testing.T) {
 	}
 
 	s, err := Open(dir)
-	if want := "store: " + path + " is not a store of this osk (schema 0)"; err == nil || err.Error() != want {
+	if want := "store: " + path + " is not a store of this osk-dns-watcher (schema 0)"; err == nil || err.Error() != want {
 		t.Errorf("Open of a foreign database of version 0: %v, want error %q", err, want)
 		if err == nil {
 			_ = s.Close()

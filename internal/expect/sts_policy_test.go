@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 const stpSeed = 20261118
@@ -1374,7 +1374,7 @@ func stpLess(a, b string) int {
 	return len(la) - len(lb)
 }
 
-// stpOracle gives the words of the contract for two models.
+// stpOracle gives the words of the design for two models.
 func stpOracle(was, now stpModel) []string {
 	var words []string
 	if now.mode < was.mode {
@@ -1461,7 +1461,7 @@ func TestSTSPolicyOrderProperty(t *testing.T) {
 		if w := STSPolicyWeaker(x2, x); w != nil {
 			fail("Weaker(r(x), x) = %q for %s", w, x)
 		}
-		// The words are those of the contract, bounded, and the same twice.
+		// The words are those of the design, bounded, and the same twice.
 		got := STSPolicyWeaker(x, y)
 		emlCheckWords(t, got)
 		if want := stpOracle(xm, ym); !slices.Equal(got, want) || (got == nil) != (want == nil) {
@@ -1481,7 +1481,7 @@ func TestSTSPolicyOrderProperty(t *testing.T) {
 		if w := STSPolicyWeaker(x, stpRead(t, stpWrite(r, strict))); w != nil {
 			fail("a stricter edit gives %q: %v -> %v", w, xm, strict)
 		}
-		// A weakening edit gives a word, in the words of the contract.
+		// A weakening edit gives a word, in the words of the design.
 		weak := stpEdit(r, xm, false)
 		if want := stpOracle(xm, weak); len(want) > 0 {
 			if w := STSPolicyWeaker(x, stpRead(t, stpWrite(r, weak))); !slices.Equal(w, want) {

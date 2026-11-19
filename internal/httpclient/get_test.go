@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 )
 
 func TestGetConstants(t *testing.T) {

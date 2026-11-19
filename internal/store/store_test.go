@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // stoT0 has a nanosecond part, so a store that keeps less is caught.
@@ -219,7 +219,7 @@ func TestOpenMakesPrivateFolderAndFiles(t *testing.T) {
 			t.Errorf("%s has mode %v, want a file with 0600", e.Name(), info.Mode())
 		}
 	}
-	for _, want := range []string{"osk.lock", "osk.db"} {
+	for _, want := range []string{"state.lock", "state.db"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("the folder holds %q, want %s among them", names, want)
 		}
@@ -260,7 +260,7 @@ func TestSecondOpenOfOneFolderFailsUntilClose(t *testing.T) {
 	first := stoOpen(t, dir)
 
 	second, err := Open(dir)
-	if want := "store: " + dir + " is in use by another osk process"; err == nil || err.Error() != want {
+	if want := "store: " + dir + " is in use by another osk-dns-watcher process"; err == nil || err.Error() != want {
 		t.Errorf("second Open: %v, want error %q", err, want)
 		if err == nil {
 			_ = second.Close()
@@ -298,7 +298,7 @@ func TestOpenFromAnotherProcessFailsUntilClose(t *testing.T) {
 	}
 	dir := stoDir(t)
 	s := stoOpen(t, dir)
-	if got, want := stoChild(t, dir), "store: "+dir+" is in use by another osk process"; got != want {
+	if got, want := stoChild(t, dir), "store: "+dir+" is in use by another osk-dns-watcher process"; got != want {
 		t.Errorf("Open in another process while the store is open: %q, want %q", got, want)
 	}
 	if err := s.Close(); err != nil {
@@ -333,14 +333,14 @@ func TestOtherSchemaVersionIsRefusedAndLeftAsItIs(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	db := filepath.Join(dir, "osk.db")
+	db := filepath.Join(dir, "state.db")
 	before, err := os.ReadFile(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	again, err := Open(dir)
-	if want := "store: " + db + " is not a store of this osk (schema 4)"; err == nil || err.Error() != want {
+	if want := "store: " + db + " is not a store of this osk-dns-watcher (schema 4)"; err == nil || err.Error() != want {
 		t.Errorf("Open of a store with schema 4: %v, want error %q", err, want)
 		if err == nil {
 			_ = again.Close()
@@ -378,7 +378,7 @@ func TestOpenUsesWAL(t *testing.T) {
 // would rewrite its header before the schema check refuses it.
 func TestForeignDatabaseIsRefusedAndLeftAsItIs(t *testing.T) {
 	dir := stoDir(t)
-	path := filepath.Join(dir, "osk.db")
+	path := filepath.Join(dir, "state.db")
 	other, err := sql.Open("sqlite3", path)
 	if err != nil {
 		t.Fatal(err)
@@ -395,7 +395,7 @@ func TestForeignDatabaseIsRefusedAndLeftAsItIs(t *testing.T) {
 	}
 
 	s, err := Open(dir)
-	if want := "store: " + path + " is not a store of this osk (schema 7)"; err == nil || err.Error() != want {
+	if want := "store: " + path + " is not a store of this osk-dns-watcher (schema 7)"; err == nil || err.Error() != want {
 		t.Errorf("Open of a foreign database: %v, want error %q", err, want)
 		if err == nil {
 			_ = s.Close()

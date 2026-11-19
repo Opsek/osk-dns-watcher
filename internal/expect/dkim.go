@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 )
 
-// dkimLong names a record that osk does not read.
+// dkimLong names a record that osk-dns-watcher does not read.
 const dkimLong = "a DKIM record longer than 4096 octets"
 
 // dkimSpace is the white space that may stand around a tag of a key record
@@ -22,7 +22,7 @@ const dkimSpace = " \t\r\n"
 // merely matches can sign as the domain too.
 type dkimID struct {
 	shown string // how a word names the key
-	key   string // k and the whole p, the CNAME target, or the text of a record that osk does not read
+	key   string // k and the whole p, the CNAME target, or the text of a record that osk-dns-watcher does not read
 }
 
 type dkimFlags struct{ testing, strict bool }
@@ -40,7 +40,7 @@ func dkimWeaker(was, now map[dkimID]dkimFlags) []string {
 		if !listed {
 			word := "a key that the file does not list: " + id.shown
 			if id.shown == dkimLong {
-				word = dkimLong + ": osk does not read it and counts it as a key that the file does not list"
+				word = dkimLong + ": osk-dns-watcher does not read it and counts it as a key that the file does not list"
 			}
 			words = append(words, word)
 			continue
@@ -90,7 +90,7 @@ func dkimSigner(d dnswire.RData) (dkimID, dkimFlags, bool) {
 // service types leave out email.
 func dkimKey(text string) (dkimID, dkimFlags, bool) {
 	if len(text) > maxText {
-		// osk does not read it, so it may hold any key: it is listed only
+		// osk-dns-watcher does not read it, so it may hold any key: it is listed only
 		// when the file holds the same text.
 		return dkimID{shown: dkimLong, key: text}, dkimFlags{}, true
 	}

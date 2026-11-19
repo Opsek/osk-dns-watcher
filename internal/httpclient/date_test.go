@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 )
 
 // The Date of an answer is read in each of the three forms that HTTP allows,

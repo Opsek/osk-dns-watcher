@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Opsek/dns-monitoring/internal/alert"
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/dnswire"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/alert"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
 
 // ntcReaderEnv makes the test binary act as a reading process of the folder
@@ -41,7 +41,7 @@ func ntcOpenReader(t *testing.T, dir string) *Reader {
 
 // ntcNoStore is the error of a reader of a folder with no store.
 func ntcNoStore(dir string) string {
-	return "store: no state in " + dir + " yet; start osk run there first"
+	return "store: no state in " + dir + " yet; start osk-dns-watcher run there first"
 }
 
 func TestOpenReaderWithoutStateSaysToStartTheService(t *testing.T) {
@@ -180,7 +180,7 @@ func TestOpenReaderRefusesAnotherSchemaAndLeavesTheFileAsItIs(t *testing.T) {
 		version int
 		make    func(t *testing.T, dir string)
 	}{
-		{"a store of version 2", 2, func(t *testing.T, dir string) { ntcMakeVersion2(t, filepath.Join(dir, "osk.db")) }},
+		{"a store of version 2", 2, func(t *testing.T, dir string) { ntcMakeVersion2(t, filepath.Join(dir, "state.db")) }},
 		{"a store of version 4", 4, func(t *testing.T, dir string) {
 			s := stoOpen(t, dir)
 			stoExec(t, s, "PRAGMA user_version = 4")
@@ -189,12 +189,12 @@ func TestOpenReaderRefusesAnotherSchemaAndLeavesTheFileAsItIs(t *testing.T) {
 			}
 		}},
 		{"an empty file", 0, func(t *testing.T, dir string) {
-			if err := os.WriteFile(filepath.Join(dir, "osk.db"), nil, 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, "state.db"), nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{"the database of another program", 7, func(t *testing.T, dir string) {
-			beaWithFile(t, filepath.Join(dir, "osk.db"), func(db *sql.DB) {
+			beaWithFile(t, filepath.Join(dir, "state.db"), func(db *sql.DB) {
 				beaExec(t, db, "CREATE TABLE other (x INTEGER); PRAGMA user_version = 7")
 			})
 		}},
@@ -202,13 +202,13 @@ func TestOpenReaderRefusesAnotherSchemaAndLeavesTheFileAsItIs(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := stoDir(t)
 			c.make(t, dir)
-			path := filepath.Join(dir, "osk.db")
+			path := filepath.Join(dir, "state.db")
 			before, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			r, err := OpenReader(dir)
-			if want := fmt.Sprintf("store: %s is not a store of this osk (schema %d)", path, c.version); err == nil || err.Error() != want {
+			if want := fmt.Sprintf("store: %s is not a store of this osk-dns-watcher (schema %d)", path, c.version); err == nil || err.Error() != want {
 				t.Errorf("OpenReader: %v, want error %q", err, want)
 				if err == nil {
 					_ = r.Close()
@@ -768,7 +768,7 @@ func TestReaderInAnotherProcessNeitherTakesNorDropsTheWriterLock(t *testing.T) {
 	s := stoOpen(t, dir)
 	www := stoWWW(t)
 	stoApply(t, s, www, false, stoT0, stoWrite(alert.EventOpen, stoAlert(t, decide.RuleRecordSet, www, "10.53.0.99"), decide.SeverityHigh, stoT0, "slack"))
-	inUse := "store: " + dir + " is in use by another osk process"
+	inUse := "store: " + dir + " is in use by another osk-dns-watcher process"
 
 	r := ntcStartReader(t, dir)
 	if got := stoChild(t, dir); got != inUse {

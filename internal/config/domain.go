@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Opsek/dns-monitoring/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
 )
 
-// Read reads the expectations file of the domain as osk check does, and
+// Read reads the expectations file of the domain as osk-dns-watcher check does, and
 // keeps it only when its domain line names this domain.
 func (d Domain) Read() (*expect.File, []Problem) {
 	data, err := ReadRegular(d.Expect, MaxExpectFile)

@@ -1,0 +1,421 @@
+#!/bin/sh
+# Runs the quality gate: the phases build, static, tests, mutate, selftest,
+# lab, quickstart and clean, in order, stopping at the first failure. Each check
+# prints "ok <name>" or "FAIL <name>: <reason>"; the exit code is 0 only if
+# every check passed.
+# "dev/gate/bin/gate build" runs the build phase only.
+# "dev/gate/bin/gate vulncheck" runs only the scan for known vulnerabilities. A run
+# with OSK_RELEASE scans too, after the release phase; no other run does. It is
+# the one phase whose container has the network, because the vulnerability
+# database changes every day: nothing else is in that container but the tree,
+# read-only, and an empty build cache. It writes "vulncheck ok" to out/gate.log.
+# With OSK_RELEASE=<version>, the release phase runs after the build phase.
+# It checks the files of out/release/<version>/, and the image that CONTENTS
+# names, if it names one, and builds nothing, so that the files it passes are
+# the files that are signed. The tag v<version> must be there and signed;
+# SHA256SUMS.sig may be missing, but when it is there it must verify. It
+# writes "release ok <version> <sha256 of SHA256SUMS>" to out/gate.log,
+# "release-image ok <version> <digest>" or "release-image none <version>", and
+# "release-signature ok <version>" for a signed release. With an image, the
+# quickstart phase also runs the lab test of the commands that run it.
+#
+# It writes out/gate.log, one line "<phase> ok" for each phase that passed and
+# one line "fuzz ok <folder> <FuzzName>" for each fuzz run that passed, and
+# out/tests.json, the events of every test that ran, as go test -json writes
+# them.
+#
+# Settings: LAB_ID (default 0) selects the lab and labels the containers of
+# the gate. HOST_LAB_A and HOST_LAB_B (default 8 and 9) are the two labs that
+# dev/lab/accept/host.sh starts. Gates in two checkouts can run at once when no
+# lab number is in both. FUZZTIME (default 20s) is the length of each fuzz
+# run. DOCKER (default docker) and BUILD_FLAGS (default empty) may hold
+# several words each, so they stay unquoted. DOCKER_SOCK (default
+# /var/run/docker.sock) is the path of the Docker socket as the daemon sees
+# it: the daemon mounts it into the container of the quickstart phase.
+# SELFTEST (default run) is run or skip. With skip the selftest phase does not
+# run, and out/gate.log gets the line "selftest skipped" in place of
+# "selftest ok". Any other value stops the gate before the first phase.
+# shellcheck disable=SC2086
+set -u
+
+SELFTEST=${SELFTEST:-run}
+case $SELFTEST in
+run | skip) ;;
+*)
+	echo "FAIL setting: SELFTEST must be run or skip, not '$SELFTEST'" >&2
+	exit 2
+	;;
+esac
+DOCKER=${DOCKER:-docker}
+BUILD_FLAGS=${BUILD_FLAGS:-}
+LAB_ID=${LAB_ID:-0}
+DOCKER_SOCK=${DOCKER_SOCK:-/var/run/docker.sock}
+export DOCKER BUILD_FLAGS LAB_ID
+
+cd "$(dirname "$0")/../../.." || exit 2
+repo=$(pwd)
+OSK_RELEASE=${OSK_RELEASE:-}
+OSK_IMAGE=${OSK_IMAGE:-}
+if [ -n "$OSK_RELEASE" ] && ! sh build/version.sh "$OSK_RELEASE" 2>/dev/null; then
+	echo "FAIL setting: OSK_RELEASE must be a version such as 0.1.0 or 0.1.0-rc.1" >&2
+	exit 2
+fi
+# The name of the image goes into docker commands as an argument.
+if [ -n "$OSK_RELEASE" ]; then
+	case $OSK_IMAGE in
+	'' | [!a-z0-9]* | *[!a-z0-9./:_-]*)
+		echo "FAIL setting: OSK_IMAGE must be the name of the release image, such as ghcr.io/opsek/osk-dns-watcher" >&2
+		exit 2
+		;;
+	esac
+fi
+# The tag follows the content of dev/gate/Dockerfile, so checkouts with different
+# build containers do not replace each other's image.
+sum=$(cksum <dev/gate/Dockerfile) || exit 2
+image=osk-gate:${sum%% *}
+# The images that hold only a binary are named after the checkout, so that
+# two checkouts do not run or remove each other's.
+checkout=$(printf '%s' "$repo" | cksum) || exit 2
+checkout=${checkout%% *}
+
+usage() {
+	echo 'usage: dev/gate/bin/gate [build|vulncheck]' >&2
+	exit 2
+}
+
+ok() { echo "ok $1"; }
+fail() {
+	echo "FAIL $1: $2"
+	exit 1
+}
+passed() {
+	ok "$1"
+	echo "$1 ok" >>out/gate.log
+}
+
+# box runs a command in the build container with no network. Code under test
+# runs there, so the repository is read-only.
+box() {
+	$DOCKER run --rm --network none --label "osk.gate=$LAB_ID" \
+		-v osk-gate-gocache:/gocache -e GOCACHE=/gocache \
+		-v "$repo":/src:ro -w /src "$@"
+}
+
+image_build() {
+	log=$($DOCKER buildx build $BUILD_FLAGS --platform linux/arm64,linux/amd64 \
+		-t "$image" --load dev/gate 2>&1) ||
+		{ echo "$log"; fail image "the build of dev/gate/Dockerfile failed"; }
+	ok image
+}
+
+build_phase() {
+	for arch in arm64 amd64; do
+		box --platform "linux/$arch" -v "$repo/out":/src/out "$image" build/static.sh "$arch" ||
+			fail "build-$arch" "build/static.sh $arch failed"
+		ok "build-$arch"
+		scratch_run "$arch"
+	done
+	passed build
+}
+
+# The only container with the network. The build cache is a temporary
+# directory, not the shared volume, so that this container cannot poison it.
+# It scans the binaries that exist: those of the build phase, and the files of
+# the release.
+vulncheck_phase() {
+	binaries=
+	for file in out/osk-dns-watcher-linux-* "out/release/$OSK_RELEASE"/osk-dns-watcher-linux-*; do
+		[ ! -f "$file" ] || binaries="$binaries $file"
+	done
+	$DOCKER run --rm --label "osk.gate=$LAB_ID" --tmpfs /tmp:exec,size=2g \
+		-e GOCACHE=/tmp/gocache -e HOME=/tmp -e GOTELEMETRY=off \
+		-v "$repo":/src:ro -w /src "$image" dev/gate/phase/vulncheck.sh $binaries ||
+		fail vulncheck "dev/gate/phase/vulncheck.sh failed (lines above)"
+	passed vulncheck
+}
+
+# in_scratch <folder> <arch> runs "osk-dns-watcher version" from <folder>/osk-dns-watcher-linux-<arch>
+# in an image that holds only the binary. A binary that is not static cannot
+# start there, because it has no loader.
+in_scratch() {
+	tag=osk-gate-scratch:$checkout-$2
+	printf 'FROM scratch\nCOPY osk-dns-watcher-linux-%s /osk-dns-watcher\n' "$2" |
+		$DOCKER buildx build $BUILD_FLAGS --platform "linux/$2" --label osk.gate.image=1 \
+			-t "$tag" --load -f - "$1" >/dev/null 2>&1 &&
+		$DOCKER run --rm --network none --platform "linux/$2" --label "osk.gate=$LAB_ID" "$tag" /osk-dns-watcher version
+	status=$?
+	$DOCKER rmi "$tag" >/dev/null 2>&1
+	return "$status"
+}
+
+scratch_run() {
+	in_scratch out "$1" || fail "scratch-$1" "osk-dns-watcher version does not run in an empty image"
+	ok "scratch-$1"
+}
+
+# The checkout must be the commit of CONTENTS, which git alone can tell.
+# dev/gate/phase/release.sh checks the files, and the image from what take_image
+# puts in out/image/; here both binaries must print, in an empty image, the
+# version and the Go and SQLite versions that CONTENTS states. The sum of
+# SHA256SUMS goes to the log, so that the file that is signed is the file
+# that passed.
+release_phase() {
+	dir=out/release/$OSK_RELEASE
+	why=$(sh release/commit.sh "$OSK_RELEASE" 2>&1) || fail release-commit "$why"
+	git rev-parse -q --verify "refs/tags/v$OSK_RELEASE" >/dev/null ||
+		fail release-commit "there is no tag v$OSK_RELEASE; tag the release commit with git tag -s v$OSK_RELEASE before this gate"
+	ok release-commit
+	# The owner signs SHA256SUMS after this gate; a signature that is there
+	# must verify. The build container has no ssh-keygen, so the host checks it.
+	signed=
+	if [ -e "$dir/SHA256SUMS.sig" ]; then
+		why=$(sh release/verify.sh "$OSK_RELEASE" 2>&1) || fail release-signature "$why"
+		ok release-signature
+		signed=1
+	fi
+	sums=$(box "$image" sha256sum "$dir/SHA256SUMS") || fail release "cannot read $dir/SHA256SUMS"
+	rm -rf out/image
+	image_ref=
+	if grep -q '^image' "$dir/CONTENTS"; then
+		take_image "$dir"
+	fi
+	box -e "OSK_IMAGE=$OSK_IMAGE" "$image" dev/gate/phase/release.sh "$OSK_RELEASE" ||
+		fail release "dev/gate/phase/release.sh failed (lines above)"
+	want=$(echo "osk-dns-watcher $OSK_RELEASE"; grep -E '^(go|sqlite) ' "$dir/CONTENTS")
+	for arch in amd64 arm64; do
+		got=$(in_scratch "$dir" "$arch") || fail "release-$arch" "osk-dns-watcher version does not run in an empty image"
+		[ "$got" = "$want" ] || fail "release-$arch" "osk-dns-watcher version prints \"$(echo $got)\", want \"$(echo $want)\""
+		ok "release-$arch"
+	done
+	[ "$(box "$image" sha256sum "$dir/SHA256SUMS")" = "$sums" ] || fail release "$dir/SHA256SUMS changed during the phase"
+	ok release
+	echo "release ok $OSK_RELEASE ${sums%% *}" >>out/gate.log
+	if [ -n "$image_ref" ]; then
+		echo "release-image ok $OSK_RELEASE ${image_ref#*@}" >>out/gate.log
+	else
+		echo "release-image none $OSK_RELEASE" >>out/gate.log
+	fi
+	[ -z "$signed" ] || echo "release-signature ok $OSK_RELEASE" >>out/gate.log
+}
+
+# take_image <folder> reads, without running it, the image that CONTENTS
+# names, as this engine holds it: the index into out/image/index.json and the
+# binary of each platform into out/image/osk-dns-watcher-linux-<arch>. make image-digests
+# pulled both platforms, so nothing needs the network.
+take_image() {
+	name=$(sed -n 's/^image //p' "$1/CONTENTS")
+	index=$(sed -n 's/^image-digest index //p' "$1/CONTENTS")
+	[ "$name" = "$OSK_IMAGE" ] || fail release-image "CONTENTS names the image $name, but OSK_IMAGE is $OSK_IMAGE"
+	case $index in
+	*[!0-9a-z:]*) fail release-image "CONTENTS has no digest of the index of the image" ;;
+	esac
+	printf '%s\n' "$index" | grep -Eqx 'sha256:[0-9a-f]{64}' || fail release-image "CONTENTS has no digest of the index of the image"
+	image_ref=$name@$index
+	mkdir out/image || exit 2
+	$DOCKER image inspect "$image_ref" >/dev/null 2>&1 || fail release-image "$image_ref is not on this engine; make image-digests pulls it"
+	$DOCKER save "$image_ref" | tar -xOf - "blobs/sha256/${index#sha256:}" >out/image/index.json ||
+		fail release-image "cannot read the index of $image_ref"
+	for arch in amd64 arm64; do
+		id=$($DOCKER create --label "osk.gate=$LAB_ID" --platform "linux/$arch" "$image_ref") ||
+			fail release-image "cannot make a container of $image_ref for linux/$arch"
+		$DOCKER cp "$id:/usr/local/bin/osk-dns-watcher" "out/image/osk-dns-watcher-linux-$arch"
+		status=$?
+		$DOCKER rm "$id" >/dev/null
+		[ "$status" -eq 0 ] || fail release-image "cannot copy /usr/local/bin/osk-dns-watcher out of $image_ref for linux/$arch"
+	done
+}
+
+static_phase() {
+	box "$image" dev/gate/phase/static.sh || fail static "dev/gate/phase/static.sh failed (lines above)"
+	passed static
+}
+
+# Each fuzz run is a container of its own, so that the line "fuzz ok" follows
+# from its exit code and not from what the code under test prints.
+tests_phase() {
+	box "$image" dev/gate/phase/tests.sh >>out/tests.json ||
+		fail tests "dev/gate/phase/tests.sh failed (lines above, events in out/tests.json)"
+	fuzz=$(box "$image" dev/gate/phase/fuzz.sh) || fail fuzz "dev/gate/phase/fuzz.sh could not list the fuzz tests"
+	set -- $fuzz
+	while [ $# -ge 2 ]; do
+		box -e FUZZTIME "$image" dev/gate/phase/fuzz.sh "$1" "$2" >>out/tests.json ||
+			fail "fuzz $1 $2" "the fuzz run failed (lines above, events in out/tests.json)"
+		echo "fuzz ok $1 $2" >>out/gate.log
+		shift 2
+	done
+	passed tests
+}
+
+mutate_phase() {
+	box "$image" dev/gate/phase/mutate.sh || fail mutate "dev/gate/phase/mutate.sh failed (lines above)"
+	passed mutate
+}
+
+selftest_phase() {
+	if [ "$SELFTEST" = skip ]; then
+		echo "selftest skipped: the setting SELFTEST=skip is set"
+		echo 'selftest skipped' >>out/gate.log
+		return
+	fi
+	box "$image" dev/gate/selftest/run.sh || fail selftest "dev/gate/selftest/run.sh failed (lines above)"
+	passed selftest
+}
+
+# binary <import path>: the file of the lab test binary of a package.
+binary() {
+	echo "out/labtest/$(echo "$1" | tr / _)"
+}
+
+# The lab tests are built before the lab starts. No container may write to
+# the repository, so each test binary and the output of its run reach out/
+# through standard output.
+lab_phase() {
+	labtests=$(box "$image" dev/gate/phase/labtests.sh) ||
+		fail lab-build "dev/gate/phase/labtests.sh could not list the lab tests"
+	set -- $labtests
+	while [ $# -ge 2 ]; do
+		box "$image" dev/gate/phase/labtests.sh "$1" >"$(binary "$2")" ||
+			fail "lab-build $2" "dev/gate/phase/labtests.sh $1 failed (lines above)"
+		chmod +x "$(binary "$2")"
+		shift 2
+	done
+	lab_up=1
+	dev/lab/bin/lab up || fail lab-up "dev/lab/bin/lab up failed"
+	ok lab-up
+	dev/lab/bin/lab run /src/dev/lab/accept/run.sh || fail lab-accept "dev/lab/accept/run.sh failed (lines above)"
+	ok lab-accept
+	set -- $labtests
+	while [ $# -ge 2 ]; do
+		# The tests of dev/installtest/ drive Docker, not the lab runner: the
+		# quickstart phase runs them.
+		[ "$1" = ./dev/installtest ] || lab_test "$1" "$2"
+		shift 2
+	done
+	[ -f dev/lab/accept/host.sh ] || fail lab-host "dev/lab/accept/host.sh is missing"
+	dev/lab/accept/host.sh || fail lab-host "dev/lab/accept/host.sh failed (lines above)"
+	ok lab-host
+	dev/lab/bin/lab down || fail lab-down "dev/lab/bin/lab down failed"
+	lab_up=
+	ok lab-down
+	passed lab
+}
+
+# lab_test <folder> <import path> resets the lab and runs the lab tests of
+# one package in the runner, from the folder of the package.
+lab_test() {
+	bin=$(binary "$2")
+	dev/lab/bin/lab reset || fail lab-reset "dev/lab/bin/lab reset failed before the tests of $2"
+	dev/lab/bin/lab run sh -c 'cd "/src/$1" && exec "/src/$2" -test.v=test2json -test.paniconexit0 2>&1' \
+		sh "$1" "$bin" >"$bin.out"
+	status=$?
+	box -i "$image" go tool test2json -t -p "$2" <"$bin.out" >>out/tests.json ||
+		fail "lab-test $2" "go tool test2json could not read the test output"
+	[ "$status" -eq 0 ] || { cat "$bin.out"; fail "lab-test $2" "the lab tests failed (output above)"; }
+	ok "lab-test $2"
+}
+
+# The tests of dev/installtest/ run the quick start of README.md in a container that
+# has only git and the Docker CLI, as a new user's machine has. They reach
+# the daemon through its socket, and everything they start belongs to the
+# Compose project oskqs<LAB_ID>. The other architecture builds under
+# emulation, so it skips the update, whose steps do not depend on it.
+quickstart_phase() {
+	bin=$(binary github.com/Opsek/osk-dns-watcher/dev/installtest)
+	[ -f "$bin" ] || fail quickstart "dev/installtest/ has no lab tests"
+	clean_sum=$(cksum <dev/gate/clean/Dockerfile) || exit 2
+	clean=osk-gate-clean:${clean_sum%% *}
+	log=$($DOCKER buildx build $BUILD_FLAGS -t "$clean" --load dev/gate/clean 2>&1) ||
+		{ echo "$log"; fail clean-image "the build of dev/gate/clean/Dockerfile failed"; }
+	ok clean-image
+	lab_up=1
+	dev/lab/bin/lab up || fail lab-up "dev/lab/bin/lab up failed"
+	ok lab-up
+	native=$($DOCKER version --format '{{.Server.Arch}}') || fail quickstart "docker version failed"
+	case $native in
+	amd64) other=arm64 ;;
+	arm64) other=amd64 ;;
+	*) fail quickstart "the Docker daemon runs on $native, not amd64 or arm64" ;;
+	esac
+	# TestStart... and TestVerify... need git and OpenSSH, which only the clean
+	# container has; they and TestWrapper... need neither the lab nor Docker.
+	quickstart "$native" '^(TestQuickStartGivesTestAlert|TestImageLooksUpAndCallsHTTPS|TestUpdateKeepsSetup|TestStart.*|TestVerify.*|TestWrapper.*)$'
+	quickstart "$other" '^(TestQuickStartGivesTestAlert|TestImageLooksUpAndCallsHTTPS)$'
+	# The test of the release image runs alone, so the project is free for it.
+	if [ -n "${image_ref:-}" ]; then
+		quickstart "$native" '^TestReleaseImageAlerts$' "$image_ref"
+		quickstart "$other" '^TestReleaseImageAlerts$' "$image_ref"
+	fi
+	dev/lab/bin/lab down || fail lab-down "dev/lab/bin/lab down failed"
+	lab_up=
+	ok lab-down
+	passed quickstart
+}
+
+# quickstart <arch> <pattern> [<image>] runs the tests of dev/installtest/ that match
+# pattern for the platform linux/<arch>; <image> is the release image, by
+# digest, for the test of the commands that run it.
+quickstart() {
+	name=quickstart-$1${3:+-image}
+	$DOCKER run --rm --network none --label "osk.gate=$LAB_ID" \
+		-v "$DOCKER_SOCK":/var/run/docker.sock \
+		-v "$repo":/src:ro -w /src/dev/installtest -e LAB_ID -e QUICKSTART_PLATFORM="linux/$1" \
+		-e OSK_RELEASE_IMAGE="${3:-}" -e "OSK_IMAGE=$OSK_IMAGE" -e "OSK_RELEASE=$OSK_RELEASE" \
+		"$clean" "/src/$bin" -test.v=test2json -test.paniconexit0 -test.timeout=90m -test.run "$2" \
+		>"$bin.$name.out" 2>&1
+	status=$?
+	box -i "$image" go tool test2json -t -p github.com/Opsek/osk-dns-watcher/dev/installtest <"$bin.$name.out" >>out/tests.json ||
+		fail "$name" "go tool test2json could not read the test output"
+	[ "$status" -eq 0 ] || { cat "$bin.$name.out"; fail "$name" "the quick start tests failed (output above)"; }
+	ok "$name"
+}
+
+# The build cache volume is meant to stay, whatever its labels. Compose labels
+# what it makes, the images too, with the name of its project.
+clean_phase() {
+	project=com.docker.compose.project=oskqs$LAB_ID
+	left=$(for label in "osk.gate=$LAB_ID" "osk.lab=$LAB_ID" "$project"; do
+		$DOCKER container ls -a --filter "label=$label" --format '{{.Names}}'
+		$DOCKER network ls --filter "label=$label" --format '{{.Name}}'
+		$DOCKER volume ls --filter "label=$label" --format '{{.Name}}'
+	done | grep -vx osk-gate-gocache
+	$DOCKER image ls --filter "label=$project" --format '{{.Repository}}:{{.Tag}}')
+	[ -z "$left" ] || fail clean "left behind: $(echo $left)"
+	passed clean
+}
+
+lab_up=
+cleanup() {
+	[ -z "$lab_up" ] || dev/lab/bin/lab down >/dev/null 2>&1
+	rmdir out/lock
+}
+
+case $# in
+0) ;;
+1) [ "$1" = build ] || [ "$1" = vulncheck ] || usage ;;
+*) usage ;;
+esac
+mkdir -p out || exit 2
+# Two gates in one folder would mix their results in out/ and their use of the
+# build cache.
+mkdir out/lock 2>/dev/null ||
+	fail lock "out/lock exists: another gate runs here, or one was killed (then remove out/lock)"
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+rm -rf out/labtest && mkdir out/labtest || exit 2
+: >out/gate.log
+: >out/tests.json
+$DOCKER volume create osk-gate-gocache >/dev/null || fail cache "cannot create the volume osk-gate-gocache"
+
+image_build
+[ "${1:-}" != vulncheck ] || { vulncheck_phase; exit 0; }
+build_phase
+[ $# -eq 0 ] || exit 0
+[ -z "$OSK_RELEASE" ] || release_phase
+[ -z "$OSK_RELEASE" ] || vulncheck_phase
+static_phase
+tests_phase
+mutate_phase
+selftest_phase
+lab_phase
+quickstart_phase
+clean_phase

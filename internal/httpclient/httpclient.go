@@ -1,4 +1,4 @@
-// Package httpclient is the one HTTPS client of osk. It sends requests only
+// Package httpclient is the one HTTPS client of osk-dns-watcher. It sends requests only
 // to hosts fixed when the client is made, never follows a redirect and uses
 // no proxy, so no data that it handles can send a request elsewhere. A
 // webhook URL carries its secret in the path, so no error holds the URL or
@@ -126,7 +126,7 @@ func New(hosts []string, roots *x509.CertPool) *Client {
 	return newClient(hosts, roots, nil)
 }
 
-// NewGuarded is New for a host whose addresses come from data that osk
+// NewGuarded is New for a host whose addresses come from data that osk-dns-watcher
 // watches: the client connects only to an address that permit accepts, and
 // fails with ErrNotPermitted when the host has none.
 func NewGuarded(hosts []string, roots *x509.CertPool, permit func(netip.Addr) bool) *Client {

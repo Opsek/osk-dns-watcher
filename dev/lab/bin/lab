@@ -1,0 +1,54 @@
+#!/bin/sh
+# lab starts, stops, resets and checks the DNS lab.
+# LAB_ID (0 to 9, default 0) selects the lab: project osklab<LAB_ID>, subnet 10.53.<LAB_ID>.0/24.
+# DOCKER and BUILD_FLAGS are split into words on purpose, so they can hold options.
+# shellcheck disable=SC2086
+set -eu
+
+DOCKER=${DOCKER:-docker}
+
+LAB_ID=${LAB_ID:-0}
+case $LAB_ID in
+[0-9]) ;;
+*)
+	echo "lab: LAB_ID must be 0 to 9" >&2
+	exit 2
+	;;
+esac
+dir=$(cd "$(dirname "$0")/.." && pwd)
+LAB_SRC=$(dirname "$(dirname "$dir")")
+# The image tag follows the content of dev/lab/image, so a change makes a new image.
+sum=$(cd "$dir/image" && find . -type f | LC_ALL=C sort | while read -r f; do echo "$f" && cat "$f"; done | cksum)
+LAB_IMAGE=osklab:${sum%% *}
+export LAB_ID LAB_SRC LAB_IMAGE
+
+compose() {
+	$DOCKER compose -p "osklab$LAB_ID" -f "$dir/compose.yaml" "$@"
+}
+
+usage() {
+	echo "usage: lab up | down | reset | status | run <command...>" >&2
+	exit 2
+}
+
+case ${1:-} in
+up)
+	if [ -z "$($DOCKER image ls -q "$LAB_IMAGE")" ]; then
+		$DOCKER buildx build ${BUILD_FLAGS:-} --load -t "$LAB_IMAGE" "$dir/image"
+	fi
+	compose up -d --quiet-pull
+	compose exec -T runner labctl reset
+	;;
+down)
+	compose down --volumes --remove-orphans --timeout 2
+	;;
+reset | status)
+	compose exec -T runner labctl "$1"
+	;;
+run)
+	[ $# -ge 2 ] || usage
+	shift
+	compose exec -T runner "$@"
+	;;
+*) usage ;;
+esac

@@ -19,7 +19,7 @@ func (c *Config) Warnings() []string {
 			}
 			servers[i] = s.String()
 		}
-		lines = append(lines, "network.root_servers is set: osk starts its walk at "+strings.Join(servers, ", ")+
+		lines = append(lines, "network.root_servers is set: osk-dns-watcher starts its walk at "+strings.Join(servers, ", ")+
 			" instead of the root servers of the internet, so these servers decide every answer."+
 			" Use it only in a lab or a private network.")
 	}
@@ -28,7 +28,7 @@ func (c *Config) Warnings() []string {
 		for i, p := range c.ExtraRanges {
 			ranges[i] = p.String()
 		}
-		lines = append(lines, "network.extra_ranges is set: data from DNS can now make osk send queries "+
+		lines = append(lines, "network.extra_ranges is set: data from DNS can now make osk-dns-watcher send queries "+
 			"and HTTPS requests for MTA-STS policy files to "+strings.Join(ranges, ", ")+
 			". Use it only in a lab or a private network.")
 	}
@@ -36,7 +36,7 @@ func (c *Config) Warnings() []string {
 		// The URL passed the check of Parse, so it parses.
 		u, _ := url.Parse(c.Certificates.URL)
 		lines = append(lines, "certificates is set: "+
-			"osk sends the name of each watched domain to "+u.Host+", which learns which domains you watch.")
+			"osk-dns-watcher sends the name of each watched domain to "+u.Host+", which learns which domains you watch.")
 	}
 	return lines
 }

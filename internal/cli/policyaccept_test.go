@@ -4,10 +4,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/Opsek/dns-monitoring/internal/decide"
-	"github.com/Opsek/dns-monitoring/internal/expect"
-	"github.com/Opsek/dns-monitoring/internal/observe/obs"
-	"github.com/Opsek/dns-monitoring/internal/store"
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/expect"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
+	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
 const (
@@ -95,7 +95,7 @@ func TestPcaAcceptRefusesAPolicyAlertThatItCannotApply(t *testing.T) {
 			id := pcaOpen(t, w, pcaWas, c.seen...)
 			for _, args := range [][]string{{}, {"--write", cliAnyCode}} {
 				code, out, errOut := cliAccept(w, append(args, strconv.FormatInt(id, 10))...)
-				if want := "osk: " + c.error + "\n"; code != 1 || out != "" || errOut != want {
+				if want := "osk-dns-watcher: " + c.error + "\n"; code != 1 || out != "" || errOut != want {
 					t.Errorf("accept %q: exit code %d, output %q, errors %q; want 1, nothing and %q", args, code, out, errOut, want)
 				}
 			}

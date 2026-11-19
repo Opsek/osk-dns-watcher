@@ -1,0 +1,327 @@
+# Releases
+
+A release of osk is a signed tag `v<version>`, these files in
+`out/release/<version>/`, and an image:
+
+| File | Holds |
+|---|---|
+| `osk-linux-amd64`, `osk-linux-arm64` | osk for Linux on each architecture: one static file, built from `vendor/` with no network. |
+| `CONTENTS` | What the release is made of, one fact for each line (see below), the digests of the image among them. |
+| `SHA256SUMS` | The SHA-256 of the two binaries and of `CONTENTS`, in the format that `sha256sum -c` reads. |
+| `SHA256SUMS.sig` | The SSH signature of `SHA256SUMS` by the owner's key. |
+
+The image `ghcr.io/opsek/osk-dns-watcher:<version>` holds Alpine with its CA
+certificates, the release binary of its platform at `/usr/local/bin/osk`, and
+an empty `/data` for the user 10001.
+
+The key that signs releases is `release/allowed_signers`: one line, for the
+signer `osk-release`, in the namespaces `file` (for `SHA256SUMS`) and `git`
+(for the tags).
+
+## Make a release
+
+A version is three numbers with no leading zero, then optionally `-` and words
+of letters and digits separated by dots: `0.1.0`, `0.1.0-rc.1`. It has no
+leading `v`: the tag `v0.1.0` is the version `0.1.0`. Any other text is
+refused before anything runs. A build that is not a release, such as
+`make build`, says `osk 0.0.0-dev`.
+
+In a git checkout of the release commit, whose tracked files have no change
+that is not committed, in this order:
+
+```sh
+make build
+make release VERSION=0.1.0
+make image VERSION=0.1.0
+docker push ghcr.io/opsek/osk-dns-watcher:0.1.0
+make image-digests VERSION=0.1.0
+git tag -s v0.1.0 -m 'osk 0.1.0'
+make check OSK_RELEASE=0.1.0
+ssh-keygen -Y sign -f <your key file> -n file out/release/0.1.0/SHA256SUMS
+make verify-release VERSION=0.1.0
+```
+
+The tag is made on the release commit after `make image-digests` and before
+the gate, with your git settings for SSH signatures (`gpg.format=ssh`). The
+first line of its message must be `osk <version>`, as above: the same key
+signs tags of other projects, and this line binds the tag to osk. The gate
+requires the tag, of that form and signed by a key of
+`release/allowed_signers`, on the commit that `CONTENTS` names. Sign `SHA256SUMS` only after this gate passed,
+and check that the file you sign has the SHA-256 that the gate wrote to
+`out/gate.log` in the line `release ok 0.1.0 <sha256 of SHA256SUMS>`.
+`ssh-keygen -Y sign` writes `SHA256SUMS.sig` beside it; `<your key file>` is
+the file of your key, for a hardware key the file of its handle. Nothing may
+change the folder after that. `make verify-release` then checks the files as
+a stranger will.
+
+- `make build` makes the build container, which needs the network.
+- `make release` (`release/build.sh`) refuses tracked files with changes, and
+  a version whose folder exists. It copies the files of the commit `HEAD` with
+  `git archive` to a temporary folder under `out/`, and stops when a file of
+  the copy is not the blob of the commit, as `export-ignore`,
+  `export-subst`, `core.autocrlf` or a filter would make it. It builds each
+  binary from that copy with `build/static.sh` in the build container of its
+  platform, with no network and an empty Go build cache, and writes `CONTENTS`
+  and `SHA256SUMS` with `release/contents.sh`. A failed run leaves no folder.
+- `make image` (`release/image.sh`) builds the stage `release` of
+  `deploy/Dockerfile` for linux/amd64 and linux/arm64, with the release folder
+  as the build context, and loads it as `ghcr.io/opsek/osk-dns-watcher:0.1.0`.
+  Set `OSK_IMAGE` for another name. The image of the quick start is the same
+  stage `runtime` with a binary built from source. Every time in the image is
+  the time of the commit, so a second build gives the same digests. Only the
+  first pull of the base image, pinned by digest, needs the network.
+- `make image-digests` (`release/digests.sh`) reads the index of the pushed
+  image from the registry, requires that it lists linux/amd64 and then
+  linux/arm64 and nothing else, pulls both platforms by the digest of the
+  index, and adds the `image` lines to `CONTENTS`. It changes no other line
+  and makes `SHA256SUMS` again. Nobody types a digest.
+- `make image` and `make image-digests` first require that the checkout is
+  the commit of `CONTENTS`, that a tag `v<version>`, if there is one, is
+  signed and on that commit (`release/commit.sh`), and that `sha256sum -c
+  SHA256SUMS` passes.
+
+`make check OSK_RELEASE=<version>` adds the phase `release`, which builds
+nothing and checks:
+
+- the checkout: `HEAD` is the commit of `CONTENTS`, no tracked file has a
+  change, and the tag `v<version>` is on that commit and signed by a key of
+  `release/allowed_signers`;
+- the folder holds exactly the files above; `SHA256SUMS.sig` may be missing,
+  since you sign after this gate, but when it is there it must verify;
+- `SHA256SUMS` lists the other three files and `sha256sum -c` passes;
+- `CONTENTS` is exactly what `release/contents.sh` makes from the files, with
+  the version of the folder and the right size and SHA-256 of each binary;
+- both binaries are static, built for Linux with cgo and for the architecture
+  in their name, depend on `github.com/mattn/go-sqlite3` at the version of
+  `go.mod` and on nothing else, and print in an empty image the version and
+  the Go and SQLite versions of `CONTENTS`;
+- when `CONTENTS` names an image: its name is `OSK_IMAGE`, the index of that
+  digest is on this machine and lists exactly the two platform digests of
+  `CONTENTS`, and the binary in the image of each platform, read without
+  running it, is the release file of that architecture.
+
+It writes `release ok <version> <sha256 of SHA256SUMS>` to `out/gate.log`,
+then `release-image ok <version> <digest of the index>`, or
+`release-image none <version>` for a release without an image, and
+`release-signature ok <version>` when `SHA256SUMS.sig` is there and verifies.
+For a release with an image, the quickstart phase also runs the commands of
+[Run the image](#run-the-image) against the lab.
+
+## CONTENTS
+
+The lines come in this order:
+
+```
+version 0.1.0
+commit <the git commit of the tree, in full>
+go 1.27.4
+sqlite 3.54.1
+file osk-linux-amd64 <size in bytes> <SHA-256>
+file osk-linux-arm64 <size in bytes> <SHA-256>
+image ghcr.io/opsek/osk-dns-watcher
+image-digest index sha256:<hex>
+image-digest linux/amd64 sha256:<hex>
+image-digest linux/arm64 sha256:<hex>
+<what go version -m prints for the two binaries>
+```
+
+- `go` and `sqlite` are the versions that `osk version` prints.
+- The `image` lines are there only after `make image-digests`: the name of
+  the image, and the digests of its index (the list of its platforms) and of
+  each platform.
+- The last part is the output of `go version -m osk-linux-amd64
+  osk-linux-arm64`: the module, its one dependency
+  `github.com/mattn/go-sqlite3`, and the build settings.
+
+`CONTENTS` holds no date and no host name.
+
+## Verify a release
+
+You need `ssh-keygen` and `ssh` of OpenSSH 8.2 or later, which know the type
+of the release key, `sk-ssh-ed25519@openssh.com`; `sha256sum` or `shasum`;
+and, for the tag, git 2.34 or later.
+
+### A first copy
+
+A first install trusts the place that the copy came from: the key file and
+`start.sh`, which checks with it, both come with the copy, so a copy from
+somewhere else can carry another key and a `start.sh` that checks nothing.
+After that, `start.sh update` trusts only the key of the installed release.
+
+The owner publishes the fingerprint of each key on the release page of the
+repository and on
+<!-- FILL IN: the second place where the owner publishes the fingerprint -->
+`<the second place>`. In a copy, this prints the fingerprints of the keys of
+`release/allowed_signers`:
+
+```sh
+awk '{ for (i = 1; i < NF; i++) if ($i ~ /^(sk-)?(ssh|ecdsa)-/) { print $i, $(i + 1); break } }' release/allowed_signers | ssh-keygen -lf -
+```
+
+A key file can hold a key that this does not show (in a quoted option), so
+for a first copy the fingerprint that counts is the one of the key that
+signed the tag. Write the version and the published fingerprint in the first
+two lines, then paste the block; it stops at the first check that fails. It
+clones with no file checked out, writes the key file of the release's commit
+outside the copy, verifies the tag with that key file alone and compares the
+fingerprint of the key that signed it, shows that the tag names itself, says
+`osk <version>` and carries one signature, an SSH one, and only then checks
+out the commit of the tag and runs `start.sh`. Even so, the check is only as
+good as the fingerprint: take it from a place that whoever controls the copy
+does not control.
+
+```
+v=0.1.0 &&
+fingerprint='SHA256:<the published fingerprint>' &&
+git clone --no-checkout https://github.com/Opsek/osk-dns-watcher.git osk-dns-watcher &&
+cd osk-dns-watcher &&
+keys=$(mktemp) &&
+git show "v$v^{commit}:release/allowed_signers" >"$keys" &&
+said=$(git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$keys" -c gpg.program=false -c gpg.openpgp.program=false -c gpg.x509.program=false verify-tag "v$v" 2>&1) &&
+printf '%s\n' "$said" &&
+[ "$(printf '%s\n' "$said" | awk '/^Good /{ print $NF }')" = "$fingerprint" ] &&
+git cat-file tag "v$v" | sed '/^$/q' | grep -qx "tag v$v" &&
+[ "$(git cat-file tag "v$v" | sed '1,/^$/d' | head -n 1)" = "osk $v" ] &&
+[ "$(git cat-file tag "v$v" | grep -c '^-----BEGIN ')" = 1 ] &&
+git cat-file tag "v$v" | grep -qx -- '-----BEGIN SSH SIGNATURE-----' &&
+git -c advice.detachedHead=false checkout --quiet "v$v^{commit}" &&
+deploy/start.sh
+```
+
+### The files
+
+In a copy of this repository, with the files of the release in
+`out/release/0.1.0/`:
+
+```sh
+make verify-release VERSION=0.1.0
+```
+
+`release/verify.sh` checks, in this order:
+
+1. the signature `SHA256SUMS.sig` of `SHA256SUMS`, by a key of
+   `release/allowed_signers`, as
+   `ssh-keygen -Y verify -f release/allowed_signers -I osk-release -n file -s out/release/0.1.0/SHA256SUMS.sig < out/release/0.1.0/SHA256SUMS`;
+2. that `SHA256SUMS` lists the two binaries and `CONTENTS`, and that
+   `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c`) passes in the folder;
+3. that `CONTENTS` is the `CONTENTS` of the version asked for.
+
+Then it prints the image of that release by digest, the line
+`image: ghcr.io/opsek/osk-dns-watcher@sha256:<digest>`. Run the image by
+that reference only.
+
+### The tag
+
+```sh
+sh release/verify-tag.sh release/allowed_signers v0.1.0
+```
+
+It prints the commit of the tag when the tag is a release tag: a tag object
+of that name on a commit, whose message begins with `osk 0.1.0`, with one
+signature, an SSH signature by a key of `release/allowed_signers`. Compare
+that commit with the one of your copy, `git rev-parse HEAD`. `start.sh` and
+the gate run the same script.
+
+## Keys
+
+The owner's keys are the lines of `release/allowed_signers`, each with the
+signer `osk-release` and the namespaces `file,git`.
+
+- To add a key, add a line with the same signer and the same namespaces, in
+  a release signed by a key that is already in the file, before the new key
+  signs anything.
+- `start.sh update` checks a new release with the keys of the installed
+  release, and then the `start.sh` of the new release checks it again with
+  the keys of the new release. So a release must list the key that signed
+  it: the release that adds a key is signed by an old key and lists both,
+  and only a release signed by the new key may drop the old one.
+- To retire a key, delete its line in a signed release. A copy that has
+  updated to that release no longer trusts it.
+- A key that leaks stays trusted by every copy that has not updated past the
+  release that removes it, and there is no way to revoke it from afar.
+  Copies that update do trust the release that removes it, so make that
+  release, signed by another key of the file, at once.
+
+## What the signature does not cover
+
+- The tag of the image, such as `:0.1.0`: a tag can be moved. Only the
+  digests in a verified `CONTENTS` count.
+- The key itself on a first copy: it comes with the copy. Compare the
+  fingerprint, as above.
+- The commit id in `CONTENTS`: it is a claim of the owner until someone builds
+  the release again from that commit and compares the files.
+- The base images and the vendored SQLite driver: they are trusted as they
+  are committed, pinned by digest and by `go.sum`.
+
+## Install
+
+Two ways, the first with no build. The documents give them in this order.
+
+### Run the image
+
+You need Docker with the Compose plugin and the URL of a Slack incoming
+webhook. First verify the release files and take the digest of the image
+from the last line that `make verify-release` prints (see
+[Verify a release](#verify-a-release)); write it in place of `<digest>`.
+These commands make a folder `osk` with a Compose file, ask the same two
+questions as the quick start, start osk and send a test message:
+
+```sh image
+mkdir osk && cd osk
+cat >compose.yaml <<'EOF'
+name: osk
+services:
+  osk:
+    image: &image ghcr.io/opsek/osk-dns-watcher@sha256:<digest>
+    restart: unless-stopped
+    volumes: [data:/data]
+  init:
+    image: *image
+    profiles: [setup]
+    command: [init, --config, /data/osk.json]
+    volumes: [data:/data]
+volumes:
+  data:
+EOF
+docker compose run --rm init
+docker compose up --detach --wait
+docker compose exec -T osk osk test-alert --config /data/osk.json
+```
+
+The config, the expectations and the history are in the volume `osk_data`,
+at `/data` in the container. To move to a new release, write the digest of
+the new release on the line `image: &image`, then run
+`docker compose up --detach --wait` again.
+
+### Build from the repository
+
+You need git 2.34 or later, `ssh-keygen` and `ssh` of OpenSSH 8.2 or later,
+and Docker with the Compose plugin. For a check of the key before any file
+of the copy runs, follow [A first copy](#a-first-copy) instead:
+
+```sh quickstart
+git clone https://github.com/Opsek/osk-dns-watcher.git
+osk-dns-watcher/deploy/start.sh
+```
+
+`start.sh` builds only the commit of a release tag that a key of
+`release/allowed_signers` of the copy signed, as git holds that commit, with
+no changed tracked file and no other file in `deploy/`; otherwise it names
+the commit of the newest signed release to check out, if there is one. It
+keeps the tag of the installed release under `refs/osk/installed`. To
+update, in `osk-dns-watcher/deploy`:
+
+```sh update
+./start.sh update
+```
+
+This is the only way to move a copy: do not use `git pull` or `git
+checkout`. It fetches the tags, takes the highest version that is higher
+than the installed one and that a key of the installed release signed,
+names, counts and skips the tags that do not verify, moves to that commit,
+and builds and restarts osk with the same setup. If there is none, it
+changes nothing and osk keeps running; it exits with 1 when it skipped
+tags. `OSK_UNVERIFIED=1 ./start.sh` builds the folder as it is, with no
+check, to work on osk itself; an update ignores it. `OSK_COMPOSE_EXTRA`
+names one more Compose file, for a lab; `start.sh` prints a line when it
+is set.

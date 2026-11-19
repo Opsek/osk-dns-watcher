@@ -20,5 +20,7 @@ trap 'rm -rf "$tmp"' EXIT
 go build -buildvcs=false -o "$tmp/mutate" ./gate/mutate || fail mutate "go build ./gate/mutate failed"
 # The folders that hold the judgement of the tool: what differs, when an
 # alert opens, escalates or resolves, when a check is due, and how the
-# certificate source is read.
-"$tmp/mutate" --list gate/mutants.txt internal/decide internal/expect internal/alert internal/schedule internal/sources/certlog || exit 1
+# certificate source is read. The folders that read the answers of servers,
+# guard the addresses that are contacted and write the trust file belong here
+# too: a wrong comparison there lets a bad answer or address through.
+"$tmp/mutate" --list gate/mutants.txt internal/decide internal/expect internal/alert internal/schedule internal/sources/certlog internal/observe internal/observe/obs internal/httpclient internal/mtasts internal/cli || exit 1

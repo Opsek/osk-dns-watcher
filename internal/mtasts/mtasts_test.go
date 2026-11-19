@@ -136,10 +136,13 @@ func (u *mtsTo) url(host string) string {
 	return u.to
 }
 
+// mtsLoopback permits the addresses of the test servers, as a lab range would.
+var mtsLoopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
+
 func mtsFetch(k obs.Key, roots *x509.CertPool, url func(string) string, clock *mtsClock) obs.Answer {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return fetch(ctx, k, roots, url, clock.now)
+	return fetch(ctx, k, mtsLoopback, roots, url, clock.now)
 }
 
 // mtsSeen is the case of a Result, as Match gives it.
@@ -295,6 +298,15 @@ func TestHost(t *testing.T) {
 		{"no trailing dot in the text", mtsName(t, "corp.test"), "mta-sts.corp.test:443", true},
 		{"three labels", mtsName(t, "mail.Corp.test."), "mta-sts.mail.corp.test:443", true},
 		{"hyphen, underscore and digits", mtsName(t, "_A-1.xn--bcher-kva.test."), "mta-sts._a-1.xn--bcher-kva.test:443", true},
+		// Some resolvers read a name whose last label is all digits as an
+		// IPv4 address, so the client refuses it; a label of digits elsewhere
+		// is a plain label.
+		{"a last label of one digit", mtsName(t, "0."), "", false},
+		{"a last label of digits", mtsName(t, "a.123."), "", false},
+		{"a first label of digits", mtsName(t, "123.example.com."), "mta-sts.123.example.com:443", true},
+		{"a middle label of digits", mtsName(t, "0.example."), "mta-sts.0.example:443", true},
+		{"a last label of digits and a letter", mtsName(t, "a.1b."), "mta-sts.a.1b:443", true},
+		{"a last label of letters, a hyphen and a digit", mtsName(t, "a.b-1."), "mta-sts.a.b-1:443", true},
 		{"slash", mtsLabels(t, "a/b", "test"), "", false},
 		{"colon", mtsLabels(t, "a:1", "test"), "", false},
 		{"a port in the last label", mtsLabels(t, "corp", "test:443"), "", false},
@@ -486,7 +498,7 @@ func TestFetchRefusesOtherKeys(t *testing.T) {
 		with(func(x *obs.Key) { x.Name = corp }),
 		{Kind: obs.KindPolicy, Name: mtsName(t, "mta-sts."), Type: dnswire.TypeTXT},
 	} {
-		mtsWantRefused(t, "Fetch of "+bad.String(), Fetch(context.Background(), bad), bad)
+		mtsWantRefused(t, "Fetch of "+bad.String(), Fetcher(nil)(context.Background(), bad), bad)
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("Fetch of a refused key took %v", d)
@@ -707,7 +719,7 @@ func TestFetchTimeout(t *testing.T) {
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		start := time.Now()
-		a := fetch(ctx, k, c.pool, (&mtsTo{to: c.url}).url, clock.now)
+		a := fetch(ctx, k, mtsLoopback, c.pool, (&mtsTo{to: c.url}).url, clock.now)
 		took := time.Since(start)
 		cancel()
 		mtsWantFailure(t, c.name, a, obs.ReasonTimeout, "timeout")

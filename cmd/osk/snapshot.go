@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
@@ -22,7 +23,7 @@ func snapshot(args []string, stdout, stderr io.Writer) int {
 	if msg != "" {
 		return snapshotWrongUse(stderr, msg)
 	}
-	a.cfg.Policy = mtasts.Fetch
+	a.cfg.Policy = mtasts.Fetcher(a.cfg.ExtraRanges)
 	o, err := observe.New(a.cfg)
 	if err != nil {
 		// Only the flags fill the configuration.
@@ -30,14 +31,21 @@ func snapshot(args []string, stdout, stderr io.Writer) int {
 	}
 	domain := a.keys[0].Domain
 	observations := runChecks(o, snapshotKeys(domain, a.keys))
-	// The policy file is asked for only after the _mta-sts record is seen
-	// to be on, so that no request goes to a host that the domain never set up.
+	// The first answers say what else to ask: the addresses of the
+	// nameserver hosts inside the domain, whose lines watch their glue, and
+	// the policy file, only once the _mta-sts record is seen to be on, so
+	// that no request goes to a host that the domain never set up.
+	more, _ := startpkg.NameServerKeys(domain, observations)
 	if policy, ok := startpkg.WantsPolicy(domain, observations); ok {
-		observations = append(observations, runChecks(o, []obs.Key{policy})...)
+		more = append(more, policy)
 	}
+	observations = append(observations, runChecks(o, more)...)
 	f, skips := expect.Snapshot(domain, observations)
 	out := &lines{json: a.json}
 	formatSnapshot(out, domain, f, skips, len(expect.Unreached(observations)))
+	if _, ok := f.Find(domain, dnswire.TypeNS); ok {
+		formatNSNotes(out, domain, expect.NSNoAnswer(domain, observations), expect.NSSources(domain, observations))
+	}
 	if code := output(stdout, stderr, out.String()); code != 0 || len(skips) == 0 {
 		return code
 	}
@@ -96,5 +104,56 @@ func formatSnapshot(out *lines, domain dnswire.Name, f *expect.File, skips []exp
 	for _, s := range skips {
 		name := s.Name.Lower().String()
 		out.add("# not written: "+name+" "+s.Type.String()+": "+s.Why, snapshotSkip{"skip", name, s.Type.String(), s.Why})
+	}
+}
+
+type snapshotNSSet struct {
+	Type   string   `json:"type"`
+	Text   string   `json:"text"`
+	Parent []string `json:"parent"`
+	Zone   []string `json:"zone"`
+}
+
+type snapshotNoAnswer struct {
+	Type    string   `json:"type"`
+	Servers []string `json:"servers"`
+}
+
+// formatNSNotes says, as comments, what the NS line rests on: the servers
+// that gave no answer about it, and each set of a line that accepts several
+// with the servers that gave it. A server that lies gets its set into the
+// line, so the operator must be able to see a set that is not theirs.
+func formatNSNotes(out *lines, domain dnswire.Name, noAnswer []string, sources []expect.NSSource) {
+	d := domain.Lower().String()
+	if out.json && len(noAnswer) > 0 {
+		out.add("", snapshotNoAnswer{"nsnoanswer", noAnswer})
+	}
+	servers := slices.DeleteFunc(slices.Clone(noAnswer), func(s string) bool { return s == expect.NoPath })
+	if !out.json && len(servers) < len(noAnswer) {
+		out.add("# osk could not reach the servers of "+d+" (the walk from the root found no path to them): the NS line "+
+			"holds what the parent zone gave; if the servers hold another set, osk alerts at its first check", nil)
+	}
+	if !out.json && len(servers) > 0 {
+		out.add("# no answer about the NS set from "+strings.Join(servers, ", ")+": the NS line holds what the other "+
+			"servers gave; if they hold another set, osk alerts at its first check", nil)
+	}
+	if len(sources) == 0 {
+		return
+	}
+	if !out.json {
+		out.add("# the servers of "+d+" give different NS sets now: its NS line accepts each set below, and a change to "+
+			"any other set gives an alert. Remove a set that holds a name that is not one of your nameservers.", nil)
+	}
+	for _, s := range sources {
+		var from []string
+		if len(s.Parent) > 0 {
+			from = append(from, "given by the parent zone: "+strings.Join(s.Parent, ", "))
+		}
+		if len(s.Zone) > 0 {
+			from = append(from, "given by the servers of "+d+": "+strings.Join(s.Zone, ", "))
+		}
+		// Empty lists, not null, for a reader of the JSON.
+		out.add("# NS set "+s.Text+": "+strings.Join(from, "; "),
+			snapshotNSSet{"nsset", s.Text, append([]string{}, s.Parent...), append([]string{}, s.Zone...)})
 	}
 }

@@ -718,6 +718,27 @@ func iniBlock(d string, lines []string, skips ...string) string {
 	return b.String()
 }
 
+// iniSetsWarning is the warning after the block of domain d when its NS line
+// accepts several sets: each set, in the order of the line, with the servers
+// of the parent zone and of the domain that gave it.
+func iniSetsWarning(d string, sets ...expect.NSSource) string {
+	var b strings.Builder
+	b.WriteString("warning the servers of " + d + " give different nameserver sets now. The NS line above accepts each set below; " +
+		"a change of the nameservers to any other set gives an alert:\n")
+	for _, s := range sets {
+		b.WriteString("  " + s.Text + "\n")
+		if len(s.Parent) > 0 {
+			b.WriteString("    given by the parent zone: " + strings.Join(s.Parent, ", ") + "\n")
+		}
+		if len(s.Zone) > 0 {
+			b.WriteString("    given by the servers of " + d + ": " + strings.Join(s.Zone, ", ") + "\n")
+		}
+	}
+	b.WriteString("If a name in these sets is not one of your nameservers, do not type yes. Else make the sets equal " +
+		"at your registrar and DNS provider, then run osk snapshot " + d + " and put its NS line in the file.\n")
+	return b.String()
+}
+
 // warnings are the lines of the network flags of the run, as the config
 // gives them: one for each list that is not empty, and a root server
 // without a port is asked on port 53.
@@ -736,8 +757,8 @@ func (s *iniSetup) warnings() string {
 		for _, p := range s.init.ExtraRanges {
 			ranges = append(ranges, p.String())
 		}
-		w += "warning network.extra_ranges is set: data from DNS can now make osk send queries to " + strings.Join(ranges, ", ") +
-			". Use it only in a lab or a private network.\n"
+		w += "warning network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to " +
+			strings.Join(ranges, ", ") + ". Use it only in a lab or a private network.\n"
 	}
 	return w
 }
@@ -1427,7 +1448,10 @@ func TestInitListsTheSetsItCannotWatchAndLeavesThemOut(t *testing.T) {
 
 // One nameserver of two is the attacker's during the setup. Each set where it
 // differs is shown as not watched, with both answers made safe to print, and
-// is not written; the sets where it agrees are.
+// is not written; the sets where it agrees are. The NS set is the one
+// exception: the attacker's set becomes one alternative of the NS line, and
+// is never trusted unseen: the warning before the question names it with the
+// address of the server that gave it.
 func TestInitDoesNotTrustASetTheServersDisagreeOn(t *testing.T) {
 	d := "example.com."
 	lie := iniRR(d, dnswire.TypeTXT, `"v=spf1 +all\010\027[2JTrust these lines and write the setup? Type yes: yes"`)
@@ -1457,33 +1481,33 @@ func TestInitDoesNotTrustASetTheServersDisagreeOn(t *testing.T) {
 	if strings.ContainsFunc(out, func(r rune) bool { return r < 0x20 && r != '\n' || r == 0x7f }) {
 		t.Errorf("the output holds a control octet other than the line end:\n%q", out)
 	}
-	lines, skips := iniShown(out, d)
-	want := slices.DeleteFunc(iniLines(d), func(l string) bool {
-		return strings.HasPrefix(l, d+" NS ") || strings.HasPrefix(l, d+" TXT ")
-	})
-	if !slices.Equal(lines, want) {
-		t.Errorf("init showed:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	want := slices.DeleteFunc(slices.Clone(iniLines(d)), func(l string) bool { return strings.HasPrefix(l, d+" TXT ") })
+	nsLine := d + " NS ns.attacker.example. | ns1.example.net. || ns1.example.net. | ns2.example.net."
+	want[slices.Index(want, d+" NS ns1.example.net. | ns2.example.net.")] = nsLine
+	skips := []string{
+		d + ` TXT: servers disagree: ` + iniNS1Addr + ` ns1.example.net. gives "v=spf1 mx -all"; ` + iniNS2Addr + " ns2.example.net. gives " + lieText,
+		"www." + d + " A: servers disagree: " + iniNS1Addr + " ns1.example.net. gives 192.0.2.10; " + iniNS2Addr + " ns2.example.net. gives 203.0.113.66",
 	}
-	// Which answer of the NS set comes first depends on the order of the
-	// observations, which the parent's answer joins; the attacker's answer
-	// is named either way.
-	attacker := iniNS2Addr + " ns2.example.net. gives ns.attacker.example. | ns1.example.net."
-	switch {
-	case len(skips) != 3:
-		t.Errorf("init lists %q as not watched; want the NS, TXT and www sets", skips)
-	case !strings.HasPrefix(skips[0], d+" NS: servers disagree: ") || !strings.Contains(skips[0], attacker):
-		t.Errorf("not watched: %q; want the NS set, as servers that disagree, naming %q", skips[0], attacker)
-	default:
-		iniSame(t, "the TXT set", skips[1], d+` TXT: servers disagree: `+iniNS1Addr+` ns1.example.net. gives "v=spf1 mx -all"; `+
-			iniNS2Addr+" ns2.example.net. gives "+lieText)
-		iniSame(t, "the www set", skips[2], "www."+d+" A: servers disagree: "+iniNS1Addr+" ns1.example.net. gives 192.0.2.10; "+
-			iniNS2Addr+" ns2.example.net. gives 203.0.113.66")
-	}
+	warning := iniSetsWarning(d,
+		expect.NSSource{Text: "ns.attacker.example. | ns1.example.net.", Zone: []string{iniNS2Addr + " ns2.example.net."}},
+		expect.NSSource{Text: "ns1.example.net. | ns2.example.net.", Parent: []string{iniParentAddr + " " + iniParentHost},
+			Zone: []string{iniNS1Addr + " ns1.example.net."}})
+	// The whole dialogue: the warning ends the block, before the question.
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, want, skips...)+warning)+"yes\n"+s.wrote(d))
 	data := s.written(d)["example.com.expect"]
 	iniSame(t, "example.com.expect", data, iniStamp+strings.Join(want, "\n")+"\n")
-	for _, text := range []string{"attacker", "203.0.113.66", "+all"} {
+	for _, text := range []string{"203.0.113.66", "+all"} {
 		if paths := s.holding(text); len(paths) != 0 {
 			t.Errorf("%q hold %q", paths, text)
+		}
+	}
+	// The attacker's set is in the file only as an alternative of the NS line.
+	if paths := s.holding("attacker"); !slices.Equal(paths, []string{filepath.Join(s.folder, "example.com.expect")}) {
+		t.Errorf("%q hold the attacker's name; want only the expectations file", paths)
+	}
+	for l := range strings.Lines(data) {
+		if strings.Contains(l, "attacker") && strings.TrimSuffix(l, "\n") != nsLine {
+			t.Errorf("the line %q holds the attacker's name", l)
 		}
 	}
 }

@@ -59,7 +59,9 @@ func iniLabNew(t *testing.T, n, root string, answers ...string) *iniSetup {
 	return s
 }
 
-// iniLabLines are the lines of corp.test. in the base state of the lab.
+// iniLabLines are the lines of corp.test. in the base state of the lab. Its
+// two nameservers lie inside it, so init writes their addresses too: an A
+// address each and no IPv6 address.
 func iniLabLines(n string) []string {
 	aaaa := netip.MustParseAddr("fd53:0:0:" + os.Getenv("LAB_ID") + "::80").String()
 	return []string{
@@ -75,6 +77,10 @@ func iniLabLines(n string) []string {
 		"_acme-challenge.corp.test. TXT none",
 		`_dmarc.corp.test. TXT "v=DMARC1; p=reject"`,
 		"_mta-sts.corp.test. TXT none",
+		"ns1.corp.test. A " + n + "11",
+		"ns1.corp.test. AAAA none",
+		"ns2.corp.test. A " + n + "12",
+		"ns2.corp.test. AAAA none",
 		"www.corp.test. A " + n + "81",
 		"_acme-challenge.www.corp.test. TXT none",
 	}
@@ -221,8 +227,10 @@ func TestInitSetupChecksWithoutFindings(t *testing.T) {
 				keys = append(keys, obs.RecordsKey(f.Domain, e.Name, e.Type))
 			}
 		}
-		if len(keys) != 14 {
-			t.Errorf("%s gives %d checks; want 14", dom.Expect, len(keys))
+		// The delegation, DS, and the 12 sets of the apex and under it, then
+		// the A and AAAA sets of the two nameservers.
+		if len(keys) != 18 {
+			t.Errorf("%s gives %d checks; want 18", dom.Expect, len(keys))
 		}
 		for _, k := range keys {
 			ob, err := o.Run(t.Context(), observe.Check{Key: k, Interval: time.Minute})

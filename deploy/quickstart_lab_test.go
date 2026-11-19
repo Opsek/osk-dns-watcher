@@ -38,6 +38,8 @@ import (
 const (
 	qsRoot   = "/tmp/qs"
 	qsBare   = qsRoot + "/osk.git"
+	qsOwner  = qsRoot + "/owner" // the owner's clone, which makes the releases
+	qsKey    = qsRoot + "/key"   // the throwaway key that signs them
 	qsWork   = qsRoot + "/work"
 	qsDeploy = qsWork + "/dns-monitoring/deploy"
 	qsOrigin = "https://github.com/Opsek/dns-monitoring.git"
@@ -393,6 +395,8 @@ func qsEnviron() []string {
 		"HOME="+qsRoot+"/home",
 		"GIT_CONFIG_GLOBAL="+qsRoot+"/gitconfig",
 		"COMPOSE_FILE=compose.yaml:"+qsRoot+"/lab.yaml",
+		// start.sh names its Compose file itself and adds this one.
+		"OSK_COMPOSE_EXTRA="+qsRoot+"/lab.yaml",
 		"COMPOSE_PROJECT_NAME="+qsProject(),
 		"DOCKER_DEFAULT_PLATFORM="+qsPlatform)
 }
@@ -457,6 +461,18 @@ func qsPrepare(t *testing.T) {
 	tree := []string{"--git-dir=" + qsBare, "--work-tree=" + qsSrc, "-c", "safe.directory=*"}
 	qsGit(t, "", append(tree, "add", "-A")...)
 	qsGit(t, "", append(tree, "commit", "-q", "-m", "the tree under test")...)
+	// start.sh installs only a release that a key of release/allowed_signers
+	// signed: the copy gets a throwaway key in place of the owner's, and the
+	// release v0.0.1 signed with it.
+	qsMust(t, qsRun(qsBound, "", qsEnviron(), "", "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", qsKey))
+	pub, err := os.ReadFile(qsKey + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	qsGit(t, "", "clone", "-q", qsBare, qsOwner)
+	qsWrite(t, qsOwner+"/release/allowed_signers", `osk-release namespaces="file,git" `+strings.TrimSpace(string(pub))+"\n")
+	qsGit(t, qsOwner, "commit", "-q", "-am", "the key of the test")
+	qsRelease(t, "v0.0.1")
 	// The lab's volume also holds its keys. The service sees only its
 	// folder ca, which holds the CA alone, so SSL_CERT_DIR adds that one
 	// certificate to the image's own.
@@ -635,6 +651,10 @@ func qsSetupLines(t *testing.T) []string {
 		"corp.test. MX 10 mail.corp.test.",
 		`corp.test. TXT "v=spf1 mx -all"`,
 		`corp.test. CAA 0 issue "ca.test"`,
+		"ns1.corp.test. A " + n + "11",
+		"ns1.corp.test. AAAA none",
+		"ns2.corp.test. A " + n + "12",
+		"ns2.corp.test. AAAA none",
 		"www.corp.test. A " + n + "81",
 	}, "\n") + "\n"))
 	if err != nil {
@@ -799,6 +819,9 @@ func TestQuickStartGivesTestAlert(t *testing.T) {
 			t.Errorf("the image of osk is for %s, want %s", got, qsPlatform)
 		}
 		qsExec(t, "osk", "status", "--config", "/data/osk.json")
+		if got := qsExec(t, "osk", "version"); !strings.HasPrefix(got, "osk 0.0.1\n") {
+			t.Errorf("osk version gives:\n%s\nwant first osk 0.0.1, the version of the signed release", got)
+		}
 		if got := strings.TrimSpace(qsExec(t, "id", "-u")); got != "10001" {
 			t.Errorf("id -u in the service gives %s, want 10001", got)
 		}
@@ -985,8 +1008,8 @@ func TestUpdateKeepsSetup(t *testing.T) {
 		if qsContainer(t) == old {
 			t.Errorf("the container of osk is still %s", old)
 		}
-		if got := qsExec(t, "osk", "version"); !strings.HasPrefix(got, "osk 0.0.0-update\n") {
-			t.Errorf("osk version gives:\n%s\nwant first osk 0.0.0-update", got)
+		if got := qsExec(t, "osk", "version"); !strings.HasPrefix(got, "osk 0.0.2\n") {
+			t.Errorf("osk version gives:\n%s\nwant first osk 0.0.2, the version of the new release", got)
 		}
 	})
 
@@ -1063,20 +1086,18 @@ func qsOpenAlert(t *testing.T) (id, opened string) {
 	return "", ""
 }
 
-// qsPushUpdate publishes a new version of the code. The build writes the
-// version into osk, so osk version shows whether the update built it.
+// qsPushUpdate publishes a new release, v0.0.2. The build writes the version
+// of the release into osk, so osk version shows whether the update built it.
 func qsPushUpdate(t *testing.T) {
 	t.Helper()
-	dir := filepath.Join(qsRoot, "change")
-	qsGit(t, "", "clone", "-q", qsBare, dir)
-	path := filepath.Join(dir, "build", "static.sh")
-	data, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte("0.0.0-dev")) {
-		t.Fatalf("build/static.sh does not set the version 0.0.0-dev (%v)", err)
-	}
-	if err := os.WriteFile(path, bytes.ReplaceAll(data, []byte("0.0.0-dev"), []byte("0.0.0-update")), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	qsGit(t, dir, "commit", "-q", "-am", "a new version")
-	qsGit(t, dir, "push", "-q", "origin", "HEAD")
+	qsGit(t, qsOwner, "commit", "-q", "--allow-empty", "-m", "a new version")
+	qsRelease(t, "v0.0.2")
+}
+
+// qsRelease tags the commit of qsOwner with a tag signed by the throwaway
+// key, and pushes both.
+func qsRelease(t *testing.T, tag string) {
+	t.Helper()
+	qsGit(t, qsOwner, "-c", "gpg.format=ssh", "-c", "user.signingkey="+qsKey, "tag", "-s", "-m", "osk "+strings.TrimPrefix(tag, "v"), tag)
+	qsGit(t, qsOwner, "push", "-q", "origin", "HEAD", tag)
 }

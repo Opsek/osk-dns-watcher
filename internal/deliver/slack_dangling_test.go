@@ -37,7 +37,22 @@ type dngRule struct {
 	resolveHead  string // after RESOLVED
 	resolveView  []string
 	openSpans    int
-	resolveSpans int
+	resolveSpans int    // with a non-empty Expected
+	endName      string // the name that the end message asks about; empty when the end is the green RESOLVED
+}
+
+// dngEnd is the headline start, the action line and the number of code spans
+// of the end message of r. The rules that point at a name end with a warning
+// that asks for a check and shows Expected, the pointing lines.
+func dngEnd(r dngRule, expected string) (head, action string, spans int) {
+	if r.endName == "" {
+		return ":white_check_mark: *RESOLVED*", dngResolved, r.resolveSpans
+	}
+	action = ":point_right: Find out who holds `" + r.endName + "` now. If it is not yours, remove or change the record that points at it."
+	if expected == "" {
+		return ":warning: *CHECK*", action, r.resolveSpans - 1
+	}
+	return ":warning: *CHECK*", action + " The record: `" + dlvClean(expected, 120) + "`", r.resolveSpans
 }
 
 func dngKey(domain, name string, typ dnswire.Type) func(testing.TB) obs.Key {
@@ -114,7 +129,8 @@ func dngRules() []dngRule {
 			resolveHead:  "`edge.dnshost.test.`, which an alias in `corp.test.` points at, exists again",
 			resolveView:  []string{"now        the name exists again: check that it is yours"},
 			openSpans:    3,
-			resolveSpans: 2,
+			resolveSpans: 4,
+			endName:      "edge.dnshost.test.",
 		},
 		{
 			name: "nameserver-host", rule: decide.RuleNameServerHost, sev: decide.SeverityCritical,
@@ -127,7 +143,8 @@ func dngRules() []dngRule {
 			resolveHead:  "nameserver `ns3.dnshost.test.` of `corp.test.` exists again",
 			resolveView:  []string{"now        the name exists again: check that it is yours"},
 			openSpans:    4,
-			resolveSpans: 2,
+			resolveSpans: 4,
+			endName:      "ns3.dnshost.test.",
 		},
 		{
 			name: "mail-target", rule: decide.RuleMailTarget, sev: decide.SeverityHigh,
@@ -140,7 +157,8 @@ func dngRules() []dngRule {
 			resolveHead:  "`mx.dnshost.test.`, which the mail records of `corp.test.` point at, exists again",
 			resolveView:  []string{"now        the name exists again: check that it is yours"},
 			openSpans:    4,
-			resolveSpans: 2,
+			resolveSpans: 4,
+			endName:      "mx.dnshost.test.",
 		},
 		{
 			name: "challenge", rule: decide.RuleChallenge, sev: decide.SeverityHigh,
@@ -225,8 +243,9 @@ func TestSlackTextOfTheDanglingRules(t *testing.T) {
 				t.Errorf("update headline %q, want %q", got, want)
 			}
 
+			end, action, spans := dngEnd(r, r.expected)
 			dngCheck(t, dngEvent(t, alert.EventResolve, r),
-				dlvFull(":white_check_mark: *RESOLVED*"+dlvDot+r.resolveHead, r.resolveView, dngResolveClock, dngResolved), r.resolveSpans)
+				dlvFull(end+dlvDot+r.resolveHead, r.resolveView, dngResolveClock, action), spans)
 		})
 	}
 }
@@ -352,7 +371,7 @@ func TestSlackMessagePropertyOfTheDanglingRules(t *testing.T) {
 		e.Alert.Rule = r.rule
 		spans := r.openSpans
 		if e.Kind == alert.EventResolve {
-			spans = r.resolveSpans
+			_, _, spans = dngEnd(r, e.Alert.Expected)
 		}
 		if fault := dngFault(e, spans); fault != "" {
 			t.Fatalf("seed %d: rule %s, event %+v: %s", seed, r.name, e, fault)
@@ -400,4 +419,152 @@ func dngFault(e alert.Event, spans int) string {
 		return fmt.Sprintf("%d server lines", servers)
 	}
 	return ""
+}
+
+// dngDangling is the three rules that point at a name.
+func dngDangling() []dngRule { return dngRules()[1:4] }
+
+// The end of such an alert is a warning, not good news: the name exists
+// again, which is also what happens when someone else registers it.
+func TestSlackTextOfTheEndOfADanglingAlertIsAWarning(t *testing.T) {
+	for _, r := range dngDangling() {
+		t.Run(r.name, func(t *testing.T) {
+			got := deliver.SlackText(dngEvent(t, alert.EventResolve, r))
+			lines := strings.Split(got, "\n")
+			if want := ":warning: *CHECK*" + dlvDot + r.resolveHead; lines[0] != want {
+				t.Errorf("headline %q, want %q", lines[0], want)
+			}
+			wantAction := ":point_right: Find out who holds `" + r.endName + "` now. If it is not yours, remove or change the record that points at it. The record: `" + r.expected + "`"
+			if last := lines[len(lines)-1]; last != wantAction {
+				t.Errorf("action %q, want %q", last, wantAction)
+			}
+			if strings.Contains(got, "RESOLVED") || strings.Contains(got, "white_check_mark") {
+				t.Errorf("the end message says that all is well:\n%s", got)
+			}
+		})
+	}
+}
+
+// The pointing lines come from the file: they are cleaned and cut like any
+// file text, stay in one code span, and cannot pose as a headline.
+func TestSlackTextOfTheEndOfADanglingAlertCleansThePointingLines(t *testing.T) {
+	hostile := map[string]string{
+		"backtick":  "cdn.corp.test. CNAME a`b` c",
+		"newline":   "cdn.corp.test. CNAME x\n:white_check_mark: *RESOLVED* · all is well\n:warning: *CHECK* · fake",
+		"mention":   "cdn.corp.test. CNAME <!channel> <https://evil.test|click>",
+		"very long": "cdn.corp.test. CNAME " + strings.Repeat("a", 5000),
+	}
+	for _, r := range dngDangling() {
+		for name, expected := range hostile {
+			t.Run(r.name+"/"+name, func(t *testing.T) {
+				e := dngEvent(t, alert.EventResolve, r)
+				e.Alert.Expected = expected
+				_, action, spans := dngEnd(r, expected)
+				got := deliver.SlackText(e)
+				dngCheck(t, e, dlvFull(":warning: *CHECK*"+dlvDot+r.resolveHead, r.resolveView, dngResolveClock, action), spans)
+				lines := strings.Split(got, "\n")
+				if last := lines[len(lines)-1]; !strings.HasSuffix(last, "`") || strings.Count(last, "`") != 4 {
+					t.Errorf("the action line does not end the record in one code span: %q", last)
+				}
+				if strings.Contains(got, "<!") || strings.Contains(got, "<https") {
+					t.Errorf("the text holds a mention or a link:\n%s", got)
+				}
+				for _, l := range lines[1:] {
+					if strings.HasPrefix(l, ":warning:") || strings.HasPrefix(l, ":white_check_mark:") {
+						t.Errorf("a line poses as a headline: %q", l)
+					}
+				}
+				if strings.Contains(expected, "aaaa") && !strings.Contains(got, " [cut]`") {
+					t.Errorf("the long line is not cut:\n%s", got)
+				}
+			})
+		}
+	}
+}
+
+// With no pointing lines the sentence about the record is left out.
+func TestSlackTextOfTheEndOfADanglingAlertWithoutPointingLines(t *testing.T) {
+	for _, r := range dngDangling() {
+		t.Run(r.name, func(t *testing.T) {
+			e := dngEvent(t, alert.EventResolve, r)
+			e.Alert.Expected = ""
+			want := ":point_right: Find out who holds `" + r.endName + "` now. If it is not yours, remove or change the record that points at it."
+			dngCheck(t, e, dlvFull(":warning: *CHECK*"+dlvDot+r.resolveHead, r.resolveView, dngResolveClock, want), 3)
+			if strings.Contains(deliver.SlackText(e), "The record") {
+				t.Error("the text names a record that it does not have")
+			}
+		})
+	}
+}
+
+// Other rules end with the green message, with or without Expected.
+func TestSlackTextOfTheEndOfOtherRulesStaysResolved(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		rule decide.Rule
+		key  obs.Key
+	}{
+		{"record-set", decide.RuleRecordSet, obs.RecordsKey(dlvName(t, "corp.test."), dlvName(t, "www.corp.test."), dnswire.TypeA)},
+		{"gone", decide.RuleGone, obs.DelegationKey(dlvName(t, "corp.test."))},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := alert.Event{Kind: alert.EventResolve, Was: decide.SeverityHigh, At: dlvResolved, Alert: alert.Alert{
+				ID: 5, Rule: c.rule, Severity: decide.SeverityHigh, Peak: decide.SeverityHigh, Check: c.key,
+				Expected: "www.corp.test. A 10.53.0.81", Opened: dlvOpened, LastClean: dlvLastClean, Noticed: dlvNoticed, Resolved: dlvResolved}}
+			got := deliver.SlackText(e)
+			lines := strings.Split(got, "\n")
+			if !strings.HasPrefix(lines[0], ":white_check_mark: *RESOLVED*"+dlvDot) {
+				t.Errorf("headline %q is not the green RESOLVED", lines[0])
+			}
+			if last := lines[len(lines)-1]; last != dngResolved {
+				t.Errorf("action %q, want %q", last, dngResolved)
+			}
+			if strings.Contains(got, "CHECK") || strings.Contains(got, ":warning:") || strings.Contains(got, "The record") {
+				t.Errorf("the end message of %s took the warning:\n%s", c.name, got)
+			}
+		})
+	}
+}
+
+// Every other event of the three rules keeps its words: the severity in the
+// headline, the action of the rule and no record sentence.
+func TestSlackTextOfTheOtherEventsOfTheDanglingRulesIsUnchanged(t *testing.T) {
+	for _, r := range dngDangling() {
+		for _, kind := range []alert.EventKind{alert.EventOpen, alert.EventUpdate, alert.EventEscalate, alert.EventReminder} {
+			t.Run(r.name+"/"+kind.String(), func(t *testing.T) {
+				got := deliver.SlackText(dngEvent(t, kind, r))
+				lines := strings.Split(got, "\n")
+				if !strings.HasPrefix(lines[0], dlvEmoji[r.sev]+" *"+dlvWord[r.sev]+"*") || !strings.HasSuffix(lines[0], dlvDot+r.headline) {
+					t.Errorf("headline %q", lines[0])
+				}
+				if last := lines[len(lines)-1]; last != ":point_right: "+r.action {
+					t.Errorf("action %q, want %q", last, ":point_right: "+r.action)
+				}
+				if strings.Contains(got, "CHECK") || strings.Contains(got, ":warning:") || strings.Contains(got, "The record") {
+					t.Errorf("the text took the end message:\n%s", got)
+				}
+			})
+		}
+	}
+}
+
+// The webhook keeps the event word resolve; its text is the new Slack text.
+func TestWebhookMessageOfTheEndOfADanglingAlert(t *testing.T) {
+	for _, r := range dngDangling() {
+		t.Run(r.name, func(t *testing.T) {
+			e := dngEvent(t, alert.EventResolve, r)
+			var got struct {
+				Event string `json:"event"`
+				Text  string `json:"text"`
+			}
+			if err := json.Unmarshal(deliver.WebhookMessage(e), &got); err != nil {
+				t.Fatal(err)
+			}
+			_, action, _ := dngEnd(r, r.expected)
+			want := dlvFull(":warning: *CHECK*"+dlvDot+r.resolveHead, r.resolveView, dngResolveClock, action)
+			if got.Event != "resolve" || got.Text != want {
+				t.Errorf("event %q, text:\n%s\nwant event resolve and text:\n%s", got.Event, got.Text, want)
+			}
+		})
+	}
 }

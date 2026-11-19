@@ -219,13 +219,16 @@ func TestSnapshotSkips(t *testing.T) {
 			expObs(t, www, "corp.test.", at("ns1.corp.test.", expNS1Addr, "10.53.0.81")),
 			expObs(t, www, "corp.test.", at("ns2.corp.test.", expNS2Addr, "10.53.0.99"))},
 			"www.corp.test. A: servers disagree: 10.53.0.11:53 ns1.corp.test. gives 10.53.0.81; 10.53.0.12:53 ns2.corp.test. gives 10.53.0.99"},
-		{"parent and apex NS sets that differ", []obs.Observation{
+		// Sets that differ make an NS line of alternatives (see
+		// TestSnapshotNSLineAcceptsEachSetTheServersGave); an empty one cannot be
+		// an alternative.
+		{"a parent NS set and an apex answer of no data", []obs.Observation{
 			expObs(t, obs.DelegationKey(expName(t, "corp.test.")), "test.",
 				expAnswer(t, "ns.test.", expParentAddr, expRecords(t, dnswire.TypeNS, "corp.test.", "ns1.corp.test.", "ns2.corp.test."))),
 			expObs(t, expRecordsKey(t, "corp.test.", dnswire.TypeNS), "corp.test.",
-				expApexNS(t, "ns1.corp.test.", expNS1Addr, "ns1.corp.test.", "ns2.corp.test.", "ns3.corp.test."),
-				expApexNS(t, "ns2.corp.test.", expNS2Addr, "ns1.corp.test.", "ns2.corp.test.", "ns3.corp.test."))},
-			"corp.test. NS: servers disagree: 10.53.0.3:53 ns.test. gives ns1.corp.test. | ns2.corp.test.; 10.53.0.11:53 ns1.corp.test. gives ns1.corp.test. | ns2.corp.test. | ns3.corp.test."},
+				expApexNS(t, "ns1.corp.test.", expNS1Addr, "ns1.corp.test.", "ns2.corp.test."),
+				expAnswer(t, "ns2.corp.test.", expNS2Addr, expNoData(t, "corp.test.")))},
+			"corp.test. NS: servers disagree: 10.53.0.3:53 ns.test. gives ns1.corp.test. | ns2.corp.test.; 10.53.0.12:53 ns2.corp.test. gives none"},
 		{"a name in a subzone without its NS pair", []obs.Observation{
 			expObs(t, expRecordsKey(t, "www.sub.corp.test.", dnswire.TypeA), "sub.corp.test.",
 				expAnswer(t, "ns1.sub.corp.test.", "10.53.0.13:53", expRecords(t, dnswire.TypeA, "www.sub.corp.test.", "10.53.0.90")))},
@@ -524,14 +527,47 @@ func expGroups(observations []obs.Observation) []*expGroup {
 	return groups
 }
 
-// expLineSets decides which sets get a line: those that agree, less the ones
-// with a records check under the domain whose zone is not the expected zone
-// of the NS lines that agree.
-func expLineSets(domain dnswire.Name, groups []*expGroup) map[*expGroup]bool {
-	lines := map[*expGroup]bool{}
+// expAlternatives applies the rule of the NS set of the domain when its
+// answers do not agree: a failed answer is left out; every other answer must
+// be a set of NS records only, not empty; a server of the parent zone must
+// have given one; and at most 4 sets differ. The line then holds each set.
+func expAlternatives(domain dnswire.Name, g *expGroup) bool {
+	if g.typ != dnswire.TypeNS || !g.name.Equal(domain) {
+		return false
+	}
+	var sets []map[string]bool
+	fromParent := false
+	for _, o := range g.obs {
+		for _, a := range o.Answers {
+			set, ok := expAnswerSet(a)
+			if !ok {
+				continue
+			}
+			if len(set) == 0 || slices.ContainsFunc(set, func(r dnswire.Record) bool { return r.Type() != dnswire.TypeNS }) {
+				return false
+			}
+			fromParent = fromParent || o.Key.Kind == obs.KindDelegation
+			k := expKeys(set)
+			if !slices.ContainsFunc(sets, func(s map[string]bool) bool { return expSameKeys(s, k) }) {
+				sets = append(sets, k)
+			}
+		}
+	}
+	return fromParent && len(sets) <= 4
+}
+
+// expLineSets decides which sets get a line: those that agree, and the NS
+// set of the domain by expAlternatives, less the ones with a records check
+// under the domain whose zone is not the expected zone of the NS lines.
+// loose holds the sets whose line leaves failed answers out.
+func expLineSets(domain dnswire.Name, groups []*expGroup) (lines, loose map[*expGroup]bool) {
+	lines, loose = map[*expGroup]bool{}, map[*expGroup]bool{}
 	var cuts []dnswire.Name
 	for _, g := range groups {
 		agree, empty := expAgree(g)
+		if !agree && expAlternatives(domain, g) {
+			agree, empty, loose[g] = true, false, true
+		}
 		lines[g] = agree
 		if agree && !empty && g.typ == dnswire.TypeNS {
 			cuts = append(cuts, g.name)
@@ -545,14 +581,14 @@ func expLineSets(domain dnswire.Name, groups []*expGroup) map[*expGroup]bool {
 			}
 		}
 	}
-	return lines
+	return lines, loose
 }
 
 func TestSnapshotInvariant(t *testing.T) {
 	rng := rand.New(rand.NewPCG(expSeed, 3))
 	domain := expName(t, "corp.test.")
 	candidates := expCandidates(t)
-	var written, skipped int
+	var written, skipped, several int
 	report := expFailer(t)
 	for i := range 1000 {
 		fail := func(format string, args ...any) {
@@ -566,7 +602,7 @@ func TestSnapshotInvariant(t *testing.T) {
 			continue
 		}
 		groups := expGroups(observations)
-		lines := expLineSets(domain, groups)
+		lines, loose := expLineSets(domain, groups)
 		var cuts []dnswire.Name
 		for _, e := range f.Expectations {
 			if e.Type == dnswire.TypeNS && e.Form != FormNone {
@@ -585,14 +621,25 @@ func TestSnapshotInvariant(t *testing.T) {
 				continue
 			}
 			lineCount++
-			// The invariant: a set that got a line gives no finding.
+			if len(e.Sets) > 1 {
+				several++
+			}
+			// The invariant: a set that got a line gives no finding. A failure
+			// is unknown, never a finding, but only an NS line of the domain
+			// may rest on the answers beside it.
 			for _, o := range g.obs {
 				for _, a := range o.Answers {
-					if set, ok := expAnswerSet(a); !ok || !e.Match(set) {
+					set, ok := expAnswerSet(a)
+					if !ok && loose[g] {
+						continue
+					}
+					if !ok || !e.Match(set) {
 						fail("%s does not match %q from %v", e.String(), expRecordTexts(set), a.Server.Addr)
 					}
 				}
-				if o.Key.Kind == obs.KindRecords && o.Key.Name.IsSubdomainOf(domain) && !o.Zone.Equal(expDeepestZone(domain, cuts, o.Key.Name)) {
+				// A failed walk found no zone, so it says nothing about a cut.
+				if o.Key.Kind == obs.KindRecords && o.Key.Name.IsSubdomainOf(domain) && !expWalkFailed(o) &&
+					!o.Zone.Equal(expDeepestZone(domain, cuts, o.Key.Name)) {
 					fail("%s got a line, but its check lies in zone %v", e.String(), o.Zone)
 				}
 			}
@@ -611,8 +658,8 @@ func TestSnapshotInvariant(t *testing.T) {
 		written += lineCount
 		skipped += len(groups) - lineCount
 	}
-	if !t.Failed() && (written < 500 || skipped < 500) {
-		t.Errorf("test fault: %d lines and %d skips; both must come up often", written, skipped)
+	if !t.Failed() && (written < 500 || skipped < 500 || several < 50) {
+		t.Errorf("test fault: %d lines, %d skips and %d lines of several sets; each must come up often", written, skipped, several)
 	}
 }
 

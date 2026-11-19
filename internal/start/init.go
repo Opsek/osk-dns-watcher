@@ -75,6 +75,19 @@ const (
 	textNoNS     = "warning osk cannot watch the nameservers of %s yet. Until its file has an NS line, " +
 		"a change of the nameservers gives no critical alert, only an update of the alert about the missing line; " +
 		"osk sends that alert at its first check.\n"
+	textNSNoAnswer = "warning %s gave no answer about the nameservers of %s, so its NS line holds what the other servers gave. " +
+		"If they hold another set, osk alerts at its first check.\n"
+	textNSNoPath = "warning osk could not reach the servers of %s (the walk from the root found no path to them), " +
+		"so its NS line holds what the parent zone gave. If the servers hold another set, osk alerts at its first check.\n"
+	textNSSets = "warning the servers of %s give different nameserver sets now. The NS line above accepts each set below; " +
+		"a change of the nameservers to any other set gives an alert:\n"
+	textNSSet    = "  %s\n"
+	textNSParent = "    given by the parent zone: %s\n"
+	textNSZone   = "    given by the servers of %s: %s\n"
+	textNSFix    = "If a name in these sets is not one of your nameservers, do not type yes. Else make the sets equal " +
+		"at your registrar and DNS provider, then run osk snapshot %s and put its NS line in the file.\n"
+	textManyHosts = "warning osk does not watch the addresses of the nameservers of %s, because its NS line names more than %d hosts " +
+		"inside the domain. Add their A and AAAA lines by hand.\n"
 	textNoSets = "warning osk watches no record set of %s yet: each one is listed above with its reason. " +
 		"Until its file has those lines, a change of them gives no alert.\n"
 	textWarning = "warning %s\n"
@@ -358,9 +371,10 @@ func denies(a obs.Answer) bool {
 }
 
 // show gives the lines of each domain and the sets it leaves out. A file
-// without an NS line, or with no set to compare, is still written: a parent
-// and a child that disagree on the nameservers are common, and that alone
-// must not stop the setup, so the gap is said instead.
+// without an NS line, or with no set to compare, is still written, and so is
+// an NS line that accepts several sets: servers that disagree on the
+// nameservers are common, and that alone must not stop the setup, so the gap
+// or the wider trust is said instead.
 func show(views []view) string {
 	var b strings.Builder
 	for _, v := range views {
@@ -379,11 +393,45 @@ func show(views []view) string {
 		}
 		if _, ok := v.file.Find(v.domain, dnswire.TypeNS); !ok {
 			fmt.Fprintf(&b, textNoNS, v.domain)
+		} else {
+			servers := slices.DeleteFunc(slices.Clone(v.nsNoAnswer), func(s string) bool { return s == expect.NoPath })
+			if len(servers) < len(v.nsNoAnswer) {
+				fmt.Fprintf(&b, textNSNoPath, v.domain)
+			}
+			if len(servers) > 0 {
+				fmt.Fprintf(&b, textNSNoAnswer, strings.Join(servers, ", "), v.domain)
+			}
+			if len(v.nsSources) > 1 {
+				b.WriteString(nsSetsText(v.domain, v.nsSources))
+			}
+		}
+		if v.manyHosts {
+			fmt.Fprintf(&b, textManyHosts, v.domain, maxNSHosts)
 		}
 		if !slices.ContainsFunc(v.file.Expectations, comparesRecords) {
 			fmt.Fprintf(&b, textNoSets, v.domain)
 		}
 	}
+	return b.String()
+}
+
+// nsSetsText names each set that the NS line of domain accepts and the
+// servers that gave it. A server that lies during init gets its set into the
+// line, so the person who confirms must be able to see a set that is not
+// theirs.
+func nsSetsText(domain dnswire.Name, sources []expect.NSSource) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, textNSSets, domain)
+	for _, s := range sources {
+		fmt.Fprintf(&b, textNSSet, s.Text)
+		if len(s.Parent) > 0 {
+			fmt.Fprintf(&b, textNSParent, strings.Join(s.Parent, ", "))
+		}
+		if len(s.Zone) > 0 {
+			fmt.Fprintf(&b, textNSZone, domain, strings.Join(s.Zone, ", "))
+		}
+	}
+	fmt.Fprintf(&b, textNSFix, domain)
 	return b.String()
 }
 

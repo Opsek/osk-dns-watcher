@@ -120,7 +120,7 @@ const cliNetwork = `,
 var cliWarnings = []string{
 	"network.root_servers is set: osk starts its walk at 10.53.0.2:53, 192.0.2.1:5353 instead of the root servers" +
 		" of the internet, so these servers decide every answer. Use it only in a lab or a private network.",
-	"network.extra_ranges is set: data from DNS can now make osk send queries to 10.53.0.0/24." +
+	"network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to 10.53.0.0/24." +
 		" Use it only in a lab or a private network.",
 }
 
@@ -465,6 +465,8 @@ func cliChildDo(s *store.Store, state, request string) string {
 		err = cliWatchBatch(s, arg)
 	case "serve":
 		return cliServe(s, state, arg)
+	case "poison":
+		err = cleBreakNotices(state)
 	case "beat":
 		err = s.Beat(time.Now(), nil)
 	default:

@@ -20,6 +20,7 @@ var notPublic = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("168.63.129.16/32"), // a cloud host's own service, like 169.254.169.254: never a server of a zone
 	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("192.0.0.0/24"),
@@ -55,4 +56,10 @@ func public(a netip.Addr) bool {
 // an address with a zone nor the IPv4-mapped form of its IPv4 addresses.
 func permitted(a netip.Addr, extra []netip.Prefix) bool {
 	return public(a) || slices.ContainsFunc(extra, func(p netip.Prefix) bool { return p.Contains(a) })
+}
+
+// Permitted is the same rule for a connection that is not a query but goes
+// to an address that DNS chose, such as the fetch of a policy file.
+func Permitted(a netip.Addr, extra []netip.Prefix) bool {
+	return permitted(a, extra)
 }

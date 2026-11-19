@@ -24,6 +24,7 @@ usage: labctl set <server> <name> <ttl> <type> <rdata>...
                           [--delay <seconds>] [--body <text>]
        labctl certs set             (a JSON array of issuances on standard input)
        labctl certs fail <status> <count> [<retry>]
+       labctl certs count
        labctl certs clear
        labctl policy <host> <status> [<body>]
        labctl policy clear
@@ -282,6 +283,7 @@ certs_fail() {
 
 certs_clear() {
 	echo '[]' | hooks --data-binary @- "http://$net.30:8080/issuances"
+	hooks -X POST "http://$net.30:8080/lookups/clear"
 	certs_fail 200 0
 }
 
@@ -439,6 +441,7 @@ hooks)
 certs)
 	case $#:${2:-} in
 	2:set) hooks --data-binary @- "http://$net.30:8080/issuances" ;;
+	2:count) hooks "http://$net.30:8080/lookups" ;;
 	2:clear) certs_clear ;;
 	[45]:fail) certs_fail "$3" "$4" "${5:-}" ;;
 	*) usage ;;

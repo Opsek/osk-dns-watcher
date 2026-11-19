@@ -904,6 +904,35 @@ func zzFault() error {
 EOF
 }
 
+# net_dialer <file>: a file, in place of the one there if any, that dials
+# through a net.Dialer, as the HTTPS client does in internal/httpclient/dial.go.
+net_dialer() {
+	rm -f "$1" && put "$1" <<EOF
+package $(basename "$(dirname "$1")")
+
+import "net"
+
+func zzFault() (net.Conn, error) {
+	var d net.Dialer
+	return d.Dial("udp", "192.0.2.53:53")
+}
+EOF
+}
+
+# net_dial <file>: a file, in place of the one there if any, that dials with
+# net.Dial, which no file may use.
+net_dial() {
+	rm -f "$1" && put "$1" <<EOF
+package $(basename "$(dirname "$1")")
+
+import "net"
+
+func zzFault() (net.Conn, error) {
+	return net.Dial("udp", "192.0.2.53:53")
+}
+EOF
+}
+
 dnswire_net_import() {
 	put internal/dnswire/zzfault.go <<'EOF'
 package dnswire
@@ -1645,6 +1674,12 @@ check dns-dialudp-dot-import        dialudp_dot_import         archcheck no-dns-
 check dns-tls-dial                  tls_dial                   archcheck no-dns-update "$Z:6 uses crypto/tls.Dial"
 check dns-dial-in-main              dial_in_main               archcheck no-dns-update "cmd/osk/zzfault.go:9 uses net.DialTimeout"
 check dns-dial-in-dnswire-subfolder "dialer $D/zzfault/zzfault.go" archcheck no-dns-update "$D/zzfault/zzfault.go:6 uses net.Dial"
+H=internal/httpclient
+check dns-dialer-in-http-dial-file  "net_dialer $H/dial.go"    archcheck pass
+check dns-dial-in-http-dial-file    "net_dial $H/dial.go"      archcheck no-dns-update "$H/dial.go:6 uses net.Dial"
+check dns-dialer-in-http-other-file "net_dialer $H/zzfault.go" archcheck no-dns-update "$H/zzfault.go:6 uses net.Dialer"
+check dns-dialer-in-other-dial-file "net_dialer internal/zzfault/dial.go" archcheck no-dns-update \
+	"internal/zzfault/dial.go:6 uses net.Dialer"
 check dns-net-import-in-dnswire     dnswire_net_import         archcheck no-dns-update "$D/zzfault.go:3 imports net outside $D/transport.go"
 check dns-write-outside-writequery  transport_write            archcheck no-dns-update "uses Write outside writeQuery"
 check dns-method-value-outside-writequery transport_method_value archcheck no-dns-update "uses Write outside writeQuery"
@@ -1714,5 +1749,350 @@ check mutate-not-viable             mutate_not_viable          mutate 'ok mutate
 for script in fuzz labtests static tests; do
 	check "outside-container-$script" none outside build-container "gate/phase/$script.sh"
 done
+
+# ---- Release files ----
+# A release of the version 0.0.1, made once by build/static.sh and
+# release/contents.sh as make release makes one. osk can be built here only
+# for this container's architecture, so the binary of the other one is a
+# stand-in: an empty program built for it with cgo on, whose one dependency
+# is the SQLite driver of go.mod, as a module of its own in vendor/. It has no
+# C code, so it needs no C compiler of that architecture.
+# gate/phase/release.sh runs only the binary of its own architecture.
+
+RELEASE_FILES=$TMP/release/0.0.1
+RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567
+RELEASE_NAME=ghcr.io/zz/osk
+DRIVER="github.com/mattn/go-sqlite3 $(sed -n 's/^require github.com\/mattn\/go-sqlite3 //p' go.mod)"
+ZEROS=0000000000000000000000000000000000000000000000000000000000000000
+AMD64_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ARM64_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+# The one release in the copy, whatever its version, with the image setting
+# that the image lines of the cases name.
+run_release() {
+	(cd "$1" && OSK_IMAGE=$RELEASE_NAME sh gate/phase/release.sh "$(ls out/release)")
+}
+
+# release/commit.sh, with a stand-in for git that answers from the files that
+# the case wrote to zzgit/; its reason becomes a FAIL line.
+run_commit() {
+	(
+		cd "$1" && why=$(PATH="$TMP/fakegit:$PATH" sh release/commit.sh 0.0.1 2>&1) ||
+			{ echo "FAIL release-commit: $why"; exit 1; }
+		echo "ok release-commit"
+	)
+}
+
+# standin <file> <module>...: the empty program for the other architecture,
+# with each module, "<path> <version>", as a dependency.
+standin() {
+	file=$1
+	shift
+	dir=$TMP/standin
+	rm -rf "$dir" && mkdir -p "$dir" || return 1
+	{
+		printf 'module zz\n\ngo %s\n\n' "$(sed -n 's/^go //p' go.mod)"
+		for m; do printf 'require %s\n' "$m"; done
+	} >"$dir/go.mod"
+	{
+		printf 'package main\n\n'
+		for m; do printf 'import _ "%s"\n' "${m% *}"; done
+		printf '\nfunc main() {}\n'
+	} >"$dir/main.go"
+	for m; do
+		mkdir -p "$dir/vendor/${m% *}" && printf 'package dep\n' >"$dir/vendor/${m% *}/dep.go" &&
+			printf '# %s\n## explicit\n%s\n' "$m" "${m% *}" >>"$dir/vendor/modules.txt" || return 1
+	done
+	(cd "$dir" && CGO_ENABLED=1 GOOS=linux GOARCH=$RELEASE_OTHER go build -mod=vendor -trimpath -o "$file" .)
+}
+
+# index_json <architecture> <digest> ...: an image index as BuildKit writes
+# it, with one manifest for each pair.
+index_json() {
+	printf '{\n  "schemaVersion": 2,\n  "mediaType": "application/vnd.oci.image.index.v1+json",\n  "manifests": ['
+	sep=
+	while [ $# -ge 2 ]; do
+		printf '%s\n    {\n      "mediaType": "application/vnd.oci.image.manifest.v1+json",\n      "digest": "%s",\n      "size": 1303,\n      "platform": {\n        "architecture": "%s",\n        "os": "linux"\n      }\n    }' \
+			"$sep" "$2" "$1"
+		sep=,
+		shift 2
+	done
+	printf '\n  ]\n}\n'
+}
+
+make_release() {
+	RELEASE_ARCH=$(go env GOARCH) || return 1
+	case $RELEASE_ARCH in
+	amd64) RELEASE_OTHER=arm64 ;;
+	*) RELEASE_OTHER=amd64 ;;
+	esac
+	mkdir -p "$RELEASE_FILES" "$TMP/image" "$TMP/fakegit" &&
+		(cd "$CLEAN" && sh build/static.sh "$RELEASE_ARCH" 0.0.1 >/dev/null) &&
+		mv "$CLEAN/out/osk-linux-$RELEASE_ARCH" "$RELEASE_FILES/" &&
+		standin "$RELEASE_FILES/osk-linux-$RELEASE_OTHER" "$DRIVER" &&
+		standin "$TMP/two-deps" "$DRIVER" "golang.org/x/zz v0.1.0" &&
+		(cd "$RELEASE_FILES" && sh "$ROOT/release/contents.sh" 0.0.1 "$RELEASE_COMMIT") &&
+		cp "$RELEASE_FILES"/osk-linux-* "$TMP/image/" &&
+		index_json amd64 "$AMD64_DIGEST" arm64 "$ARM64_DIGEST" >"$TMP/image/index.json" || return 1
+	cat >"$TMP/fakegit/git" <<'EOF'
+#!/bin/sh
+case "$*" in
+'rev-parse --verify HEAD^{commit}') cat zzgit/head ;;
+'status --porcelain --untracked-files=no') cat zzgit/status ;;
+'rev-parse -q --verify refs/tags/v0.0.1') [ -s zzgit/tag ] && cat zzgit/tag ;;
+*) exit 128 ;;
+esac
+EOF
+	chmod +x "$TMP/fakegit/git"
+}
+
+release_files() {
+	mkdir -p out/release && cp -R "$RELEASE_FILES" out/release/
+}
+
+# sums: SHA256SUMS for the files as they are now, so that the check of the
+# fault, not sha256sum -c, must catch it.
+sums() {
+	sha256sum osk-linux-amd64 osk-linux-arm64 CONTENTS >SHA256SUMS
+}
+
+# edit <sed script>: changes CONTENTS of the release in the copy, then its sums.
+edit() {
+	release_files && cd out/release/0.0.1 && sed "$1" CONTENTS >CONTENTS.new &&
+		! cmp -s CONTENTS CONTENTS.new && mv CONTENTS.new CONTENTS && sums
+}
+
+# The first byte of an ELF file is 0x7f.
+release_changed_byte() {
+	release_files && printf x | dd of=out/release/0.0.1/osk-linux-amd64 bs=1 conv=notrunc 2>/dev/null
+}
+
+release_wrong_sum() {
+	edit "s/^\(file osk-linux-amd64 [0-9]* \)[0-9a-f]*\$/\1$ZEROS/"
+}
+
+release_missing_file() {
+	release_files && rm out/release/0.0.1/osk-linux-arm64
+}
+
+release_extra_file() {
+	release_files && echo notes >out/release/0.0.1/notes.txt
+}
+
+release_signature() {
+	release_files && echo signature >out/release/0.0.1/SHA256SUMS.sig
+}
+
+release_sums_short() {
+	release_files && cd out/release/0.0.1 && grep -v ' osk-linux-arm64$' SHA256SUMS >SHA256SUMS.new &&
+		mv SHA256SUMS.new SHA256SUMS
+}
+
+release_version_line() {
+	edit 's/^version 0\.0\.1$/version 0.0.2/'
+}
+
+# Lines that no other check reads: one more at the end, one less of the
+# build settings.
+release_added_line() {
+	edit '$a\
+note this line was added'
+}
+
+release_removed_line() {
+	edit '/-compiler=gc$/d'
+}
+
+# The files of 0.0.1 as the release 0.0.2: the binary prints the other version.
+release_other_version() {
+	release_files && mv out/release/0.0.1 out/release/0.0.2 && cd out/release/0.0.2 &&
+		sed 's/^version 0\.0\.1$/version 0.0.2/' CONTENTS >CONTENTS.new &&
+		mv CONTENTS.new CONTENTS && grep -qx 'version 0.0.2' CONTENTS && sums
+}
+
+# The two binaries trade names; their file lines in CONTENTS follow them.
+release_swapped() {
+	release_files && cd out/release/0.0.1 &&
+		mv osk-linux-amd64 zz && mv osk-linux-arm64 osk-linux-amd64 && mv zz osk-linux-arm64 &&
+		sed -e 's/^file osk-linux-amd64 /file zz /' -e 's/^file osk-linux-arm64 /file osk-linux-amd64 /' \
+			-e 's/^file zz /file osk-linux-arm64 /' CONTENTS >CONTENTS.new &&
+		mv CONTENTS.new CONTENTS && sums
+}
+
+# The stand-in with a second module, and CONTENTS made again for it.
+release_second_dep() {
+	release_files && cp "$TMP/two-deps" "out/release/0.0.1/osk-linux-$RELEASE_OTHER" &&
+		(cd out/release/0.0.1 && sh "$ROOT/release/contents.sh" 0.0.1 "$RELEASE_COMMIT")
+}
+
+# image_release [<architecture> <digest>]...: the release with image lines,
+# and in out/image/ what gate/bin/gate reads from such an image; the index
+# lists the pairs given, or linux/amd64 and linux/arm64.
+image_release() {
+	release_files && cp -R "$TMP/image" out/image || return 1
+	[ $# -eq 0 ] || index_json "$@" >out/image/index.json || return 1
+	index=sha256:$(sha256sum <out/image/index.json | cut -d ' ' -f 1) &&
+		(cd out/release/0.0.1 && sh "$ROOT/release/contents.sh" 0.0.1 "$RELEASE_COMMIT" \
+			"$RELEASE_NAME" "$index" "$AMD64_DIGEST" "$ARM64_DIGEST")
+}
+
+image_amd64_differs() {
+	image_release && printf x | dd of=out/image/osk-linux-amd64 bs=1 conv=notrunc 2>/dev/null
+}
+
+image_arm64_differs() {
+	image_release && printf x | dd of=out/image/osk-linux-arm64 bs=1 conv=notrunc 2>/dev/null
+}
+
+image_third_platform() {
+	image_release amd64 "$AMD64_DIGEST" arm64 "$ARM64_DIGEST" riscv64 "sha256:$ZEROS"
+}
+
+image_digest_form() {
+	image_release && cd out/release/0.0.1 &&
+		sed 's/^\(image-digest linux\/arm64\) .*/\1 sha256:abc/' CONTENTS >CONTENTS.new && mv CONTENTS.new CONTENTS && sums
+}
+
+image_other_name() {
+	image_release && cd out/release/0.0.1 &&
+		sed 's|^image .*|image ghcr.io/zz/other|' CONTENTS >CONTENTS.new && mv CONTENTS.new CONTENTS && sums
+}
+
+# The checks of a tag need OpenSSH, which this container lacks: the lab tests
+# of deploy/ (TestVerifyTagInCommitScript) have them.
+# git_says <HEAD> <changed files> <tag v0.0.1>: what the stand-in for git
+# answers.
+git_says() {
+	release_files && mkdir zzgit && printf '%s\n' "$1" >zzgit/head &&
+		printf '%s' "$2" >zzgit/status && printf '%s' "$3" >zzgit/tag
+}
+
+commit_same() {
+	git_says "$RELEASE_COMMIT" '' ''
+}
+
+commit_not_head() {
+	git_says 1111111111111111111111111111111111111111 '' ''
+}
+
+commit_changed() {
+	git_says "$RELEASE_COMMIT" ' M internal/store/store.go
+' ''
+}
+
+
+make_release || fail release "cannot make the release 0.0.1 for the cases below"
+check release-clean                 release_files              release pass
+check release-signature             release_signature          release pass
+check release-changed-byte          release_changed_byte       release release-sums 'sha256sum -c SHA256SUMS failed'
+check release-sums-short            release_sums_short         release release-sums 'SHA256SUMS lists CONTENTS osk-linux-amd64 ;'
+check release-missing-file          release_missing_file       release release-files 'osk-linux-arm64 is missing'
+check release-extra-file            release_extra_file         release release-files 'do not belong to a release: notes.txt'
+check release-wrong-sum             release_wrong_sum          release release-contents 'lacks the line "file osk-linux-amd64 '
+check release-version-line          release_version_line       release release-contents 'the one version line "version 0.0.1"'
+check release-added-line            release_added_line         release release-contents 'is not what release/contents.sh makes'
+check release-removed-line          release_removed_line       release release-contents 'is not what release/contents.sh makes'
+check release-other-version         release_other_version      release release-version 'prints "osk 0.0.1 '
+check release-swapped               release_swapped            release release-arch 'osk-linux-amd64 was not built with GOARCH=amd64'
+check release-second-dep            release_second_dep         release release-deps 'golang.org/x/zz v0.1.0'
+check release-image-same            image_release              release pass
+check release-image-amd64-differs   image_amd64_differs        release release-image 'for linux/amd64 is not osk-linux-amd64'
+check release-image-arm64-differs   image_arm64_differs        release release-image 'for linux/arm64 is not osk-linux-arm64'
+check release-image-third-platform  image_third_platform       release release-image 'does not list exactly'
+check release-image-digest-form     image_digest_form          release release-contents 'the image lines must be'
+check release-image-other-name      image_other_name           release release-image 'names the image ghcr.io/zz/other'
+check release-commit-same           commit_same                commit pass
+check release-commit-not-head       commit_not_head            commit release-commit 'HEAD is 1111'
+check release-commit-changed        commit_changed             commit release-commit 'tracked files have changes'
+check outside-container-release     none                       outside build-container gate/phase/release.sh
+
+# ---- The scan for known vulnerabilities. It needs the network, so each case
+# runs the phase with a stand-in for govulncheck that behaves as zzvuln/mode
+# says. A file zzvuln/bin is scanned as a binary. ----
+
+run_vulncheck() {
+	(
+		cd "$1" && set -- && [ ! -f zzvuln/bin ] || set -- zzvuln/bin
+		GOVULNCHECK="$PWD/zzvuln/govulncheck" sh gate/phase/vulncheck.sh "$@"
+	)
+}
+
+# The plain gate must not scan: every call of the phase in gate/bin/gate is
+# for the argument vulncheck or for a release run, and a release run does call it.
+run_vulnplain() {
+	(
+		cd "$1" || exit
+		bad=$(grep -n 'vulncheck_phase' gate/bin/gate | grep -v ':vulncheck_phase() {$' |
+			grep -v 'OSK_RELEASE\|"\${1:-}" != vulncheck')
+		[ -z "$bad" ] || { echo "FAIL vulncheck-plain: scans in the plain run: $bad"; exit 1; }
+		grep -q 'OSK_RELEASE.*|| vulncheck_phase$' gate/bin/gate ||
+			{ echo "FAIL vulncheck-plain: a release run does not scan"; exit 1; }
+		echo "ok vulncheck-plain"
+	)
+}
+
+# vuln_case <mode> [bin]: the stand-in; the modes are clean, finding (a vulnerable
+# symbol in the source), binfinding (one in the binary only), nodb (the database
+# gives no time, as when it cannot be reached) and offline (the scan itself fails).
+vuln_case() {
+	put zzvuln/govulncheck <<'EOF' && chmod +x zzvuln/govulncheck && echo "$1" >zzvuln/mode || return 1
+#!/bin/sh
+mode=$(cat "$(dirname "$0")/mode")
+if [ "$1" = -version ]; then
+	echo "Go: go1.27.4"
+	echo "Scanner: govulncheck@v0.0.0"
+	echo "DB: https://vuln.go.dev"
+	[ "$mode" = nodb ] || echo "DB updated: 2026-01-02 03:04:05 +0000 UTC"
+	exit 0
+fi
+case $mode in
+finding)
+	echo "Vulnerability #1: GO-2026-0001"
+	exit 3
+	;;
+offline)
+	echo "govulncheck: fetching vulnerabilities: dial tcp: network is unreachable"
+	exit 1
+	;;
+binfinding)
+	case $* in
+	*-mode=binary*)
+		echo "Vulnerability #1: GO-2026-0002"
+		exit 3
+		;;
+	esac
+	;;
+esac
+echo "Govulncheck scanned the following 2 modules and the go1.27.4 standard library:"
+echo
+echo "  github.com/mattn/go-sqlite3@v1.14.53"
+echo
+EOF
+	[ -z "${2:-}" ] || echo binary >zzvuln/bin
+}
+
+vuln_no_sqlite() {
+	vuln_case clean && rm vendor/github.com/mattn/go-sqlite3/sqlite3-binding.h
+}
+
+vuln_plain_scans() {
+	append gate/bin/gate vulncheck_phase
+}
+
+vuln_release_skips() {
+	sed '/OSK_RELEASE.*|| vulncheck_phase$/d' gate/bin/gate >gate/bin/gate.new && mv gate/bin/gate.new gate/bin/gate
+}
+
+check vulncheck-clean               "vuln_case clean"          vulncheck 'ok vulncheck'
+check vulncheck-clean-binary        "vuln_case clean bin"      vulncheck 'ok vulncheck'
+check vulncheck-finding             "vuln_case finding"        vulncheck vulncheck 'found a vulnerability'
+check vulncheck-binary-finding      "vuln_case binfinding bin" vulncheck vulncheck 'scan of zzvuln/bin found a vulnerability'
+check vulncheck-no-database-time    "vuln_case nodb"           vulncheck vulncheck 'the database cannot be reached'
+check vulncheck-scan-fails          "vuln_case offline"        vulncheck vulncheck 'could not run: exit 1'
+check vulncheck-no-sqlite-version   vuln_no_sqlite             vulncheck vulncheck 'no SQLite version'
+check vulncheck-plain-run           none                       vulnplain 'ok vulncheck-plain'
+check vulncheck-plain-scans         vuln_plain_scans           vulnplain vulncheck-plain 'scans in the plain run'
+check vulncheck-release-skips       vuln_release_skips         vulnplain vulncheck-plain 'a release run does not scan'
+check outside-container-vulncheck   none                       outside build-container gate/phase/vulncheck.sh
 
 exit "$bad"

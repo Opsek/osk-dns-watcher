@@ -256,26 +256,36 @@ const (
 	dnswireDir    = "internal/dnswire"
 	transportFile = dnswireDir + "/transport.go"
 	writeFunc     = "writeQuery"
+	// The fetch of a policy file must check the address that its connection
+	// really uses, and net/http offers no hook for that but a dialer.
+	httpDialFile = "internal/httpclient/dial.go"
 )
 
 // noDNSUpdate keeps the tool from sending any DNS message but a query: only
-// the DNS codec dials, only its transport.go imports net, and there only
-// writeQuery writes, which sends nothing but what Query.Pack makes. Packages
-// that dial for their own protocols are banned everywhere. The rule has no
-// type information: a write through fmt.Fprint or io.Copy, or through a
-// function of another file of the codec, escapes the last part.
+// the DNS codec dials, besides the net.Dialer of httpDialFile, which opens
+// the TCP connection of an HTTPS request; only the codec's transport.go
+// imports net, and there only writeQuery writes, which sends nothing but what
+// Query.Pack makes. Packages that dial for their own protocols are banned
+// everywhere. The rule has no type information: a write through fmt.Fprint
+// or io.Copy, or through a function of another file of the codec, escapes the
+// last part, and so does any dial through that net.Dialer.
 func noDNSUpdate(t tree) []string {
-	var outside []*pkg
-	var inside []goFile
+	var outside, inside []goFile
 	for _, p := range t.pkgs {
 		if p.dir == dnswireDir {
 			inside = append(inside, p.files...)
 		} else {
-			outside = append(outside, p)
+			outside = append(outside, p.files...)
 		}
 	}
 	faults := findImports(t.pkgs, "log/syslog", "net/smtp", "net/textproto")
-	faults = append(faults, findUses(outside, map[string][]string{"net": {"Dial"}, "crypto/tls": {"Dial"}})...)
+	for _, f := range outside {
+		for _, fault := range fileUses(f, map[string][]string{"net": {"Dial"}, "crypto/tls": {"Dial"}}) {
+			if f.path != httpDialFile || !strings.HasSuffix(fault, " uses net.Dialer") {
+				faults = append(faults, fault)
+			}
+		}
+	}
 	for _, f := range inside {
 		for _, imp := range f.ast.Imports {
 			if importPath(imp) == "net" && f.path != transportFile {

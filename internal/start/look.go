@@ -16,13 +16,21 @@ import (
 // check ends after three quarters of it.
 const checkInterval = 60 * time.Second
 
+// maxNSHosts bounds the nameserver hosts inside a domain whose addresses a
+// look asks for, two checks each, so that a long NS set cannot make init send
+// many queries.
+const maxNSHosts = 8
+
 // view is what init learned of one domain.
 type view struct {
 	domain     dnswire.Name
 	delegation obs.Observation
 	file       *expect.File
 	skips      []expect.Skip
-	unreached  int // IPv6 addresses left out of the lines
+	unreached  int               // IPv6 addresses left out of the lines
+	nsSources  []expect.NSSource // the sets of an NS line that accepts several
+	nsNoAnswer []string          // the servers that the NS line rests without
+	manyHosts  bool              // the NS line names more than maxNSHosts hosts inside the domain
 }
 
 // lookAll looks at every domain at once. Each check ends by itself and runs
@@ -47,14 +55,51 @@ func lookAll(ctx context.Context, r Runner, domains []dnswire.Name) []view {
 func look(ctx context.Context, r Runner, domain dnswire.Name) view {
 	keys := lookKeys(domain)
 	observations := runKeys(ctx, r, keys)
-	// A domain that has set up no MTA-STS record is not asked for a policy
-	// file: osk must not connect to a host that the domain never set up.
+	// The first answers say what else to ask. A domain that has set up no
+	// MTA-STS record is not asked for a policy file: osk must not connect to
+	// a host that the domain never set up.
+	more, fewHosts := NameServerKeys(domain, observations)
 	if policy, ok := WantsPolicy(domain, observations); ok {
-		observations = append(observations, runKeys(ctx, r, []obs.Key{policy})...)
+		more = append(more, policy)
+	}
+	if len(more) > 0 {
+		observations = append(observations, runKeys(ctx, r, more)...)
 	}
 	file, skips := expect.Snapshot(domain, observations)
 	return view{domain: domain, delegation: observations[0], file: file, skips: skips,
-		unreached: len(expect.Unreached(observations))}
+		unreached: len(expect.Unreached(observations)), nsSources: expect.NSSources(domain, observations),
+		nsNoAnswer: expect.NSNoAnswer(domain, observations), manyHosts: !fewHosts}
+}
+
+// NameServerKeys gives the checks of the addresses, A and AAAA, of each
+// nameserver host at or under domain that the NS line of a snapshot of the
+// observations names, less those that the observations hold already. With
+// those lines in the file, osk compares the glue at the parent zone. ok is
+// false, and there is no check, when the line names more than maxNSHosts
+// such hosts.
+func NameServerKeys(domain dnswire.Name, observations []obs.Observation) (keys []obs.Key, ok bool) {
+	file, _ := expect.Snapshot(domain, observations)
+	line, _ := file.Find(domain, dnswire.TypeNS)
+	var hosts []dnswire.Name
+	for _, set := range line.Sets {
+		for _, d := range set {
+			if ns, isNS := d.(dnswire.NS); isNS && ns.Host.IsSubdomainOf(domain) && !slices.ContainsFunc(hosts, ns.Host.Equal) {
+				hosts = append(hosts, ns.Host)
+			}
+		}
+	}
+	if len(hosts) > maxNSHosts {
+		return nil, false
+	}
+	for _, host := range hosts {
+		for _, t := range []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA} {
+			k := obs.RecordsKey(domain, host, t)
+			if !slices.ContainsFunc(observations, func(o obs.Observation) bool { return o.Key.String() == k.String() }) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys, true
 }
 
 // WantsPolicy gives the check of the MTA-STS policy file of domain when the

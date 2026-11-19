@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
+	"github.com/Opsek/dns-monitoring/internal/expect"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
@@ -23,6 +24,7 @@ type stfRunner struct {
 	mu     sync.Mutex
 	calls  map[string]int
 	total  int
+	seen   []obs.Observation
 }
 
 func (r *stfRunner) Run(_ context.Context, c observe.Check) (obs.Observation, error) {
@@ -45,7 +47,19 @@ func (r *stfRunner) Run(_ context.Context, c observe.Check) (obs.Observation, er
 	if c.Key.Kind == obs.KindDelegation || c.Key.Kind == obs.KindDS {
 		zone = zone.Parent()
 	}
-	return obs.Observation{Key: c.Key, Zone: zone, Answers: answers}, nil
+	o := obs.Observation{Key: c.Key, Zone: zone, Answers: answers}
+	r.mu.Lock()
+	r.seen = append(r.seen, o)
+	r.mu.Unlock()
+	return o, nil
+}
+
+// observations gives every observation that a run gave, both runs of a
+// check that ran twice.
+func (r *stfRunner) observations() []obs.Observation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.seen)
 }
 
 func (r *stfRunner) runs(key string) int {
@@ -236,26 +250,96 @@ func TestInitRetriesTheChecksOfEachDomain(t *testing.T) {
 		iniBlock(com, iniLines(com), iniAliasSkip(com)), iniBlock(org, iniLines(org), iniAliasSkip(org)))+"yes\n"+s.wrote(com, org))
 }
 
+// stfNoNSSet is the apex NS set of d when its second server says that the
+// apex has none, with r: no set that an NS line could accept.
+func stfNoNSSet(d string, r obs.Result) []obs.Answer {
+	return []obs.Answer{
+		iniAt("ns1.example.net.", iniNS1Addr, iniRecords(d, dnswire.TypeNS, "ns1.example.net.", "ns2.example.net.")),
+		iniAt("ns2.example.net.", iniNS2Addr, r),
+	}
+}
+
+// stfNoNSSkip is the reason of the NS set of stfNoNSSet with no data or no
+// such name.
+func stfNoNSSkip(d string) string {
+	return d + " NS: servers disagree: " + iniParentAddr + " " + iniParentHost + " gives ns1.example.net. | ns2.example.net.; " +
+		iniNS2Addr + " ns2.example.net. gives none"
+}
+
 // A set without an NS line means that osk cannot see a change of the
-// nameservers: init says so under the sets that it leaves out.
+// nameservers: init says so under the sets that it leaves out. A server of
+// the domain that gives the apex no NS set, or another type, leaves no set
+// that a line could accept. Nothing failed, so nothing runs twice.
 func TestInitWarnsWhenTheApexNSSetGetsNoLine(t *testing.T) {
 	d := "example.com."
 	key := iniKey(d, d, dnswire.TypeNS)
 	lines := stfWithout(iniLines(d), "NS")
-	dead := stfOneDead(d, dnswire.TypeNS, obs.ReasonTimeout, "ns1.example.net.", "ns2.example.net.")
-	s, r := stfNew(t, map[string][][]obs.Answer{key: {dead}}, "example.com", iniURL, "yes")
-	code, out := s.run()
-	skips := []string{d + " NS: " + iniNS2Addr + " ns2.example.net. gave no answer: timeout", iniAliasSkip(d)}
-	if code != 0 {
-		t.Errorf("exit code %d; want 0", code)
+	for _, c := range []struct {
+		name string
+		r    obs.Result
+		why  string
+	}{
+		{"no data", iniNoData(d), stfNoNSSkip(d)},
+		{"no such name", iniNoName(d), stfNoNSSkip(d)},
+		{"a CNAME", iniRecords(d, dnswire.TypeCNAME, "ns.other.example."),
+			d + " NS: " + iniNS2Addr + " ns2.example.net. answers with a CNAME record; snapshot " + d + " CNAME instead"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, r := stfNew(t, map[string][][]obs.Answer{key: {stfNoNSSet(d, c.r)}}, "example.com", iniURL, "yes")
+			code, out := s.run()
+			if code != 0 {
+				t.Errorf("exit code %d; want 0", code)
+			}
+			iniSame(t, "the dialogue", out, s.shown("example.com", stfBlock(d, lines, c.why, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+			stfCounts(t, r, []string{d})
+			iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
+		})
 	}
-	iniSame(t, "the dialogue", out, s.shown("example.com", stfBlock(d, lines, skips...))+"yes\n"+s.wrote(d))
-	stfCounts(t, r, []string{d}, key)
-	iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
 }
 
-// Servers that give different NS sets give no line either, and no retry:
-// nothing failed.
+// stfNSNoAnswer is the warning of a domain whose NS line rests without the
+// servers given, each as "<addr> <host> (<reason>)".
+func stfNSNoAnswer(d string, servers ...string) string {
+	return "warning " + strings.Join(servers, ", ") + " gave no answer about the nameservers of " + d +
+		", so its NS line holds what the other servers gave. If they hold another set, osk alerts at its first check.\n"
+}
+
+// A failed answer of a server of the domain is left out of the NS line, even
+// after its second run: the line holds the set of the parent zone and of the
+// servers that answered, and a warning names each server left out, since a
+// set it holds would give an alert at the first check.
+func TestInitWritesTheNSLineWhenAServerOfTheDomainFailsTwice(t *testing.T) {
+	d := "example.com."
+	key := iniKey(d, d, dnswire.TypeNS)
+	for _, c := range []struct {
+		name    string
+		answers []obs.Answer
+		warning string
+	}{
+		{"one server of two", stfOneDead(d, dnswire.TypeNS, obs.ReasonTimeout, "ns1.example.net.", "ns2.example.net."),
+			stfNSNoAnswer(d, iniNS2Addr+" ns2.example.net. (timeout)")},
+		{"every server: the line is the parent's set alone", iniBoth(iniFail(obs.ReasonRefused)),
+			stfNSNoAnswer(d, iniNS1Addr+" ns1.example.net. (refused)", iniNS2Addr+" ns2.example.net. (refused)")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, r := stfNew(t, map[string][][]obs.Answer{key: {c.answers}}, "example.com", iniURL, "yes")
+			code, out := s.run()
+			if code != 0 {
+				t.Errorf("exit code %d; want 0", code)
+			}
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))+c.warning)+"yes\n"+s.wrote(d))
+			stfCounts(t, r, []string{d}, key)
+			data := s.written(d)["example.com.expect"]
+			iniSame(t, "example.com.expect", data, iniStamp+strings.Join(iniLines(d), "\n")+"\n")
+			iniNoFindings(t, data, r.observations())
+		})
+	}
+}
+
+// Servers that give different NS sets give a line that accepts each set, and
+// no retry: nothing failed. The warning after the block names each set and
+// the servers that gave it, so a set that is not the owner's is seen before
+// the question.
 func TestInitWarnsWhenTheServersGiveDifferentNSSets(t *testing.T) {
 	d := "example.com."
 	key := iniKey(d, d, dnswire.TypeNS)
@@ -269,20 +353,19 @@ func TestInitWarnsWhenTheServersGiveDifferentNSSets(t *testing.T) {
 		t.Errorf("exit code %d; want 0", code)
 	}
 	stfCounts(t, r, []string{d})
-	lines, skips := iniShown(out, d)
-	if want := stfWithout(iniLines(d), "NS"); !slices.Equal(lines, want) {
-		t.Errorf("init showed:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	lines := slices.Clone(iniLines(d))
+	lines[2] = d + " NS ns.other.example. | ns1.example.net. || ns1.example.net. | ns2.example.net."
+	warning := iniSetsWarning(d,
+		expect.NSSource{Text: "ns.other.example. | ns1.example.net.", Zone: []string{iniNS2Addr + " ns2.example.net."}},
+		expect.NSSource{Text: "ns1.example.net. | ns2.example.net.", Parent: []string{iniParentAddr + " " + iniParentHost},
+			Zone: []string{iniNS1Addr + " ns1.example.net."}})
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d))+warning)+"yes\n"+s.wrote(d))
+	if strings.Contains(out, "warning osk cannot watch") {
+		t.Errorf("the output holds the warning about a missing NS line:\n%s", out)
 	}
-	all := strings.Split(out, "\n")
-	i := slices.Index(all, d+" as osk sees it now. Once you confirm, osk alerts when the servers differ from these lines:")
-	at := i + 1 + len(lines) + 1 + len(skips)
-	if i < 0 || len(skips) != 2 || !strings.HasPrefix(skips[0], d+" NS: servers disagree: ") || all[at] != strings.TrimSuffix(stfWarning(d), "\n") {
-		t.Errorf("the block of %s does not end with its skips and the warning:\n%s", d, out)
-	}
-	if strings.Count(out, "warning osk cannot watch") != 1 {
-		t.Errorf("the output holds the warning more or less than once:\n%s", out)
-	}
-	s.written(d)
+	data := s.written(d)["example.com.expect"]
+	iniSame(t, "example.com.expect", data, iniStamp+strings.Join(lines, "\n")+"\n")
+	iniNoFindings(t, data, r.observations())
 }
 
 // With an NS line there is no warning, whatever else is left out, and a
@@ -325,13 +408,13 @@ func TestInitDoesNotWarnWhenTheApexNSSetHasALine(t *testing.T) {
 // files are written for both.
 func TestInitWarnsOnlyForTheDomainWithoutAnNSLine(t *testing.T) {
 	com, org := "example.com.", "example.org."
-	dead := stfOneDead(org, dnswire.TypeNS, obs.ReasonTimeout, "ns1.example.net.", "ns2.example.net.")
+	noSet := stfNoNSSet(org, iniNoData(org))
 	linesOrg := stfWithout(iniLines(org), "NS")
 	for _, answer := range []string{"example.com example.org", "example.org example.com"} {
 		t.Run(answer, func(t *testing.T) {
-			s, r := stfNew(t, map[string][][]obs.Answer{iniKey(org, org, dnswire.TypeNS): {dead}}, answer, iniURL, "yes")
+			s, r := stfNew(t, map[string][][]obs.Answer{iniKey(org, org, dnswire.TypeNS): {noSet}}, answer, iniURL, "yes")
 			code, out := s.run()
-			orgSkips := []string{org + " NS: " + iniNS2Addr + " ns2.example.net. gave no answer: timeout", iniAliasSkip(org)}
+			orgSkips := []string{stfNoNSSkip(org), iniAliasSkip(org)}
 			blocks := []string{iniBlock(com, iniLines(com), iniAliasSkip(com)), stfBlock(org, linesOrg, orgSkips...)}
 			domains := []string{com, org}
 			if answer == "example.org example.com" {
@@ -342,7 +425,7 @@ func TestInitWarnsOnlyForTheDomainWithoutAnNSLine(t *testing.T) {
 				t.Errorf("exit code %d; want 0", code)
 			}
 			iniSame(t, "the dialogue", out, s.shown(answer, blocks...)+"yes\n"+s.wrote(domains...))
-			stfCounts(t, r, []string{com, org}, iniKey(org, org, dnswire.TypeNS))
+			stfCounts(t, r, []string{com, org})
 			texts := s.written(domains...)
 			iniSame(t, "example.org.expect", texts["example.org.expect"], iniStamp+strings.Join(linesOrg, "\n")+"\n")
 		})
@@ -500,26 +583,38 @@ func stfDead(d string, keep ...string) map[string][][]obs.Answer {
 	return seq
 }
 
+// stfNoNS gives seq with the apex NS set of d of stfNoNSSet: no NS line,
+// although the parent zone answers.
+func stfNoNS(seq map[string][][]obs.Answer, d string) map[string][][]obs.Answer {
+	seq[iniKey(d, d, dnswire.TypeNS)] = [][]obs.Answer{stfNoNSSet(d, iniNoData(d))}
+	return seq
+}
+
 // When a file holds no line but NS and DS, osk compares nothing: init says
-// so after the warning about the nameservers, when both apply.
+// so after the warning about the nameservers, when both apply. A failed NS
+// set of the apex still gets the line of the parent's set, and its warning
+// names the servers that gave no answer.
 func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 	com, org := "example.com.", "example.org."
+	noNS := stfWarning(com)
+	noAnswer := stfNSNoAnswer(com, iniNS1Addr+" ns1.example.net. (timeout)", iniNS2Addr+" ns2.example.net. (timeout)")
 	for _, c := range []struct {
 		name string
 		seq  map[string][][]obs.Answer
-		ns   bool // the warning about the nameservers
-		sets bool // the warning about the record sets
+		ns   string // the warning about the nameservers, "" for none
+		sets bool   // the warning about the record sets
 	}{
-		{"only DS", stfDead(com), true, true},
-		{"NS and DS", stfDead(com, iniKey(com, com, dnswire.TypeNS)), false, true},
-		{"DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeA)), true, false},
-		{"DS and a none line of a name under the apex", stfDead(com, iniKey(com, "*."+com, dnswire.TypeA)), true, false},
-		{"DS and the none line of a challenge name", stfDead(com, iniKey(com, "_acme-challenge."+com, dnswire.TypeTXT)), true, false},
-		{"DS and the none line of the DMARC name", stfDead(com, iniKey(com, "_dmarc."+com, dnswire.TypeTXT)), true, false},
-		{"DS and the none line of the MTA-STS name", stfDead(com, iniKey(com, "_mta-sts."+com, dnswire.TypeTXT)), true, false},
-		{"NS, DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, com, dnswire.TypeMX)), false, false},
-		{"NS, DS and a none line of a name under the apex", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, "_acme-challenge.www."+com, dnswire.TypeTXT)), false, false},
-		{"the fake world", nil, false, false},
+		{"only DS", stfNoNS(stfDead(com), com), noNS, true},
+		{"NS of the parent alone and DS", stfDead(com), noAnswer, true},
+		{"NS and DS", stfDead(com, iniKey(com, com, dnswire.TypeNS)), "", true},
+		{"DS and one more line", stfNoNS(stfDead(com, iniKey(com, com, dnswire.TypeA)), com), noNS, false},
+		{"DS and a none line of a name under the apex", stfNoNS(stfDead(com, iniKey(com, "*."+com, dnswire.TypeA)), com), noNS, false},
+		{"DS and the none line of a challenge name", stfNoNS(stfDead(com, iniKey(com, "_acme-challenge."+com, dnswire.TypeTXT)), com), noNS, false},
+		{"DS and the none line of the DMARC name", stfNoNS(stfDead(com, iniKey(com, "_dmarc."+com, dnswire.TypeTXT)), com), noNS, false},
+		{"DS and the none line of the MTA-STS name", stfNoNS(stfDead(com, iniKey(com, "_mta-sts."+com, dnswire.TypeTXT)), com), noNS, false},
+		{"NS, DS and one more line", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, com, dnswire.TypeMX)), "", false},
+		{"NS, DS and a none line of a name under the apex", stfDead(com, iniKey(com, com, dnswire.TypeNS), iniKey(com, "_acme-challenge.www."+com, dnswire.TypeTXT)), "", false},
+		{"the fake world", nil, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, _ := stfNew(t, c.seq, "example.com", iniURL, "yes")
@@ -528,8 +623,8 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 				t.Errorf("exit code %d; want 0", code)
 			}
 			var want []string
-			if c.ns {
-				want = append(want, strings.TrimSuffix(stfWarning(com), "\n"))
+			if c.ns != "" {
+				want = append(want, strings.TrimSuffix(c.ns, "\n"))
 			}
 			if c.sets {
 				want = append(want, strings.TrimSuffix(stfNothingCompared(com), "\n"))
@@ -538,7 +633,7 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 			if len(tail) < len(want) || !slices.Equal(tail[:len(want)], want) {
 				t.Errorf("after the sets that are left out, the output reads %q; want it to start with %q", tail, want)
 			}
-			for _, w := range []string{stfWarning(com), stfNothingCompared(com)} {
+			for _, w := range []string{noNS, noAnswer, stfNothingCompared(com)} {
 				if n, wanted := strings.Count(out, w), slices.Contains(want, strings.TrimSuffix(w, "\n")); (n == 1) != wanted || n > 1 {
 					t.Errorf("the warning %q is in the output %d times; wanted: %v", w, n, wanted)
 				}
@@ -547,7 +642,7 @@ func TestInitWarnsWhenTheFileHoldsNoRecordSet(t *testing.T) {
 		})
 	}
 	t.Run("two domains, each block has its own", func(t *testing.T) {
-		seq := stfDead(com)
+		seq := stfNoNS(stfDead(com), com)
 		maps.Copy(seq, stfDead(org, iniKey(org, org, dnswire.TypeNS)))
 		s, _ := stfNew(t, seq, "example.com example.org", iniURL, "yes")
 		code, out := s.run()

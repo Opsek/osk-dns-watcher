@@ -8,7 +8,7 @@ import (
 
 // Warnings gives one line for each setting that weakens a default
 // protection: other root servers decide every answer, and extra ranges let
-// data from DNS steer queries into a private network.
+// data from DNS steer queries and policy fetches into a private network.
 func (c *Config) Warnings() []string {
 	var lines []string
 	if len(c.RootServers) > 0 {
@@ -28,8 +28,9 @@ func (c *Config) Warnings() []string {
 		for i, p := range c.ExtraRanges {
 			ranges[i] = p.String()
 		}
-		lines = append(lines, "network.extra_ranges is set: data from DNS can now make osk send queries to "+
-			strings.Join(ranges, ", ")+". Use it only in a lab or a private network.")
+		lines = append(lines, "network.extra_ranges is set: data from DNS can now make osk send queries "+
+			"and HTTPS requests for MTA-STS policy files to "+strings.Join(ranges, ", ")+
+			". Use it only in a lab or a private network.")
 	}
 	if c.Certificates != nil {
 		// The URL passed the check of Parse, so it parses.

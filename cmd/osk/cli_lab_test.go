@@ -99,8 +99,8 @@ func cliLabWarnings(n string) []string {
 	return []string{
 		"warning network.root_servers is set: osk starts its walk at " + n + "2:53 instead of the root servers of the internet," +
 			" so these servers decide every answer. Use it only in a lab or a private network.",
-		"warning network.extra_ranges is set: data from DNS can now make osk send queries to " + n + "0/24." +
-			" Use it only in a lab or a private network.",
+		"warning network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to " +
+			n + "0/24. Use it only in a lab or a private network.",
 	}
 }
 
@@ -717,6 +717,18 @@ var cliLabKinds = map[string]struct {
 	"skip": {map[string][]string{"": {"type", "name", "rtype", "why"}}, func() any {
 		return &struct{ Type, Name, RType, Why string }{}
 	}},
+	"nsnoanswer": {map[string][]string{"": {"type", "servers"}}, func() any {
+		return &struct {
+			Type    string
+			Servers []string
+		}{}
+	}},
+	"nsset": {map[string][]string{"": {"type", "text", "parent", "zone"}}, func() any {
+		return &struct {
+			Type, Text   string
+			Parent, Zone []string
+		}{}
+	}},
 	"problem": {map[string][]string{"": {"type", "file", "line", "path", "text"}}, func() any {
 		return &struct {
 			Type, File string
@@ -912,7 +924,7 @@ func TestEveryCommandPrintsJSON(t *testing.T) {
 	cliLabNeed(t, "check", cliLabJSON(t, "check", osk(0, slices.Concat([]string{"check", "--json"}, net, []string{"corp.test."})...),
 		"walk", "answer"), "walk", "answer")
 	cliLabNeed(t, "snapshot", cliLabJSON(t, "snapshot", osk(0, slices.Concat([]string{"snapshot", "--json"}, net,
-		[]string{"corp.test.", "www.corp.test.", "A"})...), "line", "skip"), "line")
+		[]string{"corp.test.", "www.corp.test.", "A"})...), "line", "skip", "nsnoanswer", "nsset"), "line")
 	result := cliLabJSON(t, "validate", osk(0, "validate", "--config", w.config, "--json"), "problem", "warning", "result")
 	cliLabNeed(t, "validate", result, "warning", "result")
 

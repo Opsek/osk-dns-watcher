@@ -369,9 +369,10 @@ func TestAliasTargetGoneAlert(t *testing.T) {
 
 	set = time.Now()
 	expCtl(t, "set", "both", "edge.dnshost.test.", "300", "A", w.n+"83")
-	back := ":white_check_mark: *RESOLVED* · `edge.dnshost.test.`, which an alias in `corp.test.` points at, exists again"
+	back := ":warning: *CHECK* · `edge.dnshost.test.`, which an alias in `corp.test.` points at, exists again"
 	text = dngResolved(t, svc, w, set, interval, resolve, back)
-	regExpect(t, text, back, []string{"now        the name exists again: check that it is yours"}, regResolveTimes, regResolveAction)
+	regExpect(t, text, back, []string{"now        the name exists again: check that it is yours"}, regResolveTimes,
+		dngEndAction("edge.dnshost.test.", "cdn.corp.test. CNAME edge.dnshost.test."))
 
 	// The CNAME line matches the whole time: only the probe has anything to say.
 	dngExpectAlerts(t, svc, open, resolve)
@@ -394,8 +395,9 @@ func TestNameServerHostGoneAlert(t *testing.T) {
 	const probe = "checked other records corp.test. ns3.dnshost.test. A "
 	const phrase = " · nameserver `ns3.dnshost.test.` of `corp.test.` does not exist"
 	const action = ":point_right: Replace `ns3.dnshost.test.` at your registrar now, or restore it: whoever creates it can answer for `corp.test.`."
-	back := ":white_check_mark: *RESOLVED* · nameserver `ns3.dnshost.test.` of `corp.test.` exists again"
+	back := ":warning: *CHECK* · nameserver `ns3.dnshost.test.` of `corp.test.` exists again"
 	backView := []string{"now        the name exists again: check that it is yours"}
+	backAction := dngEndAction("ns3.dnshost.test.", "corp.test. NS ns3.dnshost.test.")
 
 	dngProbed(t, svc, "ns3.dnshost.test.")
 	dngNoAlerts(t, svc)
@@ -412,7 +414,7 @@ func TestNameServerHostGoneAlert(t *testing.T) {
 	set = time.Now()
 	expCtl(t, "set", "both", "ns3.dnshost.test.", "300", "A", w.n+"12")
 	text = dngResolved(t, svc, w, set, interval, resolve, back)
-	regExpect(t, text, back, backView, regResolveTimes, regResolveAction)
+	regExpect(t, text, back, backView, regResolveTimes, backAction)
 
 	// The domain of the host is gone: its parent no longer delegates it.
 	set = time.Now()
@@ -442,7 +444,7 @@ func TestNameServerHostGoneAlert(t *testing.T) {
 		return l.Text == resolve && dngLines(svc, resolve) == 2
 	})
 	texts := dngRequests(t, w, len(regAlertLines(svc)))
-	regExpect(t, texts[len(texts)-1], back, backView, regResolveTimes, regResolveAction)
+	regExpect(t, texts[len(texts)-1], back, backView, regResolveTimes, backAction)
 	// The corp.test. checks still get answers from ns1 and ns2: nothing else opens.
 	dngExpectAlerts(t, svc, open, resolve, open, resolve)
 }
@@ -487,9 +489,10 @@ func TestMailTargetGoneAlert(t *testing.T) {
 
 		set = time.Now()
 		expCtl(t, "set", "both", c.name, "300", c.restore[0], c.restore[1])
-		back := ":white_check_mark: *RESOLVED* · `" + c.name + "`, which the mail records of `corp.test.` point at, exists again"
+		back := ":warning: *CHECK* · `" + c.name + "`, which the mail records of `corp.test.` point at, exists again"
 		text = dngResolved(t, svc, w, set, interval, resolve, back)
-		regExpect(t, text, back, []string{"now        the name exists again: check that it is yours"}, regResolveTimes, regResolveAction)
+		regExpect(t, text, back, []string{"now        the name exists again: check that it is yours"}, regResolveTimes,
+			dngEndAction(c.name, c.expected))
 	}
 	dngExpectAlerts(t, svc, alerts...)
 }
@@ -687,4 +690,11 @@ func TestWildcardThroughADNAMEOpensOnce(t *testing.T) {
 			t.Errorf("a random label %q in the Slack text:\n%s", m, s)
 		}
 	}
+}
+
+// dngEndAction is the action of the end message of a rule that points at a
+// name: the end may be an attacker taking the name, so it asks for a check
+// and shows the records that point at it.
+func dngEndAction(name, record string) string {
+	return ":point_right: Find out who holds `" + name + "` now. If it is not yours, remove or change the record that points at it. The record: `" + record + "`"
 }

@@ -7,20 +7,23 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Opsek/dns-monitoring/internal/dnswire"
 	"github.com/Opsek/dns-monitoring/internal/httpclient"
+	"github.com/Opsek/dns-monitoring/internal/observe"
 	"github.com/Opsek/dns-monitoring/internal/observe/obs"
 )
 
 // Host gives "mta-sts.<domain>:443", in lower case and without the trailing
 // dot: the form that httpclient.New takes. ok is false when that name would
-// be too long, for the root, and when a label holds an octet other than a
-// letter, a digit, "-" or "_": an octet such as "/", ":" or "#" would make
-// the URL name another host.
+// be too long, for the root, when a label holds an octet other than a
+// letter, a digit, "-" or "_" (an octet such as "/", ":" or "#" would make
+// the URL name another host), and when the client would refuse the host,
+// such as one whose last label is all digits.
 func Host(domain dnswire.Name) (string, bool) {
 	k, ok := obs.PolicyKey(domain)
 	if !ok || domain.LabelCount() == 0 {
@@ -32,7 +35,12 @@ func Host(domain dnswire.Name) (string, bool) {
 			return "", false
 		}
 	}
-	return strings.Join(labels, ".") + ":443", true
+	host := strings.Join(labels, ".") + ":443"
+	// The client's own rule, so that the two never differ on a host.
+	if got, err := httpclient.HostOf(policyURL(host)); err != nil || got != host {
+		return "", false
+	}
+	return host, true
 }
 
 // notHostOctet also refuses every octet outside ASCII: strings.ContainsFunc
@@ -41,12 +49,17 @@ func notHostOctet(r rune) bool {
 	return !('a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '-' || r == '_')
 }
 
-// Fetch runs a check of kind policy, for observe.Config.Policy: one GET of
+// Fetcher gives the function that runs a check of kind policy, for
+// observe.Config.Policy: one GET of
 // https://mta-sts.<domain>/.well-known/mta-sts.txt through a client made for
-// that one host, which trusts the certificates of the system. Every outcome
-// is in the Answer, and a failure is never read as "no policy".
-func Fetch(ctx context.Context, k obs.Key) obs.Answer {
-	return fetch(ctx, k, nil, policyURL, time.Now)
+// that one host, which trusts the certificates of the system. The zone of the
+// domain chooses the addresses of the host, so the client connects only to
+// an address that a DNS check may ask: a public one, or one in extra. Every
+// outcome is in the Answer, and a failure is never read as "no policy".
+func Fetcher(extra []netip.Prefix) func(context.Context, obs.Key) obs.Answer {
+	return func(ctx context.Context, k obs.Key) obs.Answer {
+		return fetch(ctx, k, extra, nil, policyURL, time.Now)
+	}
 }
 
 // policyURL takes a host in the form that Host gives.
@@ -54,10 +67,11 @@ func policyURL(host string) string {
 	return "https://" + strings.TrimSuffix(host, ":443") + "/.well-known/mta-sts.txt"
 }
 
-// fetch is Fetch with the trust store, the URL of the host and the clock
-// given, so that a test can serve the file itself. The client takes its one
-// host from that URL; in use it is policyURL, so that host is the policy host.
-func fetch(ctx context.Context, k obs.Key, roots *x509.CertPool, url func(host string) string, now func() time.Time) obs.Answer {
+// fetch is the function of Fetcher with the trust store, the URL of the host
+// and the clock given, so that a test can serve the file itself. The client
+// takes its one host from that URL; in use it is policyURL, so that host is
+// the policy host.
+func fetch(ctx context.Context, k obs.Key, extra []netip.Prefix, roots *x509.CertPool, url func(host string) string, now func() time.Time) obs.Answer {
 	a := obs.Answer{Proof: obs.Proof{
 		Server:   obs.Server{Name: k.Name},
 		Question: dnswire.Question{Name: k.Name, Type: dnswire.TypeTXT, Class: dnswire.ClassINET},
@@ -78,11 +92,15 @@ func fetch(ctx context.Context, k obs.Key, roots *x509.CertPool, url func(host s
 		a.Result = failure(obs.ReasonNotPermitted, err.Error())
 		return a
 	}
-	c := httpclient.New([]string{allowed}, roots)
+	permit := func(ip netip.Addr) bool { return observe.Permitted(ip, extra) }
+	c := httpclient.NewGuarded([]string{allowed}, roots, permit)
 	a.Sent = now()
 	// The policy file is text/plain (RFC 8461 section 3.2), not the JSON that Get asks for by default.
 	resp, err := c.Get(ctx, rawURL, httpclient.MaxPolicy, httpclient.Header{Name: "Accept", Value: "text/plain"})
 	a.Received = now()
+	if errors.Is(err, httpclient.ErrNotPermitted) {
+		a.Sent = time.Time{} // no connection was opened
+	}
 	a.Server.Addr = resp.Addr
 	a.Result = result(k.Name, resp, err)
 	return a
@@ -90,6 +108,10 @@ func fetch(ctx context.Context, k obs.Key, roots *x509.CertPool, url func(host s
 
 func result(name dnswire.Name, resp httpclient.Response, err error) obs.Result {
 	switch {
+	case errors.Is(err, httpclient.ErrNotPermitted):
+		// The text names the first address refused, as netip writes it: the
+		// operator sees where the name of the policy host led.
+		return failure(obs.ReasonNotPermitted, err.Error())
 	case errors.Is(err, httpclient.ErrTimeout):
 		return failure(obs.ReasonTimeout, "timeout")
 	case errors.Is(err, httpclient.ErrTooLarge):

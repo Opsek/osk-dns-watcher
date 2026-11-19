@@ -614,6 +614,8 @@ cwant() {
 	[ -n "$4" ] || [ "${cw_got%%|*}" != 200 ] || same "$1 (body)" "[]" "$(tr -d '\n ' <"$TMP/body")"
 }
 c_certs_fake() {
+	lc certs clear
+	same "lookups after certs clear" "0" "$(labctl certs count 2>&1)"
 	cf_set='['
 	for cf_i in 1 2 3 4 5; do
 		cf_set="$cf_set{\"id\":\"$cf_i\",\"dns_names\":[\"www.corp.test\"]},"
@@ -629,7 +631,9 @@ c_certs_fake() {
 	cwant "domain=corp.test after certs fail 429 1 30" "domain=corp.test" "429|30" ""
 	cwant "domain=corp.test after the failure" "domain=corp.test" "200|" "1 2"
 	same "stored hook requests after the lookups" "" "$(labctl hooks list 2>&1)"
+	same "lookups counted, the failed one included" "7" "$(labctl certs count 2>&1)"
 	lc certs clear
+	same "lookups after the second certs clear" "0" "$(labctl certs count 2>&1)"
 	cwant "domain=corp.test after certs clear" "domain=corp.test" "200|1" ""
 }
 # pget: GET the policy file of the policy host with the runner's trust store; prints the status

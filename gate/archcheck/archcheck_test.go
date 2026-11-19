@@ -86,9 +86,9 @@ func TestRules(t *testing.T) {
 			"gate/imports.txt:8 names osk/internal/missing, which matches no package",
 		}},
 		{"no-dns-update/pass", nil},
-		// Every package that dials sorts before internal/dnswire, and every
-		// use of net before every use of crypto/tls, so the order of the
-		// faults is the same whichever of these the rule walks first.
+		// The uses of names that dial come in the order of the packages,
+		// then the faults inside internal/dnswire. In
+		// internal/httpclient/dial.go only net.Dialer is let through.
 		{"no-dns-update/fail", []string{
 			"internal/d/d.go:4 imports log/syslog", // a blank import
 			"internal/d/d.go:5 imports net/smtp",
@@ -100,6 +100,7 @@ func TestRules(t *testing.T) {
 			"internal/b/b.go:7 uses net.DialUDP", // after a dot import
 			"internal/c/alias.go:7 uses crypto/tls.Dialer",
 			"internal/c/c.go:7 uses crypto/tls.Dial",
+			"internal/httpclient/dial.go:9 uses net.Dial",
 			"internal/dnswire/a.go:3 imports net outside internal/dnswire/transport.go",
 			"internal/dnswire/b.go:3 imports net outside internal/dnswire/transport.go",
 			"internal/dnswire/transport.go:17 uses WriteTo outside writeQuery",

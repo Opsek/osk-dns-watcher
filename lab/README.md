@@ -94,7 +94,8 @@ The examples are for lab 0 and run in the runner.
 | `hooks reply <status> <count> [--header '<Name>: <value>']... [--delay <seconds>] [--body <text>]` | `labctl hooks reply 429 1 --header 'Retry-After: 30' --body 'slow down'` | Answers the next `<count>` requests like this. |
 | `certs set` | `labctl certs set < issuances.json` | Replaces the set that stands in for a certificate source; the JSON array comes on standard input. `GET https://hooks.lab.test/v1/issuances?domain=<name>&after=<id>` answers with the issuances of the set that name the domain or a name below it, at most 2 in a page, in id order; none left gives `[]` with `Retry-After: 1`. These requests are not listed by `hooks list`. |
 | `certs fail <status> <count> [<retry>]` | `labctl certs fail 429 1 30` | Answers the next `<count>` lookups with this status and, when `<retry>` is above 0, `Retry-After: <retry>`. |
-| `certs clear` | `labctl certs clear` | Empties the set and the failures. |
+| `certs count` | `labctl certs count` | Prints the number of lookups that the source got since the last `certs clear` (or lab reset), failed ones included. |
+| `certs clear` | `labctl certs clear` | Empties the set and the failures, and sets the lookup count to 0. |
 | `policy <host> <status> [<body>]` | `labctl policy mta-sts.corp.test. 200 "$(printf 'version: STSv1\nmode: enforce\nmx: mail.corp.test\nmax_age: 604800\n')"` | Sets the status and body that the policy host serves for `<host>`, which replaces what was set for it. The body is one argument and keeps its line feeds; without it the body is empty. The status is 200 to 599. |
 | `policy clear` | `labctl policy clear` | Removes every policy, so that every host answers 404. |
 | `reset` | `labctl reset` | Puts the lab back into its base state, which includes `policy clear`; `lab/bin/lab reset` runs it. |

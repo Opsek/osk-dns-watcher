@@ -557,22 +557,29 @@ func (w *walker) extraRanges(path string) []netip.Prefix {
 	return ranges
 }
 
-// extraRange reads a prefix. One with bits after its length, such as
-// 10.0.0.1/8, may mean one address or the whole range, so the writer must
-// say which.
 func (w *walker) extraRange(path string) (netip.Prefix, bool) {
 	s, at, ok := w.str(path)
 	if !ok {
 		return netip.Prefix{}, false
 	}
+	prefix, err := ParseRange(s)
+	if err != nil {
+		w.add(at, path, err.Error())
+		return netip.Prefix{}, false
+	}
+	return prefix, true
+}
+
+// ParseRange reads an extra range, of the config or of --extra-range. One
+// with bits after its length, such as 10.0.0.1/8, may mean one address or the
+// whole range, so the writer must say which.
+func ParseRange(s string) (netip.Prefix, error) {
 	prefix, err := netip.ParsePrefix(s)
 	switch {
 	case err != nil:
-		w.add(at, path, fmt.Sprintf("bad prefix %q", shown(s)))
+		return netip.Prefix{}, fmt.Errorf("bad prefix %q", shown(s))
 	case prefix != prefix.Masked():
-		w.add(at, path, fmt.Sprintf("prefix %s has bits after its length; write %s", prefix, prefix.Masked()))
-	default:
-		return prefix, true
+		return netip.Prefix{}, fmt.Errorf("prefix %s has bits after its length; write %s", prefix, prefix.Masked())
 	}
-	return netip.Prefix{}, false
+	return prefix, nil
 }

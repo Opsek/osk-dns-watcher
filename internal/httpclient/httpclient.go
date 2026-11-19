@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // Timeout bounds one Post: connect, TLS, send, headers and body.
@@ -45,6 +44,11 @@ var ErrTimeout = errors.New("timeout")
 
 // ErrTooLarge: the body is longer than the limit of the call.
 var ErrTooLarge = errors.New("answer too large")
+
+// ErrNotPermitted: a client of NewGuarded found no address of the host that
+// it may connect to, and so connected nowhere. The error of the request
+// wraps it and names the first address refused.
+var ErrNotPermitted = errors.New("network: no permitted address")
 
 type Client struct {
 	hosts []string
@@ -70,16 +74,42 @@ func HostOf(rawURL string) (string, error) {
 	return hostPort(u), nil
 }
 
-// parse never returns the error of url.Parse, whose text holds the URL. A
-// host outside ASCII is refused: in lower case it can equal a listed host,
-// while the lookup asks for another one.
+// parse never returns the error of url.Parse, whose text holds the URL.
 func parse(rawURL string) (*url.URL, error) {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Opaque != "" ||
-		strings.ContainsFunc(u.Hostname(), func(r rune) bool { return r >= utf8.RuneSelf }) {
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || !plainHost(u) {
 		return nil, ErrURL
 	}
 	return u, nil
+}
+
+// plainHost reports whether the host of u is a name of letters, digits, "-",
+// "_" and "." with no empty label, or an IP address without a zone, in
+// brackets exactly when it is IPv6. Only such a host reads back the same from
+// the form that hostPort gives. A host outside ASCII is refused too: in lower
+// case it can equal a listed host, while the lookup asks for another one. A
+// name whose last label is all digits, such as 127.1, is refused: some
+// resolvers read it as an IPv4 address.
+func plainHost(u *url.URL) bool {
+	h := u.Hostname()
+	bracketed := strings.HasPrefix(u.Host, "[")
+	if a, err := netip.ParseAddr(h); err == nil {
+		return a.Zone() == "" && a.Is6() == bracketed
+	}
+	labels := strings.Split(h, ".")
+	if bracketed || strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" || strings.ContainsFunc(label, notNameOctet) {
+			return false
+		}
+	}
+	return true
+}
+
+func notNameOctet(r rune) bool {
+	return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '-' || r == '_')
 }
 
 func hostPort(u *url.URL) string {
@@ -93,7 +123,20 @@ func hostPort(u *url.URL) string {
 // New makes a client that sends only to hosts, each in the form HostOf gives.
 // No method adds a host later. A nil roots means the trust store of the system.
 func New(hosts []string, roots *x509.CertPool) *Client {
+	return newClient(hosts, roots, nil)
+}
+
+// NewGuarded is New for a host whose addresses come from data that osk
+// watches: the client connects only to an address that permit accepts, and
+// fails with ErrNotPermitted when the host has none.
+func NewGuarded(hosts []string, roots *x509.CertPool, permit func(netip.Addr) bool) *Client {
+	return newClient(hosts, roots, guardedDial(permit))
+}
+
+// newClient makes the client; a nil dial is the dialer of net/http.
+func newClient(hosts []string, roots *x509.CertPool, dial func(ctx context.Context, network, addr string) (net.Conn, error)) *Client {
 	transport := &http.Transport{
+		DialContext:            dial,
 		Proxy:                  nil, // a proxy is one more host that would see every request
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
 		TLSHandshakeTimeout:    5 * time.Second,
@@ -207,9 +250,9 @@ func date(v string) time.Time {
 	return t
 }
 
-// The failures of a request other than ErrURL, ErrHost and ErrTimeout. The text
-// of a Go error can hold the URL or octets of the answer, such as a bad
-// header line, so none is passed on.
+// The failures of a request other than ErrURL, ErrHost, ErrTimeout and
+// ErrNotPermitted. The text of a Go error can hold the URL or octets of the
+// answer, such as a bad header line, so none is passed on.
 var (
 	errLookup  = errors.New("network: name lookup failed")
 	errCert    = errors.New("network: certificate not trusted")
@@ -222,7 +265,10 @@ func doError(err error) error {
 	var lookup *net.DNSError
 	var cert *tls.CertificateVerificationError
 	var op *net.OpError
+	var refused errRefused
 	switch {
+	case errors.As(err, &refused):
+		return refused
 	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout():
 		return ErrTimeout
 	case errors.As(err, &lookup):

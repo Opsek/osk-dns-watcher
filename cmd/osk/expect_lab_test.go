@@ -87,12 +87,21 @@ func expSnapshotLines(sets ...string) []string {
 	}, sets...)
 }
 
+// expNSHosts are the lines that a snapshot writes for the two nameservers
+// of corp.test., which lie inside it: an A address each and no IPv6 address.
+// They sort after the names under corp.test. that start with "_" or "c" and
+// before www.
+func expNSHosts(n string) []string {
+	return []string{"ns1.corp.test. A " + n + "11", "ns1.corp.test. AAAA none", "ns2.corp.test. A " + n + "12", "ns2.corp.test. AAAA none"}
+}
+
 func TestSnapshotThenCheck(t *testing.T) {
 	n := expLab(t)
 	snap := expSnapshot(t, n, "corp.test.", "www.corp.test.", "A")
-	expSame(t, "osk snapshot", snap, expSnapshotLines("corp.test. DS none", "www.corp.test. A "+n+"81"))
+	expSame(t, "osk snapshot", snap, expSnapshotLines(slices.Concat([]string{"corp.test. DS none"}, expNSHosts(n),
+		[]string{"www.corp.test. A " + n + "81"})...))
 	file := expWrite(t, t.TempDir(), "corp.test.expect", snap)
-	expCheck(t, n, file, 0, "checked corp.test. 4 sets: 0 findings, 0 unknown answers")
+	expCheck(t, n, file, 0, "checked corp.test. 8 sets: 0 findings, 0 unknown answers")
 
 	expCtl(t, "delegate", "corp.test.", "ns1.dnshost.test.", "ns2.dnshost.test.")
 	expCtl(t, "set", "ns2", "www.corp.test.", "300", "A", n+"99")
@@ -103,7 +112,7 @@ func TestSnapshotThenCheck(t *testing.T) {
 		"finding high record-set records www.corp.test. A",
 		"  expected "+n+"81",
 		"  seen "+n+"12:53 ns2.dnshost.test. "+n+"99",
-		"checked corp.test. 4 sets: 2 findings, 0 unknown answers")
+		"checked corp.test. 8 sets: 2 findings, 0 unknown answers")
 }
 
 // The child zone still holds its own NS set, which matches: only the parent
@@ -111,17 +120,17 @@ func TestSnapshotThenCheck(t *testing.T) {
 func TestNameServersReplacedSeen(t *testing.T) {
 	n := expLab(t)
 	file := expWrite(t, t.TempDir(), "corp.test.expect", expSnapshot(t, n, "corp.test.", "www.corp.test.", "A"))
-	expCheck(t, n, file, 0, "checked corp.test. 4 sets: 0 findings, 0 unknown answers")
+	expCheck(t, n, file, 0, "checked corp.test. 8 sets: 0 findings, 0 unknown answers")
 
 	expCtl(t, "delegate", "corp.test.", "ns1.dnshost.test.", "ns2.dnshost.test.")
 	expCheck(t, n, file, 1,
 		"finding critical nameservers delegation corp.test. NS",
 		"  expected ns1.corp.test. | ns2.corp.test.",
 		"  seen "+n+"3:53 ns.test. ns1.dnshost.test. | ns2.dnshost.test.",
-		"checked corp.test. 4 sets: 1 findings, 0 unknown answers")
+		"checked corp.test. 8 sets: 1 findings, 0 unknown answers")
 
 	expCtl(t, "delegate", "corp.test.", "ns1.corp.test.", "ns2.corp.test.")
-	expCheck(t, n, file, 0, "checked corp.test. 4 sets: 0 findings, 0 unknown answers")
+	expCheck(t, n, file, 0, "checked corp.test. 8 sets: 0 findings, 0 unknown answers")
 }
 
 // Each change stays, so each check also shows the ones before it, in the
@@ -130,7 +139,7 @@ func TestRecordChangedSeen(t *testing.T) {
 	n := expLab(t)
 	file := expWrite(t, t.TempDir(), "corp.test.expect", expSnapshot(t, n, "corp.test.",
 		"www.corp.test.", "A", "corp.test.", "MX", "corp.test.", "TXT", "mail.corp.test.", "A"))
-	const sets = "checked corp.test. 7 sets: "
+	const sets = "checked corp.test. 11 sets: "
 	expCheck(t, n, file, 0, sets+"0 findings, 0 unknown answers")
 
 	www := func(seen ...string) []string {
@@ -171,15 +180,14 @@ func TestSnapshotDiffIsOneLine(t *testing.T) {
 	pairs := []string{"corp.test.", "www.corp.test.", "A", "corp.test.", "MX", "corp.test.", "TXT", "corp.test.", "CAA",
 		"cdn.corp.test.", "CNAME", "_dmarc.corp.test.", "TXT"}
 	s1 := expSnapshot(t, n, pairs...)
-	expSame(t, "the first osk snapshot", s1, expSnapshotLines(
+	expSame(t, "the first osk snapshot", s1, expSnapshotLines(slices.Concat([]string{
 		"corp.test. MX 10 mail.corp.test.",
 		`corp.test. TXT "v=spf1 mx -all"`,
 		"corp.test. DS none",
 		`corp.test. CAA 0 issue "ca.test"`,
 		`_dmarc.corp.test. TXT "v=DMARC1; p=reject"`,
 		"cdn.corp.test. CNAME edge.dnshost.test.",
-		"www.corp.test. A "+n+"81",
-	))
+	}, expNSHosts(n), []string{"www.corp.test. A " + n + "81"})...))
 
 	expCtl(t, "set", "both", "www.corp.test.", "300", "A", n+"85")
 	s2 := expSnapshot(t, n, pairs...)
@@ -220,7 +228,8 @@ func TestSnapshotTrustsNothing(t *testing.T) {
 	first := expWrite(t, w, "first.expect", s1)
 	expCtl(t, "set", "both", "www.corp.test.", "300", "A", n+"99")
 	s2 := expSnapshot(t, n, "corp.test.", "www.corp.test.", "A")
-	expSame(t, "the second osk snapshot", s2, expSnapshotLines("corp.test. DS none", "www.corp.test. A "+n+"99"))
+	expSame(t, "the second osk snapshot", s2, expSnapshotLines(slices.Concat([]string{"corp.test. DS none"}, expNSHosts(n),
+		[]string{"www.corp.test. A " + n + "99"})...))
 	second := expWrite(t, w, "second.expect", s2)
 
 	expCheck(t, n, first, 1,
@@ -228,8 +237,8 @@ func TestSnapshotTrustsNothing(t *testing.T) {
 		"  expected "+n+"81",
 		"  seen "+n+"11:53 ns1.corp.test. "+n+"99",
 		"  seen "+n+"12:53 ns2.corp.test. "+n+"99",
-		"checked corp.test. 4 sets: 1 findings, 0 unknown answers")
-	expCheck(t, n, second, 0, "checked corp.test. 4 sets: 0 findings, 0 unknown answers")
+		"checked corp.test. 8 sets: 1 findings, 0 unknown answers")
+	expCheck(t, n, second, 0, "checked corp.test. 8 sets: 0 findings, 0 unknown answers")
 
 	for _, dir := range []string{cwd, home, tmp} {
 		entries, err := os.ReadDir(dir)

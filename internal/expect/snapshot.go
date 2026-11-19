@@ -2,6 +2,7 @@ package expect
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -19,9 +20,9 @@ type Skip struct {
 
 // Snapshot turns observations of one domain into a file. A set gets a line
 // only when every server answered and all agree, because the file is what
-// later answers are judged against; the one exception is an IPv6 address
-// that this machine cannot reach (see reachable). Skips are sorted by Name,
-// then Type.
+// later answers are judged against. The exceptions: an IPv6 address that
+// this machine cannot reach (see reachable), and the NS set of the domain
+// (see nsAlternatives). Skips are sorted by Name, then Type.
 func Snapshot(domain dnswire.Name, observations []obs.Observation) (*File, []Skip) {
 	file := &File{Domain: domain}
 	var skips []Skip
@@ -29,6 +30,9 @@ func Snapshot(domain dnswire.Name, observations []obs.Observation) (*File, []Ski
 	groups := groupSets(mine)
 	for _, g := range groups {
 		e, _, why := g.line()
+		if why == "" {
+			why = unreadable(domain, e.String())
+		}
 		if why != "" {
 			skips = append(skips, Skip{Name: g.name, Type: g.t, Why: why})
 			continue
@@ -39,11 +43,26 @@ func Snapshot(domain dnswire.Name, observations []obs.Observation) (*File, []Ski
 	file.Policy, policySkips = snapshotPolicy(domain, groups, mine)
 	skips = append(skips, policySkips...)
 	skips = append(skips, dropForeignZones(file, observations)...)
+	skips = append(skips, dropDifferentGlue(file, mine)...)
 	slices.SortFunc(file.Expectations, compareExpectations)
 	slices.SortFunc(skips, func(a, b Skip) int {
 		return cmp.Or(dnswire.Compare(a.Name, b.Name), cmp.Compare(a.Type, b.Type))
 	})
 	return file, skips
+}
+
+// unreadable gives the first problem that Parse finds in a file of domain
+// whose one line is line, or "" when it finds none. Parse is the one source
+// of what a line may hold: a record can print in a form that it refuses, and
+// a line can break a rule on its owner, such as a DS set below the domain.
+// One such line makes the whole file invalid.
+func unreadable(domain dnswire.Name, line string) string {
+	_, err := Parse([]byte("domain " + nameText(domain) + "\n" + line + "\n"))
+	var e *Error
+	if !errors.As(err, &e) || len(e.Problems) == 0 {
+		return ""
+	}
+	return "the file cannot hold this line: " + e.Problems[0].Text
 }
 
 // Unreached gives the servers that a snapshot of these observations leaves
@@ -73,6 +92,7 @@ type setGroup struct {
 	name    dnswire.Name
 	t       dnswire.Type
 	answers []obs.Answer
+	parent  []bool // for each answer: it came from the parent zone, through the delegation check
 }
 
 func groupSets(observations []obs.Observation) []*setGroup {
@@ -96,6 +116,9 @@ func groupSets(observations []obs.Observation) []*setGroup {
 			answers = []obs.Answer{{}}
 		}
 		g.answers = append(g.answers, answers...)
+		for range answers {
+			g.parent = append(g.parent, o.Key.Kind == obs.KindDelegation)
+		}
 	}
 	return groups
 }
@@ -138,6 +161,9 @@ func snapshotPolicy(domain dnswire.Name, groups []*setGroup, observations []obs.
 		}
 		for _, a := range o.Answers {
 			p, why := fetchedPolicy(a)
+			if why == "" {
+				why = unreadable(domain, p.String())
+			}
 			if why == "" && line != nil && p.String() != line.String() {
 				why = fmt.Sprintf("servers disagree: %s gives %s; %s gives %s",
 					serverText(from), line.String(), serverText(a.Server), p.String())
@@ -203,9 +229,24 @@ func fetchedPolicy(a obs.Answer) (STSPolicy, string) {
 }
 
 // line gives the line of the set and the servers that it leaves out, or why
-// it gets none: the first reason of this order that applies, at the first
-// answer that shows it.
+// it gets none. The NS set of the domain gets a line with each set that its
+// servers gave when they do not agree; the reason then stays only when that
+// line cannot be written either.
 func (g *setGroup) line() (Expectation, []obs.Server, string) {
+	e, left, why := g.agreedLine()
+	if why == "" || !slices.Contains(g.parent, true) {
+		return e, left, why
+	}
+	if ns, ok := g.nsAlternatives(); ok {
+		return ns.line, ns.left, ""
+	}
+	return e, left, why
+}
+
+// agreedLine gives the line of a set on which every server agrees, or why
+// there is none: the first reason of this order that applies, at the first
+// answer that shows it.
+func (g *setGroup) agreedLine() (Expectation, []obs.Server, string) {
 	answers, left := g.reachable()
 	sets := make([][]dnswire.Record, len(answers))
 	for i, a := range answers {
@@ -240,13 +281,120 @@ func (g *setGroup) line() (Expectation, []obs.Server, string) {
 	if len(data) > maxRecords {
 		return Expectation{}, nil, fmt.Sprintf("more than %d records", maxRecords)
 	}
-	e := Expectation{Name: g.name, Type: g.t, Form: FormSets, Sets: [][]dnswire.RData{data}}
-	// A record can print in a form that the file parser refuses; a file with
-	// that line would be reported as invalid.
-	if text := readSets(&Expectation{Type: g.t}, e.FormText()); text != "" {
-		return Expectation{}, nil, "holds a record that a line cannot state: " + text
+	return Expectation{Name: g.name, Type: g.t, Form: FormSets, Sets: [][]dnswire.RData{data}}, left, ""
+}
+
+// maxNSSets bounds the sets that one NS line accepts. Each set is trust given
+// on one look; servers that give more sets than this are in the middle of a
+// change, or several of them lie, and must be put right first.
+const maxNSSets = 4
+
+// NSSource is one set of an NS line that accepts several, and the servers
+// that gave it, each as "<addr> <host>".
+type NSSource struct {
+	Text   string   // the set as the line writes it
+	Parent []string // servers of the parent zone, in the order of their answers
+	Zone   []string // servers of the domain
+}
+
+// NSSources gives the sets of the NS line that Snapshot writes for domain,
+// in the order of the line, when the line accepts more than one; else nil.
+func NSSources(domain dnswire.Name, observations []obs.Observation) []NSSource {
+	if ns, ok := nsOf(domain, observations); ok && len(ns.sources) > 1 {
+		return ns.sources
 	}
-	return e, left, ""
+	return nil
+}
+
+// NoPath stands in NSNoAnswer for the servers of the domain when the walk
+// from the root found no path to them.
+const NoPath = "no path from the root to the servers of the domain"
+
+// NSNoAnswer gives the servers that gave no answer about the NS set of
+// domain, each as "<addr> <host> (<reason>)", or NoPath, when the NS line
+// that Snapshot writes rests on the others. An IPv6 address that this
+// machine cannot reach is not among them: Unreached gives it.
+func NSNoAnswer(domain dnswire.Name, observations []obs.Observation) []string {
+	ns, _ := nsOf(domain, observations)
+	return ns.noAnswer
+}
+
+func nsOf(domain dnswire.Name, observations []obs.Observation) (nsLine, bool) {
+	for _, g := range groupSets(ofDomain(domain, observations)) {
+		if slices.Contains(g.parent, true) {
+			return g.nsAlternatives()
+		}
+	}
+	return nsLine{}, false
+}
+
+// nsLine is the NS line of the domain with each set that a server gave.
+type nsLine struct {
+	line     Expectation
+	sources  []NSSource
+	left     []obs.Server // IPv6 addresses that this machine cannot reach
+	noAnswer []string     // every other server that gave no answer
+}
+
+// nsAlternatives gives the NS line of the domain with each set that a server
+// gave as one alternative. The parent zone and the domain's own servers
+// often disagree in small ways, and a domain without an NS line has no alarm
+// for a change of its nameservers. A failed answer says nothing and is left
+// out. ok is false when the parent zone gave no set, which is the one that
+// resolvers follow; when an answer is no data, no such name or a record of
+// another type, which no alternative can state; and when there are more than
+// maxNSSets sets.
+func (g *setGroup) nsAlternatives() (nsLine, bool) {
+	type alt struct {
+		data   []dnswire.RData
+		source NSSource
+	}
+	var alts []alt
+	var ns nsLine
+	fromParent := false
+	for i, a := range g.answers {
+		set, failure, failed := readAnswer(a)
+		switch {
+		case failed && failure.Reason == obs.ReasonNetwork && a.Server.Addr.Addr().Is6():
+			ns.left = append(ns.left, a.Server)
+			continue
+		case failed && !g.parent[i] && a.Server.Name.LabelCount() == 0 && !a.Server.Addr.IsValid():
+			// The walk to the servers of the domain failed, so no server can be named.
+			if !slices.Contains(ns.noAnswer, NoPath) {
+				ns.noAnswer = append(ns.noAnswer, NoPath)
+			}
+			continue
+		case failed:
+			ns.noAnswer = append(ns.noAnswer, serverText(a.Server)+" ("+failure.Reason.String()+")")
+			continue
+		}
+		if len(set) == 0 || slices.ContainsFunc(set, func(r dnswire.Record) bool { return r.Type() != g.t }) {
+			return nsLine{}, false
+		}
+		fromParent = fromParent || g.parent[i]
+		text := SetText(g.t, set)
+		j := slices.IndexFunc(alts, func(x alt) bool { return x.source.Text == text })
+		if j < 0 {
+			alts = append(alts, alt{data: canonicalData(recordData(set)), source: NSSource{Text: text}})
+			j = len(alts) - 1
+		}
+		if g.parent[i] {
+			alts[j].source.Parent = append(alts[j].source.Parent, serverText(a.Server))
+		} else {
+			alts[j].source.Zone = append(alts[j].source.Zone, serverText(a.Server))
+		}
+	}
+	if !fromParent || len(alts) > maxNSSets {
+		return nsLine{}, false
+	}
+	// The order of the line, so that the same answers give the same file.
+	slices.SortFunc(alts, func(a, b alt) int { return slices.CompareFunc(a.data, b.data, compareData) })
+	ns.line = Expectation{Name: g.name, Type: g.t, Form: FormSets}
+	for _, x := range alts {
+		ns.line.Sets = append(ns.line.Sets, x.data)
+		ns.sources = append(ns.sources, x.source)
+	}
+	return ns, true
 }
 
 // IsChallengeName reports whether name is an ACME challenge name. The record
@@ -308,29 +456,101 @@ func serverText(s obs.Server) string {
 // records check found it in another zone than the file expects: else the
 // first check of a name in a subzone that the file does not declare would
 // report a changed zone. A removed NS line moves the expected zone of the
-// names under it, so this repeats until nothing changes. A failed walk gives
-// failures, and its set has no line to lose.
+// names under it, so this repeats until nothing changes; each round judges
+// every check against the same file, so that the order of the observations
+// does not change which lines go. A failed walk found no zone, so it says
+// nothing about a cut, and the zone rule skips it too; the line of its set
+// may rest on other answers, such as the parent's.
 func dropForeignZones(file *File, observations []obs.Observation) []Skip {
 	var skips []Skip
-	for removed := true; removed; {
-		removed = false
+	for {
+		var foreign []Skip
 		for _, o := range observations {
 			k := o.Key
 			if k.Kind != obs.KindRecords || !k.Domain.Equal(file.Domain) || !k.Name.IsSubdomainOf(file.Domain) ||
-				o.Zone.Equal(file.Zone(k.Name)) {
+				walkFailed(o) || o.Zone.Equal(file.Zone(k.Name)) {
 				continue
 			}
-			i := slices.IndexFunc(file.Expectations, func(e Expectation) bool {
-				return e.Type == k.Type && e.Name.Equal(k.Name)
-			})
-			if i < 0 {
+			if _, ok := file.Find(k.Name, k.Type); !ok || slices.ContainsFunc(foreign, sameSet(k.Name, k.Type)) {
 				continue
 			}
-			file.Expectations = slices.Delete(file.Expectations, i, i+1)
 			zone := o.Zone.Lower().String()
-			skips = append(skips, Skip{Name: k.Name, Type: k.Type, Why: fmt.Sprintf("lies in zone %s; add the pair %s NS", zone, zone)})
-			removed = true
+			foreign = append(foreign, Skip{Name: k.Name, Type: k.Type, Why: fmt.Sprintf("lies in zone %s; add the pair %s NS", zone, zone)})
+		}
+		if len(foreign) == 0 {
+			return skips
+		}
+		file.Expectations = slices.DeleteFunc(file.Expectations, func(e Expectation) bool {
+			return slices.ContainsFunc(foreign, sameSet(e.Name, e.Type))
+		})
+		skips = append(skips, foreign...)
+	}
+}
+
+func sameSet(name dnswire.Name, t dnswire.Type) func(Skip) bool {
+	return func(s Skip) bool { return s.Type == t && s.Name.Equal(name) }
+}
+
+// walkFailed reports the one answer that observe gives when the walk from
+// the root failed: it comes from no server at all.
+func walkFailed(o obs.Observation) bool {
+	if len(o.Answers) != 1 {
+		return false
+	}
+	s := o.Answers[0].Server
+	return s.Name.LabelCount() == 0 && !s.Addr.IsValid()
+}
+
+// dropDifferentGlue removes the address lines of each nameserver host whose
+// glue at the parent zone those lines do not allow. The glue of a host with
+// an address line is judged against its lines, so the new file would report
+// it at its first check. Both lines of the host go, because glue of a type
+// with no line differs too.
+func dropDifferentGlue(file *File, observations []obs.Observation) []Skip {
+	var skips []Skip
+	for _, o := range observations {
+		if o.Key.Kind != obs.KindDelegation {
+			continue
+		}
+		for _, a := range o.Answers {
+			glue := glueOf(a)
+			for _, r := range glue {
+				host, t := r.Name, r.Type()
+				group := slices.DeleteFunc(slices.Clone(glue), func(x dnswire.Record) bool {
+					return x.Type() != t || !x.Name.Equal(host)
+				})
+				line, ok := file.Find(host, t)
+				if !hasAddressLine(file, host) || ok && line.Match(group) {
+					continue
+				}
+				why := fmt.Sprintf("the parent zone gives other glue: %s gives %s %s", serverText(a.Server), t, SetText(t, group))
+				if !ok {
+					why = fmt.Sprintf("the %s address of the host could not be read, so its glue at the parent zone cannot be compared", t)
+				}
+				for _, at := range []dnswire.Type{dnswire.TypeA, dnswire.TypeAAAA} {
+					i := slices.IndexFunc(file.Expectations, func(e Expectation) bool { return e.Type == at && e.Name.Equal(host) })
+					if i >= 0 {
+						file.Expectations = slices.Delete(file.Expectations, i, i+1)
+						skips = append(skips, Skip{Name: host, Type: at, Why: why})
+					}
+				}
+			}
 		}
 	}
 	return skips
+}
+
+func hasAddressLine(file *File, host dnswire.Name) bool {
+	_, a := file.Find(host, dnswire.TypeA)
+	_, aaaa := file.Find(host, dnswire.TypeAAAA)
+	return a || aaaa
+}
+
+// glueOf gives the glue of an answer; only an answer of records holds any.
+func glueOf(a obs.Answer) []dnswire.Record {
+	return obs.Match(a.Result,
+		func(r obs.Records) []dnswire.Record { return r.Glue },
+		func(obs.NoData) []dnswire.Record { return nil },
+		func(obs.NoName) []dnswire.Record { return nil },
+		func(obs.Failure) []dnswire.Record { return nil })
 }

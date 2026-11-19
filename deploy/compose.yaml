@@ -6,6 +6,9 @@ x-osk: &osk
   build:
     context: ..
     dockerfile: deploy/Dockerfile
+    # The version of the release that start.sh checked.
+    args:
+      VERSION: ${OSK_VERSION:-0.0.0-dev}
   volumes:
     - data:/data
 

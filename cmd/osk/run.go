@@ -136,7 +136,7 @@ func problemText(problems []config.Problem) string {
 func prepare(c *config.Config) (values config.Values, o *observe.Observer, files []*expect.File, text string) {
 	values, problems := c.Secrets(os.LookupEnv)
 	text = problemText(problems)
-	o, err := observe.New(observe.Config{RootServers: c.RootServers, ExtraRanges: c.ExtraRanges, Policy: mtasts.Fetch})
+	o, err := observe.New(observe.Config{RootServers: c.RootServers, ExtraRanges: c.ExtraRanges, Policy: mtasts.Fetcher(c.ExtraRanges)})
 	if err != nil {
 		text += "osk: " + err.Error() + "\n"
 	}

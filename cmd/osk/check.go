@@ -41,7 +41,7 @@ func check(args []string, stdout, stderr io.Writer) int {
 	if msg != "" {
 		return checkWrongUse(stderr, msg)
 	}
-	a.cfg.Policy = mtasts.Fetch
+	a.cfg.Policy = mtasts.Fetcher(a.cfg.ExtraRanges)
 	o, err := observe.New(a.cfg)
 	if err != nil {
 		// Only the flags fill the configuration.
@@ -103,7 +103,7 @@ func parseArgs(args []string, withExpect bool) (a checkArgs, msg string) {
 		return err
 	})
 	flags.Func("extra-range", "a prefix of non-public addresses that may be asked", func(s string) error {
-		prefix, err := netip.ParsePrefix(s)
+		prefix, err := config.ParseRange(s)
 		cfg.ExtraRanges = append(cfg.ExtraRanges, prefix)
 		return err
 	})

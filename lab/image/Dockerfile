@@ -1,6 +1,6 @@
 # The one image of the DNS lab: BIND 9 for root, tld, ns1 and ns2, Unbound for
 # resolver and liar, the tools of the runner, and the webhook receiver.
-FROM golang:1.27-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS receiver
+FROM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS receiver
 COPY receiver.go /src/
 RUN cd /src && CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o /receiver receiver.go
 

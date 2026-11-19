@@ -67,6 +67,7 @@ type receiver struct {
 	next      reply
 	issuances []issuance
 	failing   certFail
+	lookups   int
 	policies  map[string]policy
 }
 
@@ -170,6 +171,7 @@ func (rc *receiver) lookup(w http.ResponseWriter, r *http.Request) {
 	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
+	rc.lookups++
 	if rc.failing.count > 0 {
 		rc.failing.count--
 		if rc.failing.retry > 0 {
@@ -235,6 +237,20 @@ func (rc *receiver) setIssuances(w http.ResponseWriter, r *http.Request) {
 	slices.SortFunc(set, func(a, b issuance) int { return cmp.Compare(a.id, b.id) })
 	rc.mu.Lock()
 	rc.issuances = set
+	rc.mu.Unlock()
+}
+
+// countLookups prints the number of lookups since the last clear, failed ones
+// included.
+func (rc *receiver) countLookups(w http.ResponseWriter, r *http.Request) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	_, _ = io.WriteString(w, strconv.Itoa(rc.lookups)+"\n")
+}
+
+func (rc *receiver) clearLookups(w http.ResponseWriter, r *http.Request) {
+	rc.mu.Lock()
+	rc.lookups = 0
 	rc.mu.Unlock()
 }
 
@@ -307,6 +323,8 @@ func main() {
 	control := http.NewServeMux()
 	control.HandleFunc("POST /issuances", rc.setIssuances)
 	control.HandleFunc("POST /issuances/fail", rc.failIssuances)
+	control.HandleFunc("GET /lookups", rc.countLookups)
+	control.HandleFunc("POST /lookups/clear", rc.clearLookups)
 	control.HandleFunc("POST /policy", rc.setPolicy)
 	control.HandleFunc("POST /policy/clear", rc.clearPolicies)
 	control.HandleFunc("GET /requests", rc.list)

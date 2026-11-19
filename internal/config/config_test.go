@@ -1426,7 +1426,7 @@ func TestChannelsAreSlackThenTheWebhooksInOrder(t *testing.T) {
 
 const (
 	cfgRootWarning  = "network.root_servers is set: osk starts its walk at 10.53.0.2:53, 10.53.0.3:5353, [fd00::2]:53, [fd00::3]:53 instead of the root servers of the internet, so these servers decide every answer. Use it only in a lab or a private network."
-	cfgRangeWarning = "network.extra_ranges is set: data from DNS can now make osk send queries to 10.53.0.0/24, fd00::/64. Use it only in a lab or a private network."
+	cfgRangeWarning = "network.extra_ranges is set: data from DNS can now make osk send queries and HTTPS requests for MTA-STS policy files to 10.53.0.0/24, fd00::/64. Use it only in a lab or a private network."
 	cfgRoots        = `"root_servers": ["10.53.0.2", "10.53.0.3:5353", "[fd00::2]:53", "fd00::3"]`
 	cfgRanges       = `"extra_ranges": ["10.53.0.0/24", "fd00::/64"]`
 )

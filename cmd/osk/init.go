@@ -5,11 +5,11 @@ import (
 	"errors"
 	"flag"
 	"io"
-	"net/netip"
 	"os"
 	"os/signal"
 	"time"
 
+	"github.com/Opsek/dns-monitoring/internal/config"
 	"github.com/Opsek/dns-monitoring/internal/mtasts"
 	"github.com/Opsek/dns-monitoring/internal/observe"
 	startpkg "github.com/Opsek/dns-monitoring/internal/start"
@@ -22,7 +22,7 @@ func setup(args []string, stdout, stderr io.Writer) int {
 	if msg != "" {
 		return initWrongUse(stderr, msg)
 	}
-	cfg.Policy = mtasts.Fetch
+	cfg.Policy = mtasts.Fetcher(cfg.ExtraRanges)
 	o, err := observe.New(cfg)
 	if err != nil {
 		// Only the flags fill the configuration.
@@ -48,14 +48,14 @@ func initWrongUse(stderr io.Writer, msg string) int {
 
 // parseInit reads the flags of init. The network flags are those of check.
 func parseInit(args []string) (cfg observe.Config, path, msg string) {
-	var config *string
+	var file *string
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Func("config", "the config file to write", func(s string) error {
-		if config != nil {
+		if file != nil {
 			return errors.New("given more than once")
 		}
-		config = &s
+		file = &s
 		return nil
 	})
 	flags.Func("root-server", "a root server to start from, in place of the built-in ones", func(s string) error {
@@ -64,7 +64,7 @@ func parseInit(args []string) (cfg observe.Config, path, msg string) {
 		return err
 	})
 	flags.Func("extra-range", "a prefix of non-public addresses that may be asked", func(s string) error {
-		prefix, err := netip.ParsePrefix(s)
+		prefix, err := config.ParseRange(s)
 		cfg.ExtraRanges = append(cfg.ExtraRanges, prefix)
 		return err
 	})
@@ -72,12 +72,12 @@ func parseInit(args []string) (cfg observe.Config, path, msg string) {
 		return cfg, "", err.Error()
 	}
 	switch {
-	case config == nil || *config == "":
+	case file == nil || *file == "":
 		return cfg, "", "--config is required"
 	case flags.NArg() > 0:
 		return cfg, "", "osk init takes no arguments"
 	}
-	return cfg, *config, ""
+	return cfg, *file, ""
 }
 
 // isTerminal reports whether f is a character device. /dev/null is one too,

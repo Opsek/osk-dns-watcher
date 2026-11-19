@@ -267,14 +267,21 @@ func SlackText(e alert.Event) string {
 		// The policy file comes from an HTTPS host, not from the DNS servers.
 		w.action = "Find out why osk cannot fetch the policy file from {N}; the log of osk names the reason. Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
 	}
-	phrase, action := w.phrase, w.action
+	phrase, action, pointing := w.phrase, w.action, ""
 	if e.Kind == alert.EventResolve {
 		phrase, action = w.resolved, resolvedAction
+		if dangling(e.Alert.Rule) {
+			action = "Find out who holds {N} now. If it is not yours, remove or change the record that points at it."
+			// The lines come from the file, so they join after the fill.
+			if refs := Clean(e.Alert.Expected, recordWidth); refs != "" {
+				pointing = " The record: `" + refs + "`"
+			}
+		}
 	} else if w.more != "" && len(weakerWords(e.Alert.Value)) > 0 {
 		phrase = w.more
 	}
 	fill := fields(e.Alert.Check)
-	return compose(headline(e)+dot+fill.Replace(phrase), view(e, w.now), times(e), fill.Replace(action))
+	return compose(headline(e)+dot+fill.Replace(phrase), view(e, w.now), times(e), fill.Replace(action)+pointing)
 }
 
 // compose joins the four parts, each set apart by one empty line. When the
@@ -314,6 +321,13 @@ func title(emoji, word, suffix string) string {
 	return emoji + " *" + word + "*" + suffix
 }
 
+// dangling tells the rules whose alert ends when the name exists again. The
+// owner may have fixed the record, or someone else may have registered the
+// name, so the end of such an alert is not good news and needs a check.
+func dangling(r decide.Rule) bool {
+	return r == decide.RuleAliasTarget || r == decide.RuleNameServerHost || r == decide.RuleMailTarget
+}
+
 func headline(e alert.Event) string {
 	sev := e.Alert.Severity
 	word := strings.ToUpper(sev.String())
@@ -325,6 +339,9 @@ func headline(e alert.Event) string {
 	case alert.EventReminder:
 		return title(emoji[sev], word, ", still open")
 	case alert.EventResolve:
+		if dangling(e.Alert.Rule) {
+			return title(":warning:", "CHECK", "")
+		}
 		return title(":white_check_mark:", "RESOLVED", "")
 	case alert.EventOpen:
 		return title(emoji[sev], word, "")

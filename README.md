@@ -1,195 +1,97 @@
-# osk
+# osk-dns-watcher
 
-osk watches the DNS of your domains from the outside: it asks each domain's own servers, starting from the root servers, and compares their answers with a file of expectations that you own. When an answer differs, it sends an alert to Slack or to any webhook.
+osk-dns-watcher watches the DNS of your domains from the outside and alerts you on Slack or a webhook when an answer is not what you confirmed.
+
+> 🚨 **CRITICAL** · nameservers of `example.com.` changed at the parent zone
+>
+> ```
+> expected   ns1.example.net.
+>            ns2.example.net.
+>
+> now        ns1.example.org.
+>            ns2.example.org.
+> seen at    a.gtld-servers.net. (192.5.6.30)   TTL 172800
+> ```
+>
+> 🕒 First seen 14:02:07 · last OK 14:01:07 · 15 Nov 2026 UTC
+>
+> 👉 If you did not change the nameservers, contact your registrar now.
 
 ## Quick start
 
-You need git and Docker with the Compose plugin, on Linux or macOS (on Windows, in WSL 2), and the URL of a Slack incoming webhook.
+You need:
 
-osk must reach the DNS root servers directly on port 53, over UDP and TCP; a network whose VPN, router or provider answers DNS queries itself cannot run osk.
+- git 2.34 or later
+- OpenSSH 8.2 or later
+- Docker with Compose
+- the address of a Slack incoming webhook
+- a network that reaches the DNS root servers directly (VPNs and some office networks do not; the setup says so)
 
 ```sh quickstart
-git clone https://github.com/Opsek/dns-monitoring.git
-dns-monitoring/deploy/start.sh
+git clone https://github.com/Opsek/osk-dns-watcher.git
+osk-dns-watcher/deploy/start.sh
 ```
 
-`start.sh` builds osk, which takes a few minutes the first time, and asks for the domains to watch and the webhook URL. It shows what osk sees now for each domain and writes nothing until you type `yes`. When this machine cannot reach some nameserver addresses over IPv6, one "Not asked" line says how many, and the expectations come from the servers that answered. Then it starts osk as a service and sends a test message to your channel.
+`start.sh` checks the release signature, builds the program and asks for your domains and the webhook.
+It shows what your servers answer now; when you type `yes`, the service trusts that, starts and sends a test message.
 
-Run every other command in the folder `dns-monitoring/deploy`.
+To run the ready-made image without a build, or to check the release key first, see [docs/install.md](docs/install.md).
 
-## What an alert looks like
+## What it watches
 
-In Slack the `:codes:` show as emoji.
+| What changes | How serious | Seen within |
+|---|---|---|
+| Who answers for your domain: nameservers, glue, DS, the delegation | up to critical | 1 min |
+| Your records: any set in your file (A, AAAA, CNAME, MX, NS count as high) | up to high | 5 min |
+| Certificate challenges and CAA policy | high | 5 min |
+| Mail policy: SPF, DMARC, DKIM, MTA-STS | medium | 5 min |
+| Names your records point at that no longer exist | up to critical | 5 min |
+| Wildcards, and names served from an unexpected zone | up to high | 5 min |
+| Certificates in the public logs (off by default) | up to high | 1 h |
+| The watch itself: servers that disagree, a failing check, an unexplained zone change | up to medium | 50 min |
 
-~~~
-:red_circle: *HIGH* · `www.example.com. A` changed
+Every alert, with its severity and time: [docs/alerts.md](docs/alerts.md).
+Times were tested in a lab; a drill and a long run on real domains are not done yet.
 
+## What it does not watch yet
+
+- Registry data: transfer locks, a new registrar, an expiry date.
+- DNSSEC validity: signatures and the chain of trust.
+- Public resolvers: a poisoned cache is not seen.
+- Missing protections: no audit for a registry lock, DNSSEC, CAA `accounturi` or a strict DMARC policy.
+- Zone transfers: a change made and undone between two checks can be missed.
+- Routes: a route hijack of your nameservers or hosts is not seen.
+- Grouping: one cause sends one alert for each set that it changes.
+
+[docs/limits.md](docs/limits.md) explains these and every limit of what is built.
+
+## Every day
+
+Run these in `osk-dns-watcher/deploy`:
+
+```sh
+./osk-dns-watcher status                              # healthy? which alerts are open, with their ids
+./osk-dns-watcher check --expect example.com.expect   # what differs from the file now
+./osk-dns-watcher accept <alert id>                   # the line that makes an alert's value expected
+./osk-dns-watcher test-alert                          # a test message to every channel
 ```
-expected   192.0.2.10
 
-now        203.0.113.7
-seen at    ns1.example.net. (198.51.100.53)   TTL 300
-```
-
-:clock3: First seen 14:02:07 · last OK 14:01:07 · 15 Nov 2026 UTC
-
-:point_right: If you did not make this change, check your DNS provider account now.
-~~~
-
-When the answer is as expected again, a RESOLVED message follows. Other webhooks get the same text in signed JSON; see [docs/config.md](docs/config.md).
-
-## The expectations file
-
-One file per domain, one line per record set: the name, the type, and what is expected. `osk init` writes the first version from what the servers give, for the NS, DS, A, AAAA, MX, TXT and CAA sets of the domain and the A set of `www`, and the TXT sets of `_dmarc.<domain>` and `_mta-sts.<domain>`. When `_mta-sts.<domain>` holds an MTA-STS record (not a CNAME) that reads, and the domain serves a policy file that reads, it also writes the `mta-sts` line (below) from that file. `osk snapshot` does the same. It also writes `_acme-challenge.<domain>. TXT none`, `_acme-challenge.www.<domain>. TXT none` and `*.<domain>. A none` where nothing is there. If you use DNS challenges to get certificates, remove the two `_acme-challenge` lines: the challenge alert fires at each certificate request. Edit it to change what osk trusts or to watch more names:
-
-```
-domain example.com.
-example.com. NS ns1.example.net. | ns2.example.net.
-example.com. DS none
-example.com. A 192.0.2.10
-example.com. MX 10 mail.example.com.
-www.example.com. A in 192.0.2.0/24
-cdn.example.com. CNAME like *.cdn.example.net.
-mail.example.com. A 192.0.2.25 | 192.0.2.26 || 192.0.2.27
-_acme-challenge.example.com. TXT none
-```
-
-- `|` separates the records of one set; `||` separates sets that are each allowed.
-- `in <prefix>` allows any address in the range; `like *.<name>` allows any name under that name.
-- `none`: the set must not exist.
-- `*.<name>. A none`: no wildcard answers under that name; osk asks a random name under it every 5 minutes; for a name in the domain's own zone, also at once when the serial of the zone moves. Only this line is the wildcard line: any other line with a `*` name is checked at that literal name.
-- `osk snapshot` writes no line for a certificate-challenge record that is there now, because its token changes with each request. Write `none` once it is gone, or no line if you use DNS challenges.
-- Names end with a dot. A line that starts with `#` is a comment.
-- A `DS` line is compared at the parent: a changed DS record gives an alert. The address line of a nameserver host also checks its glue at the parent, the address that the parent gives with the delegation. Ask for the host pairs in `osk snapshot` to get those lines, for example `osk snapshot example.com. ns1.example.com. A ns1.example.com. AAAA`. Ask for both types: a host with no AAAA gets the line `AAAA none`, and glue of a type with no line is a difference.
-- `issuer <name>` and `certname <name>` lines tell the certificate check (see [Certificates](#certificates)) what is expected. `issuer letsencrypt.org` names a certificate authority as it appears in CAA records (no trailing dot); with at least one such line, a valid certificate from any other authority gives an alert. `certname *.example.com.` allows a wildcard certificate name; it ends with a dot and must be at or under the domain. Write one name on each line.
-- `mta-sts <mode> <max_age> <mx>...` is the MTA-STS policy that the domain must serve, for example `mta-sts enforce 604800 mail.example.com. *.mail.example.net.`. The mode is `enforce`, `testing` or `none`; `max_age` is a number of seconds; each mx pattern ends with a dot, and only its first label may be `*`. A file has at most one such line. The line makes osk fetch the policy file (see [Mail records](#mail-records)). `osk init` and `osk snapshot` write it only when the `_mta-sts` record is there and is no CNAME.
-
-To accept the value that an alert reports, run `docker compose exec osk osk accept --config osk.json <alert id>`: it prints the change and a code; add `--write <code>` before the id to make it. To edit a file by hand: `docker compose exec osk vi example.com.expect`. osk reads the files again every 5 seconds, keeps the last valid file when one is not valid (and alerts), and sends a notice with the changed lines.
-
-## Commands
-
-Run them as `docker compose exec osk osk <command>`. All but the last four take `--config osk.json`. All but `init` and `run` take `--json`.
-
-| Command | What it does |
-|---|---|
-| `status` | Says if osk is healthy (exit 0) or not (exit 1), and lists the open alerts with their ids. |
-| `watch` | Prints alerts and notices as they happen. |
-| `accept <alert id>` | Prints the line that makes the reported value expected; with `--write <code>`, writes it. |
-| `test-alert` | Sends a test message through the running service to every channel. |
-| `doctor` | Checks DNS, the webhooks, the clock and the file rights, and says what to fix. It sends a test message to each channel. |
-| `validate` | Checks the config and the expectations files. |
-| `init` | Asks the setup questions and writes the config; `start.sh` runs it. |
-| `run` | The service; the container runs it. Its log has one JSON object per line: `docker compose logs -f osk`. |
-| `snapshot <domain> [<name> <type>]...` | Prints the expectation lines of what the servers give now. |
-| `check <domain> [<name> <type>]...` | Asks the servers once and prints each answer; `check --expect <file>` compares them with a file. |
-| `query @<server> <name> [<type>]` | Sends one DNS query to one server and prints the answer. |
-| `version` | Prints the versions of osk, Go and SQLite. |
-
-## Mail records
-
-osk reads the mail records of your domain as policies, not only as text. When the SPF, DMARC, DKIM or MTA-STS record of a line changes, the alert names the policy, and when the record now lets more senders pass, asks receivers to do less, adds a signing key or protects mail in transit less than the line in your file, the alert says so and lists each such change in words, for example `all gives softfail in place of fail` or `p=none in place of p=reject`. A change that permits nothing more still gives the alert, so that your file stays the record of what is right. osk also fetches the MTA-STS policy file of each domain whose file has an `mta-sts` line, over HTTPS from `mta-sts.<domain>`, and compares it with that line.
-
-- The policy file is `https://mta-sts.<domain>/.well-known/mta-sts.txt`. osk fetches it every 5 minutes (the `other` interval), and only for a domain whose file has an `mta-sts` line: remove the line and the fetch stops. The request is a plain GET that sends no secret and no data of yours, to that one host, which is the host that mail senders use. osk follows no redirect, checks the certificate of the host against the certificates that the system trusts, waits at most 30 seconds, and accepts a body of at most 64 kilobytes.
-- When the file differs from the line, osk alerts, with words when its mode, its `max_age` or its mx patterns protect less than the line. A file that arrives but cannot be read as a policy is such a difference: the alert says that senders act as if there were no policy. A fetch that fails (no connection, a certificate that the system does not trust, a redirect, a status other than 200, a body that is too large, no answer in time) is never taken as "no policy": the alert about the policy stays as it is, and after 15 minutes of failures osk alerts that the check is failing. The `text` of the log line of each failed run names the cause in parentheses, for example `checked other policy example.com. mta-sts.example.com. TXT 2026-11-18T10:00:00.000Z failed bad-answer (HTTP status 404)`. While the line is in the file, the `id` of the MTA-STS record is not compared; only whether the record is there. An `id` that changes with the same policy gives the low alert that the zone changed and no watched record differs.
-- An SPF line is a TXT line at a name that holds an SPF record, a DMARC line one at `_dmarc.<domain>.`, an MTA-STS line one at `_mta-sts.<domain>.`, and a DKIM line one at `<selector>._domainkey.<domain>.`. Add the line of each DKIM selector with `osk snapshot`, for example `osk snapshot example.com. s1._domainkey.example.com. TXT`: selectors cannot be listed from DNS, so `osk init` does not guess them.
-- A mail record that the file does not have yet reads as `none`. When it appears, the alert comes with no words, and `osk accept` writes it.
-
-## What osk detects
-
-- The nameservers of a domain at its parent zone differ from the file: critical.
-- A glue address that the parent gives for a watched nameserver host differs from the file: critical.
-- The DS set at the parent differs from the file or is gone: high; critical when the nameservers alert of the domain is open, and it stays critical until it resolves.
-- The parent says that the domain does not exist: critical.
-- A record set at any nameserver of the domain differs from the file: high for A, AAAA, CNAME, MX and NS, medium for the other types.
-- A watched SPF, DMARC, DKIM or MTA-STS record changes: medium, as for any TXT record. The alert names the policy. When the record now permits more than the line in the file, the alert's first lines say how: an SPF record that lets more senders pass, a DMARC record that asks receivers to do less or sends reports elsewhere, a DKIM key that the file does not list, an MTA-STS record that is gone or cannot be read.
-- The MTA-STS policy file of a domain whose file has an `mta-sts` line differs from that line: medium. osk fetches `https://mta-sts.<domain>/.well-known/mta-sts.txt` every 5 minutes, and the alert says in words when the mode, the `max_age` or the mx patterns protect less. A fetch that fails is not read as no policy; after 15 minutes it gives the alert of a failing check.
-- A name is answered from a zone that the file does not expect.
-- The file has no line for the NS or the DS set of a domain.
-- The zone serial moved and no watched record differs: low. This is a change to a record you do not watch, or one that was undone.
-- The nameservers of a domain give different answers for a watched set, each one steadily, for 10 minutes and 11 checks in a row (up to 50 minutes for a set that is checked every 5 minutes), while the file allows each answer: medium. The alert ends when the split has been absent for 11 checks in a row.
-- A certificate-challenge record (`_acme-challenge`) appears where the file says `none`: high.
-- The CAA policy that applies to a name of the file permits more than the CAA lines of the file allow (another certificate authority, any account or validation method, wildcards, or the policy is gone): high. A change of the CAA set that permits nothing more is an ordinary change of the set: medium. A certificate authority can read each of three things strictly or permissively: a critical record with a tag that osk does not know, a repeated or empty `accounturi`, and a repeated or faulty `validationmethods`. osk tries each combination and alerts when one of them permits more than the file allows.
-- A name outside the domain's own zone that an alias, an MX record, an SPF include or a nameserver in the file points at does not exist: high, critical for a nameserver. When the domain above that name is gone, the alert names the zone that no longer delegates it. A nameserver that answers "no such name" for a name that only has records of another type (against RFC 8020) gives a false alert for such a target.
-- A random name under `<name>` gets an answer although the file has `*.<name>. A none`: medium.
-- Only when `certificates` is set in the config: a valid certificate for a name of the domain comes from a certificate authority that the CAA lines or the `issuer` lines of the file do not permit: high.
-- Only when `certificates` is set: a valid wildcard certificate for a name of the domain is not listed by a `certname` line: high.
-- Only when `certificates` is set: valid certificates name hosts under the domain that the file does not list: low. One alert holds the list.
-- A check gets no usable answer for 5 minutes, or 15 minutes for the checks that run every 5 minutes and for the serial.
-- The expectations file changed, or is not valid.
-- osk was not running for a minute or more: at its next start, a notice says for how long.
-
-How often osk asks: the zone serial at each nameserver every 15 seconds, and a moved serial starts the checks of the zone at once; the nameservers and DS at the parent every 60 seconds; the A, AAAA, CAA and MX sets of each domain and its `_acme-challenge` names every 60 seconds; every other set every 5 minutes, and so are the address check of each name that a line points at, the wildcard check, and the CAA set of each other name of the file, which is also checked at once when the serial of the zone moves. The wildcard check of a name in the domain's own zone also starts at once when the serial of the zone moves. An alert is sent within 5 seconds of the check that sees the change, unless older messages to that channel are still waiting. These intervals are what osk is built for and were tested in a lab; detection times on real domains are not measured yet. The intervals can be changed in the config.
-
-## Certificates
-
-osk can also read the public certificate logs, to see certificates that were issued for your domains. This is off until the config has a `certificates` object (see [docs/config.md](docs/config.md)). The source is the Cert Spotter API of SSLMate, `https://api.certspotter.com/v1/issuances`; it works without a key, and a key can be set.
-
-- osk sends the name of each watched domain to that source, which then learns which domains you watch. A check that falls inside a wait that the source asked for sends nothing.
-- A certificate is judged only while it is valid. It leaves the list when it expires, and an alert about it ends then.
-- The source sets the pace. Without a key, on 17 Nov 2026, it allowed 10 requests an hour and, after a list with nothing new, asked for a wait of one hour. osk obeys: it asks again at its first check after that wait, so a new certificate is seen about one hour after the source has it (a little later when `interval` does not divide the hour; when `interval` is longer than the wait, the next read comes one `interval` later), plus the delay of the source behind the issuance, which is not measured yet. `interval` is the gap that osk uses only when the source asks for less. A wait that the source asks for after a `429` is kept whole; a `Retry-After` of more than 24 hours is not read, and osk then asks again at its next check. The limits with a key were not measured.
-- The terms of the source said on 17 Nov 2026 that use without a key is for personal or evaluation purposes. Get a key for any other use.
-- One domain costs one request an hour once osk is running, and at least two when osk starts: the first list, then one more request that finds the end of it. A domain with many certificates needs one request for each page. Once in 24 hours, in one run, osk reads the list again from the beginning, beside its normal work; this never stops the certificate alerts. For a domain whose list does not fit one run (more than 9 pages: 10 pages need 11 requests), the list is not read again until osk starts again, so a fault of the source's position marker is not healed before that. When the daily listing fails, osk tries it again one hour later, and the normal reading of new certificates goes on in between. At most two certificate checks run at one time.
-- More than 10000 valid certificates for a domain, or more than 100000 names on them, make the check fail with "too many". osk asks again after one hour, and the alerts that are open stay judged by the certificates that osk has. A domain that is truly that large fails every hour, which the `check-failing` alert tells.
-- When the source cannot be read (no answer, a rate limit, a status that is not 200, or an answer that osk cannot read), osk never takes it as "no certificates": it judges only the certificates that it has read. An alert can still open from pages read before the failure, and it ends when its certificate expires. After the fail limit, 3 times `interval`, a `check-failing` alert opens.
-- A source that wrongly answers with an empty list right after osk starts ends the open certificate alerts until its next true answer.
-
-## What osk does not detect yet
-
-- A change that is made and undone between two checks can be missed. If the DNS provider moves the zone serial, the serial check reports that the zone changed, but not which record.
-- Nameserver addresses that this machine cannot reach are not checked. Docker's default network has no IPv6, so with it no IPv6 address of a nameserver is checked.
-- A nameserver that does not answer while another one does.
-- A nameserver that gives another allowed answer only now and then, a steady difference beside a nameserver whose answers change from query to query, and names whose answers change from query to query: a line with `in`, `like` or `||` trusts every answer that it allows. Nameservers that each keep another allowed answer for some minutes can get the alert above again and again.
-- A wildcard that holds no A or CNAME record, for example one with only AAAA, TXT or MX records.
-- A CAA set at the target of an alias: the certificate authority follows the alias, osk does not. When an alias stands at a name that has no line in the file, above a name of the file, the CAA policy of the names below it comes from the alias target; osk sees only that the zone serial moved.
-- A CAA policy above the watched domain, at its TLD: osk reads it as none.
-- A CAA record at a name with a `_` label: osk compares it as an ordinary set, not as a policy.
-- A CAA line with more than 64 different grants in a class reads as no policy for that class: no CAA alert for it. A method list of more than 16 labels reads as "any method" for its grant.
-- When your own CAA line holds an unusual value (a critical record with a tag that osk does not know, or a repeated or faulty `accounturi` or `validationmethods`), a change to another unusual value of the same kind is not ranked: it gives only the medium alert at that name and none at a name below it.
-- A CAA record whose tag is `issue` with a blank or another odd character added is an unknown tag for osk. A certificate authority that reads such a tag as `issue` would not be seen; none is known.
-- A wildcard CAA record (`*.name`) that permits more than the policy above it gives the CAA alert at each name of the file under it that does not exist.
-- A deleted name inside the domain's own zone that an alias or MX record points at, unless it has a line of its own.
-- A name that an alias, MX record or SPF include points at, at a provider that answers for every name: it still exists when nobody owns it.
-- A missing name whose zone answers 'no data' and not 'no such name'.
-- A certificate that was revoked: its alert ends when the certificate expires.
-- A certificate from an expected authority for a name of the file, for example one that someone obtained by changing DNS for a moment: the logs cannot tell it from your own renewal. The DNS checks and the CAA lines are the defence.
-- A wildcard certificate for a name that is one label above a watched domain.
-- Certificates that were issued before osk started are all new to it: the first run lists every valid certificate, and what the file does not cover gives up to three alerts for each domain.
-- A change inside a record that an SPF include or redirect names: osk compares the record of the line, not the records that it points at. Watch such a record with a line of its own.
-- A name that an SPF macro builds.
-- A DKIM key added at a selector that no line names: selectors cannot be listed from DNS.
-- Which DMARC record governs a subdomain that has none of its own: add the line of the record that governs it.
-- The size of a DKIM key.
-- A TXT line with `||`: it gives the generic alert, without the words.
-- A mail record that a provider hosts through a CNAME: osk watches the CNAME and alerts when its target changes, but does not read the provider's record behind it.
-- A mail record rewritten with the same policy (other string breaks or spaces) still alerts: accept the new text.
-- An SPF record that appears where the file has `TXT none` or a TXT line that holds no SPF record: the alert shows the record, with no words.
-- The limit of 10 DNS lookups of an SPF record counts the terms of that record only, not those of the records that its includes name.
-- A DKIM record that does not follow the strict form (the `v` tag not first, an odd tag) is not a key for osk, though a lenient verifier may use it.
-- A DMARC `psd` tag: any change counts as weaker, and osk does not model the tree walk that finds the record of a parent domain.
-- Whether a mail record is weak at all: osk compares with your file, so it does not say that your own SPF has `+all`, your DMARC has `p=none` or your MTA-STS mode is `testing`.
-- In the MTA-STS policy file, a key given twice with other values: the first counts, as the standard says, and a sender that keeps the last one reads another policy. The media type of the file is not checked.
-- A failed policy fetch gives no alert about the policy: only the check-failing alert, after the limit. A host that fails two runs in three never reaches the limit.
-- The policy fetch sends one request for each run to one address, so a host can tell osk from a mail server and serve it another policy.
-- The fetch of the MTA-STS policy file goes to the address that DNS gives for `mta-sts.<domain>`. Who controls the zone can point that name at an address inside your network; osk then tries a TLS connection to port 443 there on each run. No data of yours is sent and nothing of the answer reaches that party. The DNS checks refuse such addresses; this fetch does not yet.
-- Registry data (locks, expiry), DNSSEC validation and the answers of public resolvers.
-
-## Update, stop, data
+To move to the newest signed release:
 
 ```sh update
 ./start.sh update
 ```
 
-This pulls the new code, rebuilds osk and starts it again with the same config, expectations and history. The restart sends a test message, and a DOWN notice when osk did not run for a minute or more.
+## More
 
-- Stop osk: `docker compose stop`. Start it again: `docker compose start`.
-- Everything osk keeps is in the Docker volume `osk_data`, at `/data` in the container: `osk.json`, one `.expect` file for each domain, `slack-url` and the history in `state/`. `docker compose down` keeps it; `docker compose down --volumes` deletes it.
-- To correct a wrong webhook URL: `docker compose exec osk vi slack-url`, then `docker compose restart osk`. osk reads the URL only when it starts.
-- Config keys, other webhooks and the heartbeat: [docs/config.md](docs/config.md).
+- [Install, update, uninstall and verify a release](docs/install.md)
+- [The expectations file](docs/expectations.md)
+- [Every alert, and what to do](docs/alerts.md)
+- [What it does not detect](docs/limits.md)
+- [Settings, webhooks, the heartbeat and every command](docs/config.md)
+- [Work on the code](docs/development.md)
+- [Report a security fault](SECURITY.md)
 
-## Build and check
+Anyone may use, change and share osk-dns-watcher for a noncommercial purpose as the [PolyForm Noncommercial License 1.0.0](LICENSE.md) defines it, for example personal study or a hobby project, or use by a charity, an educational institution, a public research organization or a government institution.
 
-`make build` builds osk as one static Linux file for amd64 and one for arm64, which need nothing else to run. `make check` runs every check of the code in containers. See [docs/development.md](docs/development.md).
-
-## License
-
-Source-available under the PolyForm Noncommercial License 1.0.0. See [LICENSE.md](LICENSE.md).
+Issues are welcome. Pull requests are not taken yet.

@@ -10,6 +10,7 @@ internal/             the packages of the tool; internal/store holds the SQLite 
 deploy/               the Docker setup: start.sh, compose.yaml, Dockerfile and the daily command osk-dns-watcher
 docs/                 the documents
 release/              how a release is made and verified (see release/README.md)
+.github/workflows/    the job that builds and pushes the image of a release tag
 build/                the build script of one static binary
 dev/gate/             the checks: the build container, the gate script, the phase scripts, archcheck, the mutation tool, the self-test
 dev/installtest/      the tests of the install paths
@@ -107,11 +108,12 @@ From the environment (the top comment of the `Makefile` names them too):
 | `make vulncheck` | Runs the vulnerability scan alone. |
 | `make release VERSION=<version>` | Builds the files of a release in `out/release/<version>/`. |
 | `make image VERSION=<version>` | Builds the release image from those files. |
-| `make image-digests VERSION=<version>` | Adds the digests of the pushed image to `CONTENTS`. |
+| `make image-push VERSION=<version>` | Builds the release image and pushes it, unless the registry has that tag already. The release job runs it. |
+| `make image-digests VERSION=<version>` | Checks that the pushed image is the image of `make image`, then adds its digests to `CONTENTS`. |
 | `make verify-release VERSION=<version>` | Checks the files of a release as a stranger does ([install.md](install.md#verify-a-release)). |
 | `make lab-up`, `make lab-down` | Starts and stops the DNS lab. |
 
-How a release is made is in `release/README.md`.
+How a release is made is in `release/README.md`. A pushed tag `v<major>.<minor>.<patch>` starts the job `.github/workflows/release-image.yml`, which builds the release image and pushes it to `ghcr.io`; the owner checks it against a build of their own before signing.
 
 ## The DNS lab
 

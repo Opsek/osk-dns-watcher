@@ -20,7 +20,7 @@ override OSK_RELEASE := $(value OSK_RELEASE)
 override OSK_IMAGE := $(value OSK_IMAGE)
 export VERSION OSK_RELEASE OSK_IMAGE
 
-.PHONY: check build vulncheck release image image-digests verify-release lab-up lab-down
+.PHONY: check build vulncheck release image image-push image-digests verify-release lab-up lab-down
 
 check:
 	dev/gate/bin/gate
@@ -36,6 +36,9 @@ release:
 
 image:
 	release/image.sh "$$VERSION"
+
+image-push:
+	release/image.sh "$$VERSION" push
 
 verify-release:
 	release/verify.sh "$$VERSION"

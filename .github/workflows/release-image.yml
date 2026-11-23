@@ -1,0 +1,91 @@
+# Builds the image of a signed release tag v<major>.<minor>.<patch> with the
+# make targets of a release and pushes it as ghcr.io/opsek/osk-dns-watcher:<version>
+# with the token of the job. It pushes nothing else and makes no release: the
+# owner checks the image against a build of their own (make image-digests)
+# before signing. See release/README.md.
+name: release image
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions: {}
+
+# Two runs for one tag would race between the check that the registry has
+# no such tag and the push.
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # actions/checkout can leave the tag as a plain ref to the commit; the
+      # check needs the signed tag object, so it is fetched again. A private
+      # repository answers only with the token, which is given to this one
+      # command, as actions/checkout gives it, and is written nowhere.
+      - name: Check the tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w 0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags --depth=1 origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          version=${GITHUB_REF_NAME#v}
+          sh build/version.sh "$version"
+          commit=$(sh release/verify-tag.sh release/allowed_signers "$GITHUB_REF_NAME")
+          if [ "$GITHUB_REF" != "refs/tags/$GITHUB_REF_NAME" ] || [ "$commit" != "$GITHUB_SHA" ] ||
+            [ "$commit" != "$(git rev-parse HEAD)" ]; then
+            echo "the tag $GITHUB_REF_NAME is on $commit, not on the commit $GITHUB_SHA of this run" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+
+      # make build loads images of two platforms, which only the containerd
+      # image store holds; Docker 28 of this runner uses the classic store.
+      # The arm64 half of each build runs under QEMU. The docker driver of
+      # Docker 28 cannot build the release image (see release/image.sh), so
+      # a BuildKit in a container builds and pushes it.
+      - name: Prepare Docker
+        run: |
+          sudo sh -euc '
+            f=/etc/docker/daemon.json
+            [ -s "$f" ] || echo "{}" >"$f"
+            jq ".features[\"containerd-snapshotter\"] = true" "$f" >"$f.new"
+            mv "$f.new" "$f"
+          '
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}' | grep io.containerd.snapshotter.v1
+          docker run --rm --privileged tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install arm64
+          docker buildx create --name osk-release --driver docker-container \
+            --driver-opt image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe \
+            --bootstrap
+
+      - name: Build
+        run: |
+          make build
+          make release VERSION="$VERSION"
+
+      - name: Push the image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          status=0
+          make image-push VERSION="$VERSION" BUILD_FLAGS="--builder osk-release" || status=$?
+          docker logout ghcr.io
+          exit "$status"

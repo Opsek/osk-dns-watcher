@@ -26,33 +26,47 @@ leading `v`: the tag `v0.1.0` is the version `0.1.0`. Any other text is
 refused before anything runs. A build that is not a release, such as
 `make build`, says `osk-dns-watcher 0.0.0-dev`.
 
-In a git checkout of the release commit, whose tracked files have no change
-that is not committed, in this order:
+The image is built twice from the release commit: by the job
+`.github/workflows/release-image.yml` on GitHub, which pushes it, and by
+you. `make image-digests` names the pushed image in `CONTENTS` only when it
+is the image that your machine built, so what you sign does not depend on
+GitHub. In a git checkout of the release commit, whose tracked files have no
+change that is not committed, in this order:
 
 ```sh
+git tag -s v0.1.0 -m 'osk-dns-watcher 0.1.0'
+git push origin v0.1.0
 make build
 make release VERSION=0.1.0
 make image VERSION=0.1.0
-docker push ghcr.io/opsek/osk-dns-watcher:0.1.0
 make image-digests VERSION=0.1.0
-git tag -s v0.1.0 -m 'osk-dns-watcher 0.1.0'
 make check OSK_RELEASE=0.1.0
 ssh-keygen -Y sign -f <your key file> -n file out/release/0.1.0/SHA256SUMS
 make verify-release VERSION=0.1.0
 ```
 
-The tag is made on the release commit after `make image-digests` and before
-the gate, with your git settings for SSH signatures (`gpg.format=ssh`). The
-first line of its message must be `osk-dns-watcher <version>`, as above: the same key
-signs tags of other projects, and this line binds the tag to osk-dns-watcher. The gate
-requires the tag, of that form and signed by a key of
-`release/allowed_signers`, on the commit that `CONTENTS` names. Sign `SHA256SUMS` only after this gate passed,
+The tag comes first, on the release commit, with your git settings for SSH
+signatures (`gpg.format=ssh`); pushing it starts the job. The first line of
+its message must be `osk-dns-watcher <version>`, as above: the same key
+signs tags of other projects, and this line binds the tag to osk-dns-watcher. The job
+and the gate require the tag, of that form and signed by a key of
+`release/allowed_signers`, on the commit that `CONTENTS` names. A tag is
+never moved: if the job fails before it pushes, run it again; if
+`make image-digests` refuses the image, find out why before any release.
+
+For the first release only, the package of the image is private. Make it
+public after the job and before `make image-digests`, which reads it with
+no login: on GitHub, the organization's tab **Packages**, `osk-dns-watcher`,
+**Package settings**, then under "Danger Zone" **Change visibility** and
+**Public**. This cannot be undone.
+
+Sign `SHA256SUMS` only after the gate passed,
 and check that the file you sign has the SHA-256 that the gate wrote to
 `out/gate.log` in the line `release ok 0.1.0 <sha256 of SHA256SUMS>`.
 `ssh-keygen -Y sign` writes `SHA256SUMS.sig` beside it; `<your key file>` is
 the file of your key, for a hardware key the file of its handle. Nothing may
 change the folder after that. `make verify-release` then checks the files as
-a stranger will.
+a stranger will. Then put the five files on the release page of the tag.
 
 - `make build` makes the build container, which needs the network.
 - `make release` (`release/build.sh`) refuses tracked files with changes, and
@@ -70,15 +84,33 @@ a stranger will.
   stage `runtime` with a binary built from source. Every time in the image is
   the time of the commit, so a second build gives the same digests. Only the
   first pull of the base image, pinned by digest, needs the network.
+- The job runs for a pushed tag `v<major>.<minor>.<patch>`; a version with
+  a label, such as `0.1.0-rc.1`, starts none. It stops unless
+  `release/verify-tag.sh` accepts the tag and the tag is on the commit of
+  the run. Then it runs `make build`, `make release` and `make image-push`
+  with the job's own token. `make image-push` (`release/image.sh <version>
+  push`) builds the image as `make image` does and pushes it, but refuses
+  when the registry holds that tag already, or cannot say that it does not:
+  a release is never replaced. In the job, a BuildKit in a container, pinned
+  by digest, builds it: the Docker 28 of the runner cannot. The job pushes
+  nothing else and makes no release.
 - `make image-digests` (`release/digests.sh`) reads the index of the pushed
   image from the registry, requires that it lists linux/amd64 and then
-  linux/arm64 and nothing else, pulls both platforms by the digest of the
-  index, and adds the `image` lines to `CONTENTS`. It changes no other line
-  and makes `SHA256SUMS` again. Nobody types a digest.
-- `make image` and `make image-digests` first require that the checkout is
-  the commit of `CONTENTS`, that a tag `v<version>`, if there is one, is
-  signed and on that commit (`release/commit.sh`), and that `sha256sum -c
-  SHA256SUMS` passes.
+  linux/arm64 and nothing else, and pulls both platforms by the digest of
+  the index. Each platform must then be the image of `make image` on this
+  machine: the same digest of each layer unpacked, and the same platform and
+  config (entrypoint, command, user, environment, working folder, labels,
+  volumes, ports, health check and the rest). The history and the packed
+  layers are not compared, since two honest builders can write them in two
+  ways. When the images differ, it prints the lines that differ and changes
+  nothing. Otherwise it adds the `image` lines to `CONTENTS`. It changes no
+  other line and makes `SHA256SUMS` again. Nobody types a digest. It needs
+  Docker 28.1 or later. Do not pull `ghcr.io/opsek/osk-dns-watcher:0.1.0` by
+  its tag on this machine: that would replace the image of `make image`.
+- `make image`, `make image-push` and `make image-digests` first require
+  that the checkout is the commit of `CONTENTS`, that a tag `v<version>`, if
+  there is one, is signed and on that commit (`release/commit.sh`), and that
+  `sha256sum -c SHA256SUMS` passes.
 
 `make check OSK_RELEASE=<version>` adds the phase `release`, which builds
 nothing and checks:

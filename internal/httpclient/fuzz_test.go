@@ -85,7 +85,7 @@ func FuzzDate(f *testing.F) {
 		"Mon, 32 Nov 2026 10:04:05 GMT", "Mon, 16 Nov 2026 10:04:05", "Mon, 16 Nov 2026 24:00:00 GMT", "Mon, 16 Nov 2026 10:04:60 GMT",
 		"Thu, 01 Jan 0001 00:00:00 GMT", "Fri, 31 Dec 9999 23:59:59 GMT", "Mon, 16 Nov 99999 10:04:05 GMT", "Sun, 06-Nov-94 08:49:37 GMT",
 		"2026-11-16T10:04:05Z", "1794823445", "", " ", "\x00", "\xff\xfe", "Mon, \x00 Nov 2026 10:04:05 GMT", "GMT", strings.Repeat("GMT", 30000),
-		strings.Repeat("Mon, ", 5000),
+		strings.Repeat("Mon, ", 5000), "Mon Nov 1 0:00:00,1 0000", "Mon Nov 1 0:00:00.5 2026",
 	} {
 		f.Add(s)
 	}

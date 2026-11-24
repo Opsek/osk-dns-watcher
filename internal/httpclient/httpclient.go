@@ -247,7 +247,8 @@ func date(v string) time.Time {
 	if err != nil {
 		return time.Time{}
 	}
-	return t
+	// An HTTP date has whole seconds, but the parser also takes a fraction in the ANSI C form.
+	return t.Truncate(time.Second)
 }
 
 // The failures of a request other than ErrURL, ErrHost, ErrTimeout and

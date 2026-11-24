@@ -1467,10 +1467,12 @@ func TestCAAAlerts(t *testing.T) {
 		in.Open = []Finding{openAt(in.Observation, caaStrong, 0, 1)}
 		decSameChanges(t, Decide(in), nil)
 	})
-	t.Run("one more server with the same set is no news", func(t *testing.T) {
+	t.Run("one more server with the same set is no news, and the alert keeps it", func(t *testing.T) {
 		in := caaInput(t, lines, "corp.test.", caaWeak, caaWeak)
 		in.Open = []Finding{openAt(in.Observation, caaStrong, 0)}
-		decSameChanges(t, Decide(in), nil)
+		want := open(in.Observation, "0 "+caaWeak, "1 "+caaWeak)
+		want.Op = OpRefresh
+		decSameChanges(t, Decide(in), []Change{want})
 	})
 	t.Run("a server that is gone is no news", func(t *testing.T) {
 		in := caaInput(t, lines, "corp.test.", caaWeak, "fail")

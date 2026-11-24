@@ -229,12 +229,16 @@ func TestWritesFollowThePeak(t *testing.T) {
 	}
 	resolve := dlvOpen(t, "d.corp.test.", decide.SeverityLow, decide.SeverityCritical)
 	resolve.Kind, resolve.Alert.Open = alert.EventResolve, false
-	events = append(events, resolve)
+	// A refresh tells nothing new, so no channel gets it, whatever its minimum.
+	refresh := dlvOpen(t, "e.corp.test.", decide.SeverityCritical, decide.SeverityCritical)
+	refresh.Kind, refresh.Alert.ID = alert.EventRefresh, 5
+	events = append(events, resolve, refresh)
 	want := [][]string{
 		{"min-low", "min-high", "min-medium"},
 		{"min-low"},
 		{"min-critical", "min-low", "min-high", "min-medium"},
 		{"min-critical", "min-low", "min-high", "min-medium"},
+		nil,
 	}
 	writes := deliver.Writes(events, channels)
 	if len(writes) != len(events) {

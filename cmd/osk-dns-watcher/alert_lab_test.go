@@ -319,14 +319,15 @@ func TestMinimumSeverityPerChannel(t *testing.T) {
 	slkHookCount(t, "after the change of www", 0)
 
 	// The servers of www now answer under the names that the parent gives,
-	// so the proof of www holds new lines.
+	// and with another address, so the high alert is updated.
 	expCtl(t, "delegate", "corp.test.", "ns1.dnshost.test.", "ns2.dnshost.test.")
+	expCtl(t, "set", "both", "www.corp.test.", "300", "A", n+"98")
 	r2 := slkLabCheck(t, n, file, state, "--slack-min-severity", "critical")
 	slkExpect(t, "the run after the change of the delegation", r2, 1, slices.Concat(slkNameServersFinding(n), []string{
 		"finding high record-set records www.corp.test. A",
 		"  expected " + n + "81",
-		"  seen " + n + "11:53 ns1.dnshost.test. " + n + "99",
-		"  seen " + n + "12:53 ns2.dnshost.test. " + n + "99",
+		"  seen " + n + "11:53 ns1.dnshost.test. " + n + "98",
+		"  seen " + n + "12:53 ns2.dnshost.test. " + n + "98",
 		"checked corp.test. 4 sets: 2 findings, 0 unknown answers",
 		"alert open critical nameservers delegation corp.test. NS",
 		"alert update high record-set records www.corp.test. A",

@@ -497,6 +497,10 @@ func (m *monitor) write(d *watched, k obs.Key, clean bool, now time.Time, events
 		return err
 	}
 	for _, e := range events {
+		// A refresh tells nothing, so it is no alert line.
+		if e.Kind == alert.EventRefresh {
+			continue
+		}
 		m.out.log(levelInfo, d.label, "alert "+e.Label())
 	}
 	return nil

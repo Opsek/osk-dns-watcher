@@ -95,6 +95,11 @@ func apply(tx *sql.Tx, k obs.Key, clean bool, now time.Time, writes []Write) err
 		if err != nil {
 			return err
 		}
+		// The event rows are what was told. A refresh tells nothing: it only
+		// keeps the servers of the alert row current.
+		if w.Event.Kind == alert.EventRefresh {
+			continue
+		}
 		e := w.Event
 		res, err := tx.Exec("INSERT INTO event (alert, kind, severity, was, value, at) VALUES (?, ?, ?, ?, ?, ?)",
 			id, e.Kind.String(), e.Alert.Severity, e.Was, e.Alert.Value, nanos(e.At))

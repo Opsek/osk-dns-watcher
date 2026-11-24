@@ -244,6 +244,8 @@ func dngpChanges(in Input, found []Finding, r Rule) []Change {
 		return []Change{{Op: OpOpen, Finding: found[i], At: in.Now}}
 	case i >= 0 && dngNews(was, found[i]):
 		return []Change{{Op: OpUpdate, Finding: found[i], At: in.Now}}
+	case i >= 0 && decRefresh(was, found[i]):
+		return []Change{{Op: OpRefresh, Finding: found[i], At: in.Now}}
 	case i < 0 && isOpen && !dngBlocked(was, o):
 		return []Change{{Op: OpResolve, Finding: was, At: in.Now}}
 	}
@@ -859,7 +861,8 @@ func TestProbeAlertOpensUpdatesAndResolves(t *testing.T) {
 	}{
 		{"opens", ofRule(run(f, nil, "noname", "noname")), []Change{{Op: OpOpen, Finding: both[0], At: now}}},
 		{"quiet while it lasts", ofRule(run(f, both, "noname", "noname")), nil},
-		{"one more server that says it is no news", ofRule(run(f, one, "noname", "noname")), nil},
+		{"one more server that says it is no news, and the alert keeps it", ofRule(run(f, one, "noname", "noname")),
+			[]Change{{Op: OpRefresh, Finding: both[0], At: now}}},
 		{"a line that is gone is no news", ofRule(run(f, both, "noname", "fail")), nil},
 		{"records resolve", ofRule(run(f, both, "10.53.0.83", "10.53.0.83")), []Change{{Op: OpResolve, Finding: both[0], At: now}}},
 		{"no data resolves", ofRule(run(f, both, "nodata", "nodata")), []Change{{Op: OpResolve, Finding: both[0], At: now}}},

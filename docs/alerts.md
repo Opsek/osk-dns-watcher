@@ -9,7 +9,7 @@ Run the commands on this page, such as `accept` and `validate`, in `osk-dns-watc
 A message has four parts, in this order:
 
 1. The headline.
-2. A block that shows what the file expects under `expected`, what the servers give under `now`, and which servers gave it under `seen at`. In a later message, `seen at` names the servers of the first message or of the last update.
+2. A block that shows what the file expects under `expected`, what the servers give under `now`, and which servers gave it under `seen at`. A server that gives the same value later sends no message, but the alert keeps it, and a later message names it under `seen at`.
 3. The times.
 4. What to do.
 
@@ -118,7 +118,7 @@ Notices go to every channel, whatever its `min_severity`. They have no severity 
 
 ## How an alert ends
 
-Most alerts end when the servers give what the file allows again. They also end when you change the file so that it allows what the servers give, for example with `accept`. The end message starts with ✅ **RESOLVED**. An alert stays open while a server that the alert lists gives no answer. This is also true when this machine loses its route to the address of that server.
+Most alerts end when the servers give what the file allows again. They also end when you change the file so that it allows what the servers give, for example with `accept`. The end message starts with ✅ **RESOLVED**. An alert stays open while a server that showed the problem gives no answer, also a server that showed it only after the first message. This is also true when this machine loses its route to the address of that server.
 
 An alert also stays open while a server still gives the old answer. Some DNS providers have many machines behind one nameserver address, and for up to about a minute after a change some of them still give the old answer. The `RESOLVED` message can then wait for the next run of the check. See [Nameservers and answers](limits.md#nameservers-and-answers) in limits.md.
 

@@ -105,6 +105,10 @@ func storeAlerts(out *lines, s *store.Store, f *expect.File, o obs.Observation, 
 		return err
 	}
 	for _, e := range events.Events {
+		// A refresh tells nothing, so it is no alert line.
+		if e.Kind == alert.EventRefresh {
+			continue
+		}
 		out.add("alert "+e.Label(), struct {
 			Type  string `json:"type"`
 			Label string `json:"label"`

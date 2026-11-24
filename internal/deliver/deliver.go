@@ -56,13 +56,14 @@ type Channel interface {
 // minimum the alert's peak severity reaches. The peak, not the severity: a
 // channel that heard of an alert also hears its later notices and its end.
 // Only while its minimum stays: a channel whose minimum is raised above the
-// peak of an open alert misses the end of that alert.
+// peak of an open alert misses the end of that alert. A refresh tells
+// nothing new, so it goes to no channel.
 func Writes(events []alert.Event, channels []Channel) []store.Write {
 	var writes []store.Write
 	for _, e := range events {
 		w := store.Write{Event: e}
 		for _, c := range channels {
-			if e.Alert.Peak >= c.MinSeverity() {
+			if e.Kind != alert.EventRefresh && e.Alert.Peak >= c.MinSeverity() {
 				w.Deliveries = append(w.Deliveries, store.Delivery{Channel: c.Name(), Label: e.Label(), Body: c.Message(e)})
 			}
 		}

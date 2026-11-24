@@ -148,6 +148,7 @@ func alrNews(t testing.TB, sev decide.Severity) decide.Finding {
 
 var alrKindWords = map[EventKind]string{
 	EventOpen: "open", EventUpdate: "update", EventEscalate: "escalate", EventReminder: "reminder", EventResolve: "resolve",
+	EventRefresh: "refresh",
 }
 
 // alrKind names a kind without its String method, so that a wrong word
@@ -211,8 +212,9 @@ func TestEventKindWords(t *testing.T) {
 		{EventEscalate, 3, "escalate"},
 		{EventReminder, 4, "reminder"},
 		{EventResolve, 5, "resolve"},
+		{EventRefresh, 6, "refresh"},
 		{0, 0, "event0"},
-		{6, 6, "event6"},
+		{7, 7, "event7"},
 		{255, 255, "event255"},
 	} {
 		if uint8(c.kind) != c.value || c.kind.String() != c.word {
@@ -371,6 +373,8 @@ func TestFindingRoundTripsThroughDecide(t *testing.T) {
 		{"record-set, both match", wwwFirst, withWWW, observe(www, at(ns1, w, "10.53.0.81"), at(ns2, w, "10.53.0.81")),
 			[]decide.Op{decide.OpResolve}},
 		{"record-set, the server that showed it fails", wwwFirst, withWWW, observe(www, at(ns1, w, "10.53.0.81"), fails(ns2)), nil},
+		{"record-set, the same value at one more server", wwwFirst, withWWW, observe(www, at(ns1, w, "10.53.0.99"), at(ns2, w, "10.53.0.99")),
+			[]decide.Op{decide.OpRefresh}},
 		{"record-set, another server fails", wwwFirst, withWWW, observe(www, fails(ns1), at(ns2, w, "10.53.0.81")),
 			[]decide.Op{decide.OpResolve}},
 		{"not-covered, nothing new", mailFirst, withWWW, mailFirst, nil},
@@ -540,9 +544,45 @@ func TestChangeFindsOpenAlertByIdentity(t *testing.T) {
 	}
 }
 
+// A refresh tells nothing: its event keeps Noticed, so the time to the next
+// reminder runs on, and it takes the servers, value and Expected of the
+// finding, as an update would store them. A reminder that is due takes them
+// in place of a refresh of its own, so the alert still gets one event.
+func TestRefreshKeepsNoticedAndGivesWayToAReminder(t *testing.T) {
+	a := alrStored(t, decide.SeverityMedium, decide.SeverityHigh)
+	f := alrNews(t, decide.SeverityMedium)
+	refreshed := a
+	refreshed.Expected, refreshed.Value, refreshed.Lines = f.Expected, f.Value, lines(f.Seen)
+	refresh := []decide.Change{{Op: decide.OpRefresh, Finding: f, At: alrNow}}
+
+	out := Transition(Input{Open: []Alert{a}, Changes: refresh, Now: alrNow})
+	alrSame(t, "a refresh", out.Events, []Event{{Kind: EventRefresh, Alert: refreshed, Was: decide.SeverityMedium, At: alrNow}})
+	if out.Clean {
+		t.Error("a refresh leaves the alert open, but the check is Clean")
+	}
+
+	reminded := refreshed
+	reminded.Noticed = alrNow
+	due := Input{Open: []Alert{a}, Changes: refresh, Now: alrNow, Policy: Policy{Remind: time.Hour}}
+	alrSame(t, "a refresh and a due reminder", Transition(due).Events,
+		[]Event{{Kind: EventReminder, Alert: reminded, Was: decide.SeverityMedium, At: alrNow}})
+
+	due.Policy.Remind = 2 * time.Hour
+	alrSame(t, "a refresh before the reminder is due", Transition(due).Events,
+		[]Event{{Kind: EventRefresh, Alert: refreshed, Was: decide.SeverityMedium, At: alrNow}})
+
+	if out := Transition(Input{Changes: refresh, Now: alrNow}); len(out.Events) != 0 || !out.Clean {
+		t.Errorf("a refresh with nothing open: events %v, Clean %v; want none, Clean", alrBrief(out.Events), out.Clean)
+	}
+	update := decide.Change{Op: decide.OpUpdate, Finding: alrNews(t, decide.SeverityMedium), At: alrNow}
+	if out := Transition(Input{Open: []Alert{a}, Changes: append(refresh, update), Now: alrNow}); len(out.Events) != 1 || out.Events[0].Kind != EventRefresh {
+		t.Errorf("a refresh, then an update of the same alert: events %v; want the refresh alone", alrBrief(out.Events))
+	}
+}
+
 func TestUnknownOpIsIgnored(t *testing.T) {
 	a := alrStored(t, decide.SeverityMedium, decide.SeverityMedium)
-	for _, op := range []decide.Op{0, 4, 255} {
+	for _, op := range []decide.Op{0, 5, 255} {
 		ch := []decide.Change{{Op: op, Finding: alrNews(t, decide.SeverityHigh), At: alrNow}}
 		if out := Transition(Input{Changes: ch, Now: alrNow}); len(out.Events) != 0 || !out.Clean {
 			t.Errorf("op %d with nothing open: events %v, Clean %v; want none, Clean", op, alrBrief(out.Events), out.Clean)
@@ -767,7 +807,7 @@ func (g *alrGen) alert(k obs.Key) Alert {
 }
 
 func (g *alrGen) change(k obs.Key, now time.Time) decide.Change {
-	return decide.Change{Op: alrPick(g.rng, 0, decide.OpOpen, decide.OpUpdate, decide.OpResolve, 4), At: now,
+	return decide.Change{Op: alrPick(g.rng, 0, decide.OpOpen, decide.OpUpdate, decide.OpResolve, decide.OpRefresh, 5), At: now,
 		Finding: decide.Finding{Rule: alrPick(g.rng, decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered),
 			Severity: alrPick(g.rng, alrSeverities...), Check: k, Expected: alrPick(g.rng, "", "10.53.0.80"),
 			Seen: slices.Clone(g.seen[:g.rng.IntN(len(g.seen)+1)]), Value: alrPick(g.rng, "v1", "v2", "v3")}}
@@ -868,10 +908,10 @@ func alrFollowChanges(t *testing.T, where string, open []Alert, changes []decide
 			t.Fatalf("%s: two events of %q:%s", where, id, alrShow(events))
 		}
 		had[id] = true
-		if e.Kind == EventReminder {
+		if e.Kind == EventReminder || e.Kind == EventRefresh {
 			reminders = true
 			if !slices.Contains(openIDs, id) {
-				t.Fatalf("%s: a reminder of %q, which was not open:%s", where, id, alrShow(events))
+				t.Fatalf("%s: a %s of %q, which was not open:%s", where, alrKind(e.Kind), id, alrShow(events))
 			}
 			continue
 		}
@@ -890,7 +930,7 @@ func alrFollowChanges(t *testing.T, where string, open []Alert, changes []decide
 func TestOneOpenAlertProperty(t *testing.T) {
 	keys := alrKeys(t)
 	rules := []decide.Rule{decide.RuleNameServers, decide.RuleRecordSet, decide.RuleNotCovered}
-	ops := []decide.Op{0, decide.OpOpen, decide.OpUpdate, decide.OpResolve, 4}
+	ops := []decide.Op{0, decide.OpOpen, decide.OpUpdate, decide.OpResolve, decide.OpRefresh, 5}
 	events := 0
 	for c := range alrCases {
 		rng := alrRand(c)
@@ -932,6 +972,8 @@ func TestOneOpenAlertProperty(t *testing.T) {
 				}
 				if was, ok := stored[e.Alert.ID]; !ok || was.Identity() != e.Alert.Identity() {
 					t.Fatalf("%s: event of alert %d, which is not open with identity %q", where, e.Alert.ID, e.Alert.Identity())
+				} else if e.Kind == EventRefresh && !e.Alert.Noticed.Equal(was.Noticed) {
+					t.Fatalf("%s: a refresh moved Noticed from %v to %v", where, was.Noticed, e.Alert.Noticed)
 				}
 				if e.Kind == EventResolve {
 					delete(stored, e.Alert.ID)

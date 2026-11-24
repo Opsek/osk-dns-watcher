@@ -593,8 +593,9 @@ func noticeRule(r decide.Rule) bool {
 }
 
 // ownNotice reports a change that tells the operator about the zone anyway,
-// also when it ends an alert because a change was put back.
-func ownNotice(c decide.Change) bool { return noticeRule(c.Finding.Rule) }
+// also when it ends an alert because a change was put back. A refresh tells
+// nothing.
+func ownNotice(c decide.Change) bool { return c.Op != decide.OpRefresh && noticeRule(c.Finding.Rule) }
 
 // stands reports whether an alert of a notice rule of check k was open
 // before its run: the run left that difference standing, or ended it with a

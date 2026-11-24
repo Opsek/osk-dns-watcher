@@ -22,6 +22,9 @@ const (
 	EventEscalate
 	EventReminder
 	EventResolve
+	// EventRefresh keeps the servers and value of an open alert current when
+	// they tell nothing new. It is stored and never sent.
+	EventRefresh
 )
 
 var kindWords = map[EventKind]string{
@@ -30,6 +33,7 @@ var kindWords = map[EventKind]string{
 	EventEscalate: "escalate",
 	EventReminder: "reminder",
 	EventResolve:  "resolve",
+	EventRefresh:  "refresh",
 }
 
 func (k EventKind) String() string {
@@ -113,7 +117,7 @@ type Input struct {
 }
 
 type Output struct {
-	Events []Event // at most one per alert: in Changes order, then reminders in Open order
+	Events []Event // at most one per alert: in Changes order, then reminders and refreshes in Open order
 	Clean  bool    // no alert of the check is open after the events, and Failed is false
 }
 
@@ -123,20 +127,33 @@ type Output struct {
 func Transition(in Input) Output {
 	open := firstOfEach(in.Open)
 	var events []Event
-	var done []string
+	var done, refreshed []string
 	for _, c := range in.Changes {
 		id := Identity(c.Finding.Rule, c.Finding.Check)
 		if slices.Contains(done, id) {
 			continue
 		}
 		done = append(done, id)
+		// A refresh waits for the reminders: a reminder that is due takes the
+		// new servers in place of a refresh of its own.
+		if c.Op == decide.OpRefresh {
+			if i := slices.IndexFunc(open, func(a Alert) bool { return a.Identity() == id }); i >= 0 {
+				open[i] = refresh(open[i], c.Finding)
+				refreshed = append(refreshed, id)
+			}
+			continue
+		}
 		if e, ok := onChange(c, open, in); ok {
 			events = append(events, e)
 		}
 	}
 	for _, a := range open {
-		if !hasEvent(events, a) && due(a, in) {
+		switch {
+		case hasEvent(events, a):
+		case due(a, in):
 			events = append(events, reminded(a, in.Now))
+		case slices.Contains(refreshed, a.Identity()):
+			events = append(events, Event{Kind: EventRefresh, Alert: a, Was: a.Severity, At: in.Now})
 		}
 	}
 	return Output{Events: events, Clean: !in.Failed && !stillOpen(open, events)}
@@ -153,7 +170,8 @@ func firstOfEach(alerts []Alert) []Alert {
 }
 
 // onChange gives the event of c for the alert of its identity in open; a
-// resolve of an alert that is not open, and an unknown Op, give none.
+// resolve of an alert that is not open, a refresh (Transition takes it) and
+// an unknown Op give none.
 func onChange(c decide.Change, open []Alert, in Input) (Event, bool) {
 	id := Identity(c.Finding.Rule, c.Finding.Check)
 	i := slices.IndexFunc(open, func(a Alert) bool { return a.Identity() == id })
@@ -168,6 +186,7 @@ func onChange(c decide.Change, open []Alert, in Input) (Event, bool) {
 			return Event{}, false
 		}
 		return resolved(open[i], c.Finding.Expected, in.Now), true
+	case decide.OpRefresh:
 	}
 	return Event{}, false
 }
@@ -191,6 +210,14 @@ func updated(a Alert, f decide.Finding, now time.Time) Event {
 	a.Peak = max(a.Peak, f.Severity)
 	a.Noticed = now
 	return Event{Kind: kind, Alert: a, Was: was, At: now}
+}
+
+// refresh gives a with the servers, value and Expected of f, as an update
+// would store them. Noticed stays: a refresh tells nothing, so the time to the
+// next reminder runs on.
+func refresh(a Alert, f decide.Finding) Alert {
+	a.Expected, a.Value, a.Lines = f.Expected, f.Value, lines(f.Seen)
+	return a
 }
 
 // resolved takes Expected from the change: the line in force when it resolves.

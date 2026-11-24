@@ -757,7 +757,7 @@ func TestGlueAlertOpensUpdatesAndResolves(t *testing.T) {
 		{"the same difference again", f, []Finding{glue}, bad, false, nil},
 		{"a second server shows it", f, []Finding{glue}, bad2, false, []Change{change(OpUpdate, glue2)}},
 		{"a server drops out", f, []Finding{glue2}, bad, false, nil},
-		{"another server shows the same address", f, []Finding{glueB}, bad, false, nil},
+		{"another server shows the same address", f, []Finding{glueB}, bad, false, []Change{change(OpRefresh, glue)}},
 		{"the same server gives another address", f, []Finding{glue}, badOther, false, []Change{change(OpUpdate, glueOther)}},
 		{"a second host starts to differ", f, []Finding{glue}, secondHost, false, []Change{change(OpUpdate, glueSecond)}},
 		{"a failure beside it is no news", f, []Finding{glue}, badAndDown, false, nil},
@@ -830,8 +830,8 @@ func TestGoneAlertOpensUpdatesAndResolves(t *testing.T) {
 		{"opens beside nameservers, in rule order", f, nil, gone1, false, []Change{change(OpOpen, ns1), change(OpOpen, gone)}},
 		{"stays", f, []Finding{ns1, gone}, gone1, false, nil},
 		{"opens beside an open nameservers alert", f, []Finding{ns1}, gone1, false, []Change{change(OpOpen, gone)}},
-		{"a second server says it too", f, []Finding{gone}, gone2, false, []Change{change(OpOpen, ns2)}},
-		{"a second server says it too, both open", f, []Finding{ns1, gone}, gone2, false, nil},
+		{"a second server says it too", f, []Finding{gone}, gone2, false, []Change{change(OpOpen, ns2), change(OpRefresh, goneB)}},
+		{"a second server says it too, both open", f, []Finding{ns1, gone}, gone2, false, []Change{change(OpRefresh, ns2), change(OpRefresh, goneB)}},
 		{"one of the two servers that said it fails", f, []Finding{ns2, goneB}, goneAndFail, false, nil},
 		{"a failure beside it is no news", f, []Finding{ns1, gone}, goneAndFail, false, nil},
 		{"a server that finds the domain is no news", f, []Finding{ns1, gone}, goneAndFine, false, nil},
@@ -1189,6 +1189,8 @@ func regOutcomeOf(in Input, or regOracle, r Rule) regOutcome {
 			out.change = &Change{Op: OpOpen, Finding: *want, At: in.Now}
 		} else if regNews(*was, *want) {
 			out.change = &Change{Op: OpUpdate, Finding: *want, At: in.Now}
+		} else if decRefresh(*was, *want) {
+			out.change = &Change{Op: OpRefresh, Finding: *want, At: in.Now}
 		}
 	case was == nil:
 		out.noResolve = true
@@ -1596,15 +1598,17 @@ func TestGlueNewsForAnOpenAlert(t *testing.T) {
 		o := observe(regGlue(0, bad1, ok2))
 		run(f, regWith(both, func(g *Finding) { g.Expected = l2 }), o, []Change{change(OpUpdate, find(f, o, RuleGlue))})
 	})
-	t.Run("the same parts and a value at one more server: no update", func(t *testing.T) {
+	t.Run("the same parts and a value at one more server: a refresh", func(t *testing.T) {
 		o := observe(regGlue(0, bad1, ok2), regGlue(1, ok1, bad2), regGlue(2, bad1, ok2))
-		if more := find(f, o, RuleGlue); more.Expected != both.Expected || strings.Count(more.Value, "\n") != 2 {
+		more := find(f, o, RuleGlue)
+		if more.Expected != both.Expected || strings.Count(more.Value, "\n") != 2 {
 			t.Fatalf("expected %q, value %q; want %q and three lines", more.Expected, more.Value, both.Expected)
 		}
-		run(f, both, o, nil)
+		run(f, both, o, []Change{change(OpRefresh, more)})
 	})
-	t.Run("a part gone and a value at one more server: no update", func(t *testing.T) {
-		run(f, both, observe(regDown(0), regGlue(1, ok1, bad2), regGlue(2, ok1, bad2)), nil)
+	t.Run("a part gone and a value at one more server: a refresh", func(t *testing.T) {
+		o := observe(regDown(0), regGlue(1, ok1, bad2), regGlue(2, ok1, bad2))
+		run(f, both, o, []Change{change(OpRefresh, find(f, o, RuleGlue))})
 	})
 	t.Run("the same parts and a new value: update", func(t *testing.T) {
 		o := observe(regGlue(0, bad1, ok2), regGlue(1, ok1, bad2), regGlue(2, "ns1.corp.test.=10.53.0.97", ok2))

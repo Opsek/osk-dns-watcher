@@ -239,7 +239,8 @@ func TestRuleSeverityAndOpWords(t *testing.T) {
 		{Op(2).String(), "update"},
 		{Op(3).String(), "resolve"},
 		{Op(0).String(), "op0"},
-		{Op(4).String(), "op4"},
+		{Op(4).String(), "refresh"},
+		{Op(5).String(), "op5"},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
@@ -247,7 +248,7 @@ func TestRuleSeverityAndOpWords(t *testing.T) {
 	}
 	if !slices.Equal([]Rule{RuleInvalidFile, RuleNotCovered, RuleZone, RuleNameServers, RuleRecordSet}, []Rule{1, 2, 3, 4, 5}) ||
 		!slices.Equal([]Severity{SeverityLow, SeverityMedium, SeverityHigh, SeverityCritical}, []Severity{1, 2, 3, 4}) ||
-		!slices.Equal([]Op{OpOpen, OpUpdate, OpResolve}, []Op{1, 2, 3}) {
+		!slices.Equal([]Op{OpOpen, OpUpdate, OpResolve, OpRefresh}, []Op{1, 2, 3, 4}) {
 		t.Error("a constant has another value than its word")
 	}
 }
@@ -811,7 +812,7 @@ func TestDecideUpdatesOnlyOnNewText(t *testing.T) {
 	}{
 		{"nothing open", nil, both, []Change{d.change(OpOpen, now)}},
 		{"same text at other times", []Finding{same}, both, nil},
-		{"one more server with the same value", []Finding{onlyNS1}, both, nil},
+		{"one more server with the same value", []Finding{onlyNS1}, both, []Change{d.change(OpRefresh, now)}},
 		{"other expected", []Finding{otherExpected}, both, []Change{d.change(OpUpdate, now)}},
 		{"other severity", []Finding{otherSeverity}, both, []Change{d.change(OpUpdate, now)}},
 		{"same lines in another order", []Finding{reordered}, both, nil},
@@ -829,20 +830,47 @@ func TestDecideUpdatesOnlyOnNewText(t *testing.T) {
 }
 
 // The addresses of a provider take up a change one after another. One more
-// server with a value that the alert shows is no news; a value that the alert
-// does not show is.
+// server with a value that the alert shows is no news, but the alert keeps
+// that server: a refresh carries both lines. A value that the alert does not
+// show is news.
 func TestDecideUpdatesOnlyOnANewValue(t *testing.T) {
 	d := decNewDecide(t)
 	ns1, ns2 := "ns1.corp.test.", "ns2.corp.test."
 	open := d.one(d.f, d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.81")))
+	both := d.one(d.f, d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.99")))
+	if len(both.Seen) != 2 {
+		t.Fatalf("want the finding of both servers:%s", decShow([]Finding{both}))
+	}
 	t.Run("the same value at one more server", func(t *testing.T) {
-		both := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.99"))
-		decSameChanges(t, d.decide([]Finding{open}, both), nil)
+		o := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.99"))
+		decSameChanges(t, d.decide([]Finding{open}, o), []Change{d.change(OpRefresh, both)})
+	})
+	t.Run("the same servers again", func(t *testing.T) {
+		o := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.99"))
+		decSameChanges(t, d.decide([]Finding{both}, o), nil)
 	})
 	t.Run("another value at that server", func(t *testing.T) {
-		other := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.98"))
-		decSameChanges(t, d.decide([]Finding{open}, other), []Change{d.change(OpUpdate, d.one(d.f, other))})
+		for _, was := range []Finding{open, both} {
+			other := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.98"))
+			decSameChanges(t, d.decide([]Finding{was}, other), []Change{d.change(OpUpdate, d.one(d.f, other))})
+		}
 	})
+}
+
+// decRefresh reports whether f tells nothing that was does not, yet shows a
+// line of Value that was does not hold: the alert keeps such a line without
+// a message. Disagree alerts and policy checks keep the lines they had.
+func decRefresh(was, f Finding) bool {
+	if f.Rule == RuleDisagree || f.Check.Kind == obs.KindPolicy {
+		return false
+	}
+	old := strings.Split(was.Value, "\n")
+	for _, l := range strings.Split(f.Value, "\n") {
+		if l != "" && !slices.Contains(old, l) {
+			return true
+		}
+	}
+	return false
 }
 
 // decValueLine gives a line of a Value without the server of seen that

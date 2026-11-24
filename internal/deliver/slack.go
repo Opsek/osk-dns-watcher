@@ -388,7 +388,7 @@ func headline(e alert.Event) string {
 			return title(":warning:", "CHECK", "")
 		}
 		return title(":white_check_mark:", "RESOLVED", "")
-	case alert.EventOpen:
+	case alert.EventOpen, alert.EventRefresh: // Writes never sends a refresh
 		return title(emoji[sev], word, "")
 	}
 	return title(emoji[sev], word, "")

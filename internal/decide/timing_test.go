@@ -616,6 +616,8 @@ func timGeneral(in Input) []Change {
 			changes = append(changes, Change{Op: OpOpen, Finding: f, At: in.Now})
 		} else if timNews(open[i], f) {
 			changes = append(changes, Change{Op: OpUpdate, Finding: f, At: in.Now})
+		} else if decRefresh(open[i], f) {
+			changes = append(changes, Change{Op: OpRefresh, Finding: f, At: in.Now})
 		}
 	}
 	if timNoUsable(in.Observation) {

@@ -602,6 +602,21 @@ func TestOtherRulesLeaveTheRoundUnexplained(t *testing.T) {
 	}
 }
 
+// A refresh only keeps the servers of an alert current and sends nothing,
+// so it does not explain a round, also for a rule whose message would.
+func TestRefreshLeavesTheRoundUnexplained(t *testing.T) {
+	for _, rule := range []decide.Rule{decide.RuleRecordSet, decide.RuleZone, decide.RuleSPF} {
+		s := schMoved(t)
+		for i, k := range schZoneKeys(t) {
+			changes := []decide.Change{{Op: decide.OpRefresh, Finding: decide.Finding{Rule: rule, Check: k}, At: schSec(9)}}
+			_, moves, ok := schEnd(t, s, schUsable(t, k, schSec(8)), schSec(9+i), changes...)
+			if i == 2 {
+				schWantJudged(t, fmt.Sprintf("refresh %s, then %s", rule, k), moves, ok, true, schBothMoved)
+			}
+		}
+	}
+}
+
 func TestChangeOfARunThatStartedAtTheLastQuietSerialVerdictExplainsNothing(t *testing.T) {
 	zone := schZoneKeys(t)
 	s := schMoved(t)

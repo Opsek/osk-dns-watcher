@@ -849,6 +849,8 @@ func (g *dngRig) feed(start time.Time, words ...string) {
 				g.t.Fatalf("run %d: the alert ended %d runs after a run that went on with the split, want at least %d", g.run, g.run-g.lastGo, DisagreeRuns)
 			}
 			g.open = nil
+		case decide.OpRefresh:
+			g.t.Fatalf("run %d: a refresh of a disagree alert, whose servers rotate by design", g.run)
 		}
 	}
 	if n := len(g.open); n > 1 {

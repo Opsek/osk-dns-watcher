@@ -95,19 +95,22 @@ var severityWords = map[Severity]string{
 
 func (s Severity) String() string { return word(severityWords, s, "severity") }
 
-// Op is what a change does to an alert.
+// Op is what a change does to an alert. OpRefresh keeps the servers of an
+// open alert current and is never told.
 type Op uint8
 
 const (
 	OpOpen Op = iota + 1
 	OpUpdate
 	OpResolve
+	OpRefresh
 )
 
 var opWords = map[Op]string{
 	OpOpen:    "open",
 	OpUpdate:  "update",
 	OpResolve: "resolve",
+	OpRefresh: "refresh",
 }
 
 func (o Op) String() string { return word(opWords, o, "op") }
@@ -180,13 +183,13 @@ type Finding struct {
 
 type Change struct {
 	Op      Op
-	Finding Finding   // open, update: the finding now; resolve: the open finding that ends
+	Finding Finding   // open, update, refresh: the finding now; resolve: the open finding that ends
 	At      time.Time // the time given to Decide, FileChanges or ZoneChanges
 }
 
 type Input struct {
 	Expect       *expect.File // the file in force (expect.Keep); nil when no file was ever valid
-	Open         []Finding    // open alerts: the finding that opened or last updated each
+	Open         []Finding    // open alerts: the finding that opened, last updated or last refreshed each
 	Observation  obs.Observation
 	Now          time.Time
 	FailingSince time.Time     // start of the unbroken series of runs of this check with no usable answer, this one included; zero when this run had one
@@ -527,9 +530,25 @@ func openOrUpdate(found, open []Finding, now time.Time) []Change {
 			changes = append(changes, Change{Op: OpOpen, Finding: f, At: now})
 		case changed(open[i], f):
 			changes = append(changes, Change{Op: OpUpdate, Finding: f, At: now})
+		case moreServers(open[i], f):
+			changes = append(changes, Change{Op: OpRefresh, Finding: f, At: now})
 		}
 	}
 	return changes
+}
+
+// moreServers reports whether f shows a server line that was does not hold,
+// when that is no news. The alert keeps the line all the same: a failure at
+// that server must hold the alert open, and a later message lists it. The
+// servers of a disagree alert rotate by design, and a policy host answers
+// from another address at almost every fetch, so their alerts keep the
+// servers that they were told with.
+func moreServers(was, f Finding) bool {
+	if f.Rule == RuleDisagree || f.Check.Kind == obs.KindPolicy {
+		return false
+	}
+	old := lines(was.Value)
+	return slices.ContainsFunc(lines(f.Value), func(l string) bool { return !slices.Contains(old, l) })
 }
 
 // changed reports whether f tells more than was. A line that is gone is no

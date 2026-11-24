@@ -1121,6 +1121,8 @@ func dngOracle(in Input) dngWant {
 			w.changes = append(w.changes, Change{Op: OpOpen, Finding: f, At: in.Now})
 		case dngNews(was, f):
 			w.changes = append(w.changes, Change{Op: OpUpdate, Finding: f, At: in.Now})
+		case decRefresh(was, f):
+			w.changes = append(w.changes, Change{Op: OpRefresh, Finding: f, At: in.Now})
 		}
 	}
 	for _, was := range mine {

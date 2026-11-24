@@ -588,6 +588,25 @@ func TestApplyStoresEachEventKind(t *testing.T) {
 	}
 }
 
+// A refresh keeps the servers of the alert row current. It was told to no
+// one, so it has no event row and no delivery.
+func TestApplyStoresARefreshInTheAlertRowOnly(t *testing.T) {
+	s := stoOpen(t, stoDir(t))
+	k := stoWWW(t)
+	a := stoAlert(t, decide.RuleRecordSet, k, "10.53.0.99")
+	stoApply(t, s, k, false, stoT0, stoWrite(alert.EventOpen, a, decide.SeverityHigh, stoT0, "slack"))
+	a.ID = stoNth(t, s, k, 1, 0).ID
+	a.Value += "\n10.53.0.12:53 ns2.corp.test. 10.53.0.99"
+	a.Lines = append(a.Lines, stoLine(t, "ns2.corp.test.", "10.53.0.12:53", "10.53.0.99", 300, stoT0.Add(time.Minute)))
+	stoApply(t, s, k, true, stoT0.Add(time.Minute), stoWrite(alert.EventRefresh, a, decide.SeverityHigh, stoT0.Add(time.Minute)))
+	if got, want := stoCounts(t, s), "alert 1, event 1, delivery 1, check_state 1"; got != want {
+		t.Errorf("after a refresh the rows are %s, want %s", got, want)
+	}
+	if got := stoOpenAlerts(t, s, k); len(got) != 1 || stoAlertText(got[0]) != stoAlertText(a) {
+		t.Errorf("after a refresh OpenAlerts gives %v, want the refreshed alert %s", got, stoAlertText(a))
+	}
+}
+
 func TestTwoOpensOfOneIdentityWriteNothing(t *testing.T) {
 	s := stoOpen(t, stoDir(t))
 	k := stoWWW(t)

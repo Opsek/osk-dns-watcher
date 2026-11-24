@@ -442,13 +442,16 @@ func TestEmlChangedIsNewValueOrNewWord(t *testing.T) {
 	update := func(o obs.Observation) []Change {
 		return []Change{{Op: OpUpdate, Finding: emlOne(t, f, o), At: decT0.Add(time.Minute)}}
 	}
+	refresh := func(o obs.Observation) []Change {
+		return []Change{{Op: OpRefresh, Finding: emlOne(t, f, o), At: decT0.Add(time.Minute)}}
+	}
 	for _, c := range []struct {
 		name string
 		o    obs.Observation
 		want []Change
 	}{
 		{"the same run", run(soft, "fail"), nil},
-		{"the same set at one more server is no news", run(soft, soft), nil},
+		{"the same set at one more server is no news, and the alert keeps it", run(soft, soft), refresh(run(soft, soft))},
 		{"another set at the same server is a new value and a new word", run(wide, "fail"), update(run(wide, "fail"))},
 		{"the server that matched now differs", run(soft, wide), update(run(soft, wide))},
 	} {
@@ -487,8 +490,8 @@ func TestEmlChangedIsNewValueOrNewWord(t *testing.T) {
 	})
 }
 
-// Every mail rule opens, stays quiet on a repeat and on the same set at one
-// more server, and updates on a new set.
+// Every mail rule opens, stays quiet on a repeat, keeps the same set at one
+// more server without a message, and updates on a new set.
 func TestEmlEachRuleOpensAndUpdates(t *testing.T) {
 	for _, k := range emlKinds {
 		t.Run(k.word, func(t *testing.T) {
@@ -500,7 +503,7 @@ func TestEmlEachRuleOpensAndUpdates(t *testing.T) {
 			in.Open = []Finding{found}
 			decSameChanges(t, Decide(in), nil)
 			in.Observation = emlObserve(t, k.owner, dnswire.TypeTXT, k.now, k.now, k.now)
-			decSameChanges(t, Decide(in), nil)
+			decSameChanges(t, Decide(in), []Change{{Op: OpRefresh, Finding: emlOne(t, f, in.Observation), At: in.Now}})
 
 			in.Observation = emlObserve(t, k.owner, dnswire.TypeTXT, k.now, k.now, "nodata")
 			again := emlOne(t, f, in.Observation)

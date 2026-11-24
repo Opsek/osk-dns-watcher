@@ -169,7 +169,7 @@ func refusal(r decide.Rule) string {
 	case decide.RuleCheckFailing:
 		return "nothing to accept: no server answers"
 	case decide.RuleZoneChanged:
-		return "nothing to accept: no watched record changed"
+		return "nothing to accept: no check saw a watched record change"
 	case decide.RuleDisagree:
 		return "nothing to accept: the servers give different sets; find the server that is wrong"
 	case decide.RuleAliasTarget, decide.RuleMailTarget:

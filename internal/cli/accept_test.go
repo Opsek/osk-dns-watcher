@@ -319,7 +319,7 @@ func TestAcceptRefusesWhatItCannotAcceptAndChangesNothing(t *testing.T) {
 		{"zone", cannot + "zone alert: add or remove the NS pair of the subzone by hand"},
 		{"invalid-file", "accept cannot change the file for an invalid-file alert: fix the file"},
 		{"check-failing", cannot + "check-failing alert: nothing to accept: no server answers"},
-		{"zone-changed", cannot + "zone-changed alert: nothing to accept: no watched record changed"},
+		{"zone-changed", cannot + "zone-changed alert: nothing to accept: no check saw a watched record change"},
 		{"disagree", "the servers disagree: 10.53.0.98; 10.53.0.99; edit the file by hand"},
 		{"txt", `the file changed since this alert: corp.test. TXT is now "v=spf1 mx -all"`},
 		{"ftp", fmt.Sprintf("the new line is not valid: line %d: %s; edit the file by hand", bad.Problems[0].Line, bad.Problems[0].Text)},

@@ -27,7 +27,7 @@ const (
 	RuleNameServers                    // the parent delegates the domain to other name servers
 	RuleRecordSet                      // a server gives another record set than expected
 	RuleCheckFailing                   // the check has had no usable answer for too long
-	RuleZoneChanged                    // the serial of the zone moved and no watched record changed
+	RuleZoneChanged                    // the serial of the zone moved and no check saw a watched record change
 	RuleGlue                           // a glue address at the parent differs from the expectations
 	RuleDS                             // the DS set at the parent differs from the expectations or is gone
 	RuleGone                           // the parent says that the domain does not exist

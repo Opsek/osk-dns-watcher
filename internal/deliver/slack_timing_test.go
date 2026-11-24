@@ -132,7 +132,7 @@ func timScope(t *testing.T) obs.Key {
 
 func TestSlackTextOfZoneChangedForOpenUpdateAndResolve(t *testing.T) {
 	scope := timScope(t)
-	head := "the zone `corp.test.` changed, and no watched record changed"
+	head := "the zone `corp.test.` changed, and no check saw a watched record change"
 	two := timLineNS2 + "\n" + timLineNS1
 	for _, c := range []struct {
 		name string
@@ -189,7 +189,7 @@ func TestSlackTextOfCheckFailingOfAnotherZoneNamesTheName(t *testing.T) {
 
 func TestSlackTextOfZoneChangedShowsAtMostSixServers(t *testing.T) {
 	scope := timScope(t)
-	head := ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no watched record changed"
+	head := ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no check saw a watched record change"
 	var lines, shown []string
 	for i := range 8 {
 		host := "10.53.0." + strconv.Itoa(11+i) + ":53 ns" + strconv.Itoa(1+i) + ".corp.test. serial 1 until "
@@ -232,7 +232,7 @@ func TestSlackTextOfTimingRulesCleansTheValue(t *testing.T) {
 	text = SlackText(changed)
 	longShown := strings.Replace(strings.Replace(long, "2026-11-13T10:00:00Z", "10:00:00", 1), "2026-11-13T10:00:15Z", "10:00:15", 1)
 	view := []string{Clean(odd, 160), Clean(longShown, 160), Clean(odd, 160), Clean(longShown, 160), Clean(odd, 160), Clean(longShown, 160), "and 12 more servers"}
-	timSameText(t, text, timText(":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no watched record changed",
+	timSameText(t, text, timText(":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no check saw a watched record change",
 		view, timClockOpen, timChangedAction))
 	timPlainText(t, text, 1)
 }

@@ -61,6 +61,7 @@ A channel gets the messages of an alert when the highest severity of the alert r
 |---|---|---|
 | **HIGH** · `old.example.net.` does not exist, and an alias in `example.com.` points at it | A CNAME or DNAME of the file points at a name that does not exist. Whoever creates that name receives the traffic of the alias. | Change or remove the alias now. |
 | **CRITICAL** · nameserver `ns2.example.net.` of `example.com.` does not exist | The NS line names a host that does not exist. Whoever creates that host can answer for your domain. | Replace the host at your registrar now, or restore it. |
+| **CRITICAL** · nameserver `ns2.example.net.` of the subzone `lab.example.com.` does not exist | The NS line of a subzone names a host that does not exist, and the NS line of the domain does not name it. Whoever creates that host can answer for the subzone. | Replace the host in the NS records of the subzone at your DNS provider now, or restore it. |
 | **HIGH** · `mx.example.net.` does not exist, and the mail records of `example.com.` point at it | An MX record, or an SPF include or redirect, names a name that does not exist. Whoever creates that name can receive or send mail as your domain. | Change the MX or SPF record now. |
 
 The service checks only the names outside the domain's own zone, every 5 minutes.

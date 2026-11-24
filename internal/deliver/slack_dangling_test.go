@@ -266,6 +266,42 @@ func TestSlackTextOfTheNameServerHostAlertWhoseDomainIsGone(t *testing.T) {
 	}, dngOpenClock, ":point_right: "+r.action), r.openSpans)
 }
 
+// A host that only the NS lines of a subzone name can answer only for that
+// subzone, and those lines are at the DNS provider, not at the registrar: the
+// words name the subzone of the first line. One line of the domain itself
+// keeps the words of the domain, and so does a line that is not an NS line
+// below it. Another rule keeps its own words.
+func TestSlackTextOfTheNameServerHostAlertOfASubzone(t *testing.T) {
+	const lab, dev, apex = "lab.corp.test. NS ns3.dnshost.test.", "dev.corp.test. NS ns3.dnshost.test.", "corp.test. NS ns3.dnshost.test."
+	sub := dngRules()[2]
+	sub.headline = "nameserver `ns3.dnshost.test.` of the subzone `lab.corp.test.` does not exist"
+	sub.action = "Replace the nameserver in the NS records of `lab.corp.test.` at your DNS provider now, or restore it: whoever creates it can answer for `lab.corp.test.`."
+	sub.resolveHead = "nameserver `ns3.dnshost.test.` of the subzone `lab.corp.test.` exists again"
+	for _, c := range []struct {
+		name  string
+		rule  dngRule
+		lines []string
+	}{
+		{"one subzone", sub, []string{lab}},
+		{"two subzones", sub, []string{lab, dev}},
+		{"a subzone and the domain", dngRules()[2], []string{lab, apex}},
+		{"a name outside the domain", dngRules()[2], []string{"lab.other.test. NS ns3.dnshost.test."}},
+		{"a line that is not an NS line", dngRules()[2], []string{"lab.corp.test. CNAME ns3.dnshost.test."}},
+		{"another rule", dngRules()[3], []string{lab}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := c.rule
+			r.expected = strings.Join(c.lines, "; ")
+			head := dlvEmoji[r.sev] + " *" + dlvWord[r.sev] + "*"
+			dngCheck(t, dngEvent(t, alert.EventOpen, r),
+				dlvFull(head+dlvDot+r.headline, dngGoneView(c.lines...), dngOpenClock, ":point_right: "+r.action), r.openSpans)
+			end, action, spans := dngEnd(r, r.expected)
+			dngCheck(t, dngEvent(t, alert.EventResolve, r),
+				dlvFull(end+dlvDot+r.resolveHead, r.resolveView, dngResolveClock, action), spans)
+		})
+	}
+}
+
 // The three rules that point at a name take Expected as the glue rule does:
 // parts split at "; " and no further, one line each, each cut at 120 octets.
 func TestSlackTextOfTheTargetRulesWithThreeParts(t *testing.T) {

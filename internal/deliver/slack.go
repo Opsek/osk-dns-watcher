@@ -11,6 +11,7 @@ import (
 
 	"github.com/Opsek/osk-dns-watcher/internal/alert"
 	"github.com/Opsek/osk-dns-watcher/internal/decide"
+	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 )
@@ -215,6 +216,39 @@ var wordings = map[decide.Rule]wording{
 
 const resolvedAction = "If you did not make or undo this change yourself, find out who did."
 
+// subzoneHost is the wording of nameserver-host when only NS lines of a
+// subzone point at the host: the host answers only for that subzone, and its
+// NS records are at the DNS provider of the zone above it, not at the
+// registrar. {D} stands for the subzone.
+var subzoneHost = wording{
+	phrase:   "nameserver {N} of the subzone {D} does not exist",
+	resolved: "nameserver {N} of the subzone {D} exists again",
+	action:   "Replace the nameserver in the NS records of {D} at your DNS provider now, or restore it: whoever creates it can answer for {D}.",
+	now:      "the name exists again: check that it is yours",
+}
+
+// hostSubzone gives the subzone of a nameserver-host alert whose pointing
+// lines, which Expected holds as "<owner> NS <host>", are all lines of names
+// below the domain: the owner of the first. A line of the domain itself, or
+// one that does not read so, keeps the words of the domain.
+func hostSubzone(a alert.Alert) (dnswire.Name, bool) {
+	if a.Rule != decide.RuleNameServerHost {
+		return dnswire.Name{}, false
+	}
+	var zone dnswire.Name
+	for i, line := range strings.Split(a.Expected, "; ") {
+		owner, rest, _ := strings.Cut(line, " ")
+		n, err := dnswire.ParseName(owner)
+		if err != nil || !strings.HasPrefix(rest, "NS ") || n.Equal(a.Check.Domain) || !n.IsSubdomainOf(a.Check.Domain) {
+			return dnswire.Name{}, false
+		}
+		if i == 0 {
+			zone = n
+		}
+	}
+	return zone, true
+}
+
 // emoji are Slack emoji codes, which keep the text printable ASCII.
 var emoji = map[decide.Severity]string{
 	decide.SeverityCritical: ":rotating_light:",
@@ -259,6 +293,10 @@ const (
 // without wording gives empty phrases, never DNS text outside code.
 func SlackText(e alert.Event) string {
 	w := wordings[e.Alert.Rule]
+	k := e.Alert.Check
+	if zone, ok := hostSubzone(e.Alert); ok {
+		w, k.Domain = subzoneHost, zone
+	}
 	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindCertificates {
 		// The words of a DNS check do not fit a certificate source.
 		w.action = "Find out why osk-dns-watcher gets no usable answer from the certificate source; the log of osk-dns-watcher names the reason. Until it does, a new certificate is not seen."
@@ -290,7 +328,7 @@ func SlackText(e alert.Event) string {
 	} else if w.more != "" && len(weakerWords(e.Alert.Value)) > 0 {
 		phrase = w.more
 	}
-	fill := fields(e.Alert.Check)
+	fill := fields(k)
 	return compose(headline(e)+dot+fill.Replace(phrase), view(e, w.now), times(e), fill.Replace(action)+pointing)
 }
 

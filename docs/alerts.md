@@ -15,7 +15,7 @@ A message has four parts, in this order:
 
 The [README](../README.md) shows a full message.
 
-The times say when the service first saw the problem and when a check of the same set was last OK. A check is OK when no alert of the set is open and every nameserver answered. A nameserver address that this machine has no route to does not count. `no clean check before` means that no check of the set was OK since the service made its state folder.
+The times say when the service first saw the problem and when a check of the same set was last OK. A check is OK when no alert of the set is open and every nameserver answered. A nameserver address that this machine has no route to does not count. `no clean check before` means that no check of the set was OK since the service made its state folder. The two alerts about the whole domain have their own time. For the alert about the expectations file, it is the last read that gave a valid file. For the alert about a changed zone, it is the last check of the serial that saw no move.
 
 The headline starts with an emoji and the severity:
 

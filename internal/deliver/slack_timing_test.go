@@ -117,6 +117,11 @@ const (
 	timLineNS2   = "10.53.0.12:53 ns2.corp.test. serial 1 until 2026-11-13T10:00:00Z, 2 since 2026-11-13T10:00:15Z"
 	timLineNS1   = "10.53.0.11:53 ns1.corp.test. serial 1 until 2026-11-13T10:00:00Z, 2 since 2026-11-13T10:00:16Z"
 	timLineAgain = "10.53.0.12:53 ns2.corp.test. serial 2 until 2026-11-13T10:00:15Z, 3 since 2026-11-13T10:05:00Z"
+
+	// The view writes the times as the clock line does, without the date of the day that it shows.
+	timViewNS2   = "10.53.0.12:53 ns2.corp.test. serial 1 until 10:00:00, 2 since 10:00:15"
+	timViewNS1   = "10.53.0.11:53 ns1.corp.test. serial 1 until 10:00:00, 2 since 10:00:16"
+	timViewAgain = "10.53.0.12:53 ns2.corp.test. serial 2 until 10:00:15, 3 since 10:05:00"
 )
 
 func timScope(t *testing.T) obs.Key {
@@ -134,9 +139,9 @@ func TestSlackTextOfZoneChangedForOpenUpdateAndResolve(t *testing.T) {
 		want string
 	}{
 		{"open", timEvent(alert.EventOpen, decide.RuleZoneChanged, decide.SeverityLow, scope, two, false),
-			timText(":large_yellow_circle: *LOW* · "+head, []string{timLineNS2, timLineNS1}, timClockNoClean, timChangedAction)},
+			timText(":large_yellow_circle: *LOW* · "+head, []string{timViewNS2, timViewNS1}, timClockNoClean, timChangedAction)},
 		{"update", timEvent(alert.EventUpdate, decide.RuleZoneChanged, decide.SeverityLow, scope, timLineAgain, true),
-			timText(":large_yellow_circle: *LOW*, changed again · "+head, []string{timLineAgain}, timClockOpen, timChangedAction)},
+			timText(":large_yellow_circle: *LOW*, changed again · "+head, []string{timViewAgain}, timClockOpen, timChangedAction)},
 		{"resolve", timEvent(alert.EventResolve, decide.RuleZoneChanged, decide.SeverityLow, scope, two, true),
 			timText(":white_check_mark: *RESOLVED* · the zone `corp.test.` has not changed again for a while",
 				[]string{"now        no new change of the serial"}, timClockResolved, timResolveAction)},
@@ -147,20 +152,54 @@ func TestSlackTextOfZoneChangedForOpenUpdateAndResolve(t *testing.T) {
 	}
 }
 
+// A time on another day than the clock line shows its date and UTC; the stored Value does not change.
+func TestSlackTextOfZoneChangedShowsTheDateOfAnotherDay(t *testing.T) {
+	value := "10.53.0.12:53 ns2.corp.test. serial 1 until 2026-11-12T23:59:50Z, 2 since 2026-11-13T00:00:05Z"
+	e := timEvent(alert.EventOpen, decide.RuleZoneChanged, decide.SeverityLow, timScope(t), value, false)
+	want := "10.53.0.12:53 ns2.corp.test. serial 1 until 12 Nov 2026 23:59:50 UTC, 2 since 00:00:05"
+	if got := SlackText(e); !strings.Contains(got, "\n"+want+"\n") {
+		t.Errorf("text\n%s\n\nwant the line\n%s", got, want)
+	}
+	if e.Alert.Value != value {
+		t.Errorf("Value changed to %q", e.Alert.Value)
+	}
+}
+
+func TestSlackTextOfCheckFailingOfAnotherZoneNamesTheName(t *testing.T) {
+	corp := timName(t, "corp.test.")
+	for _, c := range []struct {
+		name   string
+		key    obs.Key
+		action string
+	}{
+		{"mail host", obs.RecordsKey(corp, timName(t, "mx.other.test."), dnswire.TypeA), ":point_right: Find out why no server answers this machine for `mx.other.test. A`; until one does, a change there is not seen."},
+		{"inside", obs.RecordsKey(corp, timName(t, "www.corp.test."), dnswire.TypeA), timFailingAction},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 25 s", true)
+			if got := SlackText(e); !strings.HasSuffix(got, c.action) {
+				t.Errorf("text\n%s\n\nwant the action\n%s", got, c.action)
+			}
+		})
+	}
+}
+
 func TestSlackTextOfZoneChangedShowsAtMostSixServers(t *testing.T) {
 	scope := timScope(t)
 	head := ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no watched record differs"
-	var lines []string
+	var lines, shown []string
 	for i := range 8 {
-		lines = append(lines, "10.53.0."+strconv.Itoa(11+i)+":53 ns"+strconv.Itoa(1+i)+".corp.test. serial 1 until 2026-11-13T10:00:00Z, 2 since 2026-11-13T10:00:15Z")
+		host := "10.53.0." + strconv.Itoa(11+i) + ":53 ns" + strconv.Itoa(1+i) + ".corp.test. serial 1 until "
+		lines = append(lines, host+"2026-11-13T10:00:00Z, 2 since 2026-11-13T10:00:15Z")
+		shown = append(shown, host+"10:00:00, 2 since 10:00:15")
 	}
 	for _, c := range []struct {
 		n    int
 		view []string
 	}{
-		{6, lines[:6]},
-		{7, append(lines[:6:6], "and 1 more servers")},
-		{8, append(lines[:6:6], "and 2 more servers")},
+		{6, shown[:6]},
+		{7, append(shown[:6:6], "and 1 more servers")},
+		{8, append(shown[:6:6], "and 2 more servers")},
 	} {
 		t.Run(strconv.Itoa(c.n), func(t *testing.T) {
 			e := timEvent(alert.EventOpen, decide.RuleZoneChanged, decide.SeverityLow, scope, strings.Join(lines[:c.n], "\n"), true)
@@ -188,7 +227,8 @@ func TestSlackTextOfTimingRulesCleansTheValue(t *testing.T) {
 	}
 	changed := timEvent(alert.EventUpdate, decide.RuleZoneChanged, decide.SeverityLow, timScope(t), strings.Join(value, "\n"), true)
 	text = SlackText(changed)
-	view := []string{Clean(odd, 160), Clean(long, 160), Clean(odd, 160), Clean(long, 160), Clean(odd, 160), Clean(long, 160), "and 12 more servers"}
+	longShown := strings.Replace(strings.Replace(long, "2026-11-13T10:00:00Z", "10:00:00", 1), "2026-11-13T10:00:15Z", "10:00:15", 1)
+	view := []string{Clean(odd, 160), Clean(longShown, 160), Clean(odd, 160), Clean(longShown, 160), Clean(odd, 160), Clean(longShown, 160), "and 12 more servers"}
 	timSameText(t, text, timText(":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no watched record differs",
 		view, timClockOpen, timChangedAction))
 	timPlainText(t, text, 1)

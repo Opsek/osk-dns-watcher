@@ -3,6 +3,7 @@ package deliver
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -271,6 +272,11 @@ func SlackText(e alert.Event) string {
 		// These checks ask the servers of the parent zone, not those of {D}.
 		w.action = "Find out why no server of the parent zone of {D} answers this machine; until one does, a change there is not seen."
 	}
+	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindRecords && !e.Alert.Check.Name.IsSubdomainOf(e.Alert.Check.Domain) {
+		// A name outside the domain, such as a mail host or an alias target,
+		// is answered by the servers of its own zone, not by those of {D}.
+		w.action = "Find out why no server answers this machine for {NT}; until one does, a change there is not seen."
+	}
 	phrase, action, pointing := w.phrase, w.action, ""
 	if e.Kind == alert.EventResolve {
 		phrase, action = w.resolved, resolvedAction
@@ -476,7 +482,7 @@ func view(e alert.Event, resolvedNow string) []string {
 		return []string{pad(labelProblem) + Clean(a.Value, 160)}
 	case decide.RuleZoneChanged:
 		// Each line of Value is one move; the alert has no server lines.
-		return moveLines(strings.Split(a.Value, "\n"))
+		return moveLines(strings.Split(a.Value, "\n"), a.Opened.UTC())
 	case decide.RuleGlue, decide.RuleAliasTarget, decide.RuleNameServerHost, decide.RuleMailTarget:
 		// Expected holds one part for each host and type that differs, or for each
 		// line that points at the name, joined by "; ". A part may hold " | ", so
@@ -617,17 +623,32 @@ func seenLines(a alert.Alert) []string {
 	return out
 }
 
-// moveLines keeps the first maxServers moves and counts the others.
-func moveLines(moves []string) []string {
+// moveLines keeps the first maxServers moves and counts the others. The times
+// of a move are stored as RFC 3339 for the webhook; the view writes them as
+// the clock line does, and leaves the date out on the day that the clock line
+// shows, which is the day of first.
+func moveLines(moves []string, first time.Time) []string {
 	var out []string
 	for _, m := range moves[:min(len(moves), maxServers)] {
-		out = append(out, Clean(m, 160))
+		out = append(out, Clean(moveTimes.ReplaceAllStringFunc(m, func(s string) string {
+			t, err := time.Parse("2006-01-02T15:04:05Z", s)
+			switch {
+			case err != nil:
+				return s
+			case t.Format(dateLayout) == first.Format(dateLayout):
+				return t.Format(timeOfDay)
+			}
+			return t.Format(dateLayout+" "+timeOfDay) + " UTC"
+		}), 160))
 	}
 	if more := len(moves) - maxServers; more > 0 {
 		out = append(out, "and "+strconv.Itoa(more)+" more servers")
 	}
 	return out
 }
+
+// moveTimes finds the times in a line of a zone-changed Value.
+var moveTimes = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`)
 
 func serverLines(lines []alert.Line, ttl bool) []string {
 	var out []string

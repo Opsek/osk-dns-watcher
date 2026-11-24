@@ -167,7 +167,7 @@ func TestInitRunsACheckWithAFailureAnswerOnceMore(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit code %d; want 0", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, c.lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, c.lines))+"yes\n"+s.wrote(d))
 			stfCounts(t, r, []string{d}, c.key)
 			iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(c.lines, "\n")+"\n")
 		})
@@ -191,7 +191,7 @@ func TestInitUsesACheckThatFailedTwiceAsItIs(t *testing.T) {
 	s, r := stfNew(t, map[string][][]obs.Answer{key: {dead}}, "example.com", iniURL, "yes")
 	code, out := s.run()
 	lines := stfWithout(iniLines(d), "A")
-	skips := []string{d + " A: " + iniNS2Addr + " ns2.example.net. gave no answer (timeout)", iniAliasSkip(d)}
+	skips := []string{d + " A: " + iniNS2Addr + " ns2.example.net. gave no answer (timeout)"}
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
@@ -247,7 +247,7 @@ func TestInitRetriesTheChecksOfEachDomain(t *testing.T) {
 	}
 	stfCounts(t, r, []string{com, org}, keyA, keyDS)
 	iniSame(t, "the dialogue", out, s.shown("example.com example.org",
-		iniBlock(com, iniLines(com), iniAliasSkip(com)), iniBlock(org, iniLines(org), iniAliasSkip(org)))+"yes\n"+s.wrote(com, org))
+		iniBlock(com, iniLines(com)), iniBlock(org, iniLines(org)))+"yes\n"+s.wrote(com, org))
 }
 
 // stfNoNSSet is the apex NS set of d when its second server says that the
@@ -290,7 +290,7 @@ func TestInitWarnsWhenTheApexNSSetGetsNoLine(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit code %d; want 0", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", stfBlock(d, lines, c.why, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+			iniSame(t, "the dialogue", out, s.shown("example.com", stfBlock(d, lines, c.why))+"yes\n"+s.wrote(d))
 			stfCounts(t, r, []string{d})
 			iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
 		})
@@ -327,7 +327,7 @@ func TestInitWritesTheNSLineWhenAServerOfTheDomainFailsTwice(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit code %d; want 0", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))+c.warning)+"yes\n"+s.wrote(d))
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d))+c.warning)+"yes\n"+s.wrote(d))
 			stfCounts(t, r, []string{d}, key)
 			data := s.written(d)["example.com.expect"]
 			iniSame(t, "example.com.expect", data, iniStamp+strings.Join(iniLines(d), "\n")+"\n")
@@ -359,7 +359,7 @@ func TestInitWarnsWhenTheServersGiveDifferentNSSets(t *testing.T) {
 		expect.NSSource{Text: "ns.other.example. | ns1.example.net.", Zone: []string{iniNS2Addr + " ns2.example.net."}},
 		expect.NSSource{Text: "ns1.example.net. | ns2.example.net.", Parent: []string{iniParentAddr + " " + iniParentHost},
 			Zone: []string{iniNS1Addr + " ns1.example.net."}})
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d))+warning)+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines)+warning)+"yes\n"+s.wrote(d))
 	if strings.Contains(out, "warning osk-dns-watcher cannot watch") {
 		t.Errorf("the output holds the warning about a missing NS line:\n%s", out)
 	}
@@ -414,8 +414,8 @@ func TestInitWarnsOnlyForTheDomainWithoutAnNSLine(t *testing.T) {
 		t.Run(answer, func(t *testing.T) {
 			s, r := stfNew(t, map[string][][]obs.Answer{iniKey(org, org, dnswire.TypeNS): {noSet}}, answer, iniURL, "yes")
 			code, out := s.run()
-			orgSkips := []string{stfNoNSSkip(org), iniAliasSkip(org)}
-			blocks := []string{iniBlock(com, iniLines(com), iniAliasSkip(com)), stfBlock(org, linesOrg, orgSkips...)}
+			orgSkips := []string{stfNoNSSkip(org)}
+			blocks := []string{iniBlock(com, iniLines(com)), stfBlock(org, linesOrg, orgSkips...)}
 			domains := []string{com, org}
 			if answer == "example.org example.com" {
 				blocks[0], blocks[1] = blocks[1], blocks[0]
@@ -521,7 +521,7 @@ func TestInitUsesTheSecondObservationOnlyWhenItIsNotWorse(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit code %d; want 0", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, skip(c.why), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, skip(c.why)))+"yes\n"+s.wrote(d))
 			stfCounts(t, r, []string{d}, key)
 		})
 	}

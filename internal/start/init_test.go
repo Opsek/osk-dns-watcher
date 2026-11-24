@@ -34,7 +34,7 @@ import (
 // The fake world gives each domain d the sets of the example that a stranger
 // reads first: a server of the parent zone delegates d to ns1.example.net.
 // and ns2.example.net.; both agree on every set of the apex; www.<d> is an
-// alias, which an A line cannot hold.
+// alias, so init asks for its CNAME.
 
 const (
 	iniHello    = "Set up osk-dns-watcher: two questions, then osk-dns-watcher shows what it sees. Nothing is written until you type yes.\n\n"
@@ -134,7 +134,7 @@ func iniBase(k obs.Key) []obs.Answer {
 	name := k.Name.Lower().String()
 	r := iniNoName(d)
 	switch {
-	case name == "www."+d && k.Type == dnswire.TypeA:
+	case name == "www."+d && (k.Type == dnswire.TypeA || k.Type == dnswire.TypeCNAME):
 		r = iniRecords(name, dnswire.TypeCNAME, "cdn.example.net.")
 	case name == d && k.Type == dnswire.TypeMX:
 		r = iniRecords(d, k.Type, "10 mail."+d)
@@ -145,8 +145,8 @@ func iniBase(k obs.Key) []obs.Answer {
 }
 
 // iniLines are the lines of domain d of the fake world, as File.String
-// prints them: the sets of the apex, then the names under it where the fake
-// world has no record.
+// prints them: the sets of the apex, then the names under it: the alias www
+// and those where the fake world has no record.
 func iniLines(d string) []string {
 	return []string{
 		"domain " + d,
@@ -161,12 +161,14 @@ func iniLines(d string) []string {
 		"_acme-challenge." + d + " TXT none",
 		"_dmarc." + d + " TXT none",
 		"_mta-sts." + d + " TXT none",
+		iniAliasLine(d),
 		"_acme-challenge.www." + d + " TXT none",
 	}
 }
 
-func iniAliasSkip(d string) string {
-	return "www." + d + " A: " + iniNS1Addr + " ns1.example.net. answers with a CNAME record; snapshot www." + d + " CNAME instead"
+// iniAliasLine is the line of www.<d>, an alias in the fake world.
+func iniAliasLine(d string) string {
+	return "www." + d + " CNAME cdn.example.net."
 }
 
 func iniKey(domain, name string, t dnswire.Type) string {
@@ -176,7 +178,7 @@ func iniKey(domain, name string, t dnswire.Type) string {
 // iniKeys are the checks of a snapshot of d: the delegation, the DS set, the
 // NS set of the apex, the five other sets of the apex and, when under is
 // true, the six names under d: www, the DMARC and MTA-STS names, the two
-// challenge names and the wildcard.
+// challenge names and the wildcard, and the CNAME of www, an alias.
 func iniKeys(d string, under bool) []string {
 	n := iniName(d)
 	keys := []string{obs.DelegationKey(n).String(), obs.DSKey(n).String()}
@@ -184,7 +186,7 @@ func iniKeys(d string, under bool) []string {
 		keys = append(keys, iniKey(d, d, t))
 	}
 	if under {
-		keys = append(keys, iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "_dmarc."+d, dnswire.TypeTXT),
+		keys = append(keys, iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "www."+d, dnswire.TypeCNAME), iniKey(d, "_dmarc."+d, dnswire.TypeTXT),
 			iniKey(d, "_mta-sts."+d, dnswire.TypeTXT), iniKey(d, "_acme-challenge."+d, dnswire.TypeTXT),
 			iniKey(d, "_acme-challenge.www."+d, dnswire.TypeTXT), iniKey(d, "*."+d, dnswire.TypeA))
 	}
@@ -929,7 +931,7 @@ func TestInitShowsTheDialogueWithoutATerminal(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d)))+"yes\n"+s.wrote(d))
 }
 
 // On a terminal, concealed text hides the URL while it is typed, and its line
@@ -941,7 +943,7 @@ func TestInitHidesTheURLOnATerminal(t *testing.T) {
 	code, out := s.run()
 	d := "example.com."
 	want := iniHello + iniDomainsQ + iniURLQ + "\x1b[8m" + "\x1b[28m\x1b[1A\r\x1b[2K" + iniURLQ + "[hidden]\n\n" + iniAsking +
-		iniBlock(d, iniLines(d), iniAliasSkip(d)) + s.warnings() + s.confirm() + s.wrote(d)
+		iniBlock(d, iniLines(d)) + s.warnings() + s.confirm() + s.wrote(d)
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
@@ -965,7 +967,7 @@ func TestInitWritesNothingBeforeYes(t *testing.T) {
 	if len(moments) < 3 {
 		t.Fatalf("init waited for %d answers; want 3", len(moments))
 	}
-	shown := s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))
+	shown := s.shown("example.com", iniBlock(d, iniLines(d)))
 	for i, want := range []string{iniHello + iniDomainsQ, iniHello + iniDomainsQ + "example.com\n" + iniURLQ, shown} {
 		iniSame(t, "the output while init waited for answer "+strconv.Itoa(i+1), moments[i].out, want)
 		if len(moments[i].changed) > 0 {
@@ -973,8 +975,8 @@ func TestInitWritesNothingBeforeYes(t *testing.T) {
 		}
 	}
 	// What is written is what was shown: no check runs after the answer.
-	if n := s.runner.count(); moments[2].checks != 14 || n != 14 {
-		t.Errorf("%d checks had run when yes was asked, %d at the end; want 14 and 14", moments[2].checks, n)
+	if n := s.runner.count(); moments[2].checks != 15 || n != 15 {
+		t.Errorf("%d checks had run when yes was asked, %d at the end; want 15 and 15", moments[2].checks, n)
 	}
 	if code != 0 || !strings.HasSuffix(out, "yes\n"+s.wrote(d)) {
 		t.Errorf("exit code %d, output ends %q; want 0 and the written files", code, out[max(0, len(out)-200):])
@@ -1081,9 +1083,9 @@ func TestInitWritesOnlyForExactlyYes(t *testing.T) {
 			if code != 1 {
 				t.Errorf("exit code %d; want 1", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+answer+"\n"+iniNothing)
-			if n := s.runner.count(); n != 14 {
-				t.Errorf("%d checks ran; want 14", n)
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d)))+answer+"\n"+iniNothing)
+			if n := s.runner.count(); n != 15 {
+				t.Errorf("%d checks ran; want 15", n)
 			}
 			s.nothingWritten()
 		})
@@ -1111,7 +1113,7 @@ func TestInitEndOfInputWritesNothing(t *testing.T) {
 			return iniHello + iniDomainsQ + "example.com\n" + iniURLQ + "\n" + iniNothing
 		}},
 		{"at yes", []string{"example.com", iniURL}, func(s *iniSetup) string {
-			return s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))) + "\n" + iniNothing
+			return s.shown("example.com", iniBlock(d, iniLines(d))) + "\n" + iniNothing
 		}},
 		{"after a name that is not valid", []string{"a..b"}, func(*iniSetup) string {
 			return iniHello + iniDomainsQ + "a..b\n" + iniNameProblem(t, "a..b") + iniDomainsQ + "\n" + iniNothing
@@ -1154,7 +1156,7 @@ func TestInitInterruptWritesNothing(t *testing.T) {
 	if code == 0 {
 		t.Errorf("exit code 0; want a failure")
 	}
-	iniSame(t, "the dialogue", s.out.String(), s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"\n"+iniNothing)
+	iniSame(t, "the dialogue", s.out.String(), s.shown("example.com", iniBlock(d, iniLines(d)))+"\n"+iniNothing)
 	s.nothingWritten()
 }
 
@@ -1196,7 +1198,7 @@ func TestInitAsksAgainForDomainsThatAreNotValid(t *testing.T) {
 	} {
 		want.WriteString(iniDomainsQ + c.answer + "\n" + c.problem)
 	}
-	want.WriteString(strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))), iniHello) + "no\n" + iniNothing)
+	want.WriteString(strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d))), iniHello) + "no\n" + iniNothing)
 	if code != 1 {
 		t.Errorf("exit code %d; want 1", code)
 	}
@@ -1222,7 +1224,7 @@ func TestInitAsksAgainForAURLWithoutShowingIt(t *testing.T) {
 	code, out := s.run()
 	d := "example.com."
 	want := iniHello + iniDomainsQ + "example.com\n" + strings.Repeat(iniURLQ+"[hidden]\n"+iniBadURL, len(bad)) +
-		strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))), iniHello+iniDomainsQ+"example.com\n") +
+		strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d))), iniHello+iniDomainsQ+"example.com\n") +
 		"yes\n" + s.wrote(d)
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
@@ -1250,7 +1252,7 @@ func TestInitCleansAndDeduplicatesTheDomains(t *testing.T) {
 		t.Errorf("exit code %d; want 0", code)
 	}
 	iniSame(t, "the dialogue", out,
-		s.shown(answer, iniBlock(a, iniLines(a), iniAliasSkip(a)), iniBlock(b, iniLines(b), iniAliasSkip(b)))+"yes\n"+s.wrote(a, b))
+		s.shown(answer, iniBlock(a, iniLines(a)), iniBlock(b, iniLines(b)))+"yes\n"+s.wrote(a, b))
 	files := s.written(a, b)
 	iniSame(t, "config.json", files["config.json"], s.configText(a, b))
 	keys := s.runner.keys()
@@ -1273,8 +1275,8 @@ func TestInitTakesAtMostHundredDomains(t *testing.T) {
 	if n := strings.Count(out, " as osk-dns-watcher sees it now."); n != 100 {
 		t.Errorf("init showed %d domains; want 100", n)
 	}
-	if n := s.runner.count(); n != 1400 {
-		t.Errorf("%d checks ran; want 1400", n)
+	if n := s.runner.count(); n != 1500 {
+		t.Errorf("%d checks ran; want 1500", n)
 	}
 	s.nothingWritten()
 }
@@ -1436,7 +1438,7 @@ func TestInitListsTheSetsItCannotWatchAndLeavesThemOut(t *testing.T) {
 	}}
 	code, out := s.run()
 	lines := slices.DeleteFunc(iniLines(d), func(l string) bool { return strings.Contains(l, " MX ") })
-	skips := []string{d + " MX: " + iniNS2Addr + " ns2.example.net. gave no answer (timeout)", iniAliasSkip(d)}
+	skips := []string{d + " MX: " + iniNS2Addr + " ns2.example.net. gave no answer (timeout)"}
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
@@ -1481,7 +1483,8 @@ func TestInitDoesNotTrustASetTheServersDisagreeOn(t *testing.T) {
 	if strings.ContainsFunc(out, func(r rune) bool { return r < 0x20 && r != '\n' || r == 0x7f }) {
 		t.Errorf("the output holds a control octet other than the line end:\n%q", out)
 	}
-	want := slices.DeleteFunc(slices.Clone(iniLines(d)), func(l string) bool { return strings.HasPrefix(l, d+" TXT ") })
+	// www has an address here, so it is no alias.
+	want := slices.DeleteFunc(slices.Clone(iniLines(d)), func(l string) bool { return strings.HasPrefix(l, d+" TXT ") || l == iniAliasLine(d) })
 	nsLine := d + " NS ns.attacker.example. | ns1.example.net. || ns1.example.net. | ns2.example.net."
 	want[slices.Index(want, d+" NS ns1.example.net. | ns2.example.net.")] = nsLine
 	skips := []string{
@@ -1546,12 +1549,6 @@ func TestInitWritesASetWhoseOnlyFailureIsAnAddressWithNoRoute(t *testing.T) {
 				iniAt("ns2.example.net.", iniNS2Addr, iniRecords(d, dnswire.TypeMX, "10 mail."+d)),
 				iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNoRoute))),
 		}, 2},
-		// www.<d> has an address here, so no set is left out and the count
-		// follows the lines.
-		{"one address, every set watched", map[string][]obs.Answer{
-			iniKey(d, d, dnswire.TypeA):        slices.Concat(ok, []obs.Answer{unreached(iniNS1v6Addr), ns2}),
-			iniKey(d, "www."+d, dnswire.TypeA): iniBoth(iniRecords("www."+d, dnswire.TypeA, "192.0.2.80")),
-		}, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := iniNew(t, "example.com", iniURL, "yes")
@@ -1560,16 +1557,47 @@ func TestInitWritesASetWhoseOnlyFailureIsAnAddressWithNoRoute(t *testing.T) {
 			if code != 0 {
 				t.Errorf("exit code %d; want 0", code)
 			}
-			lines, skips := iniLines(d), []string{iniAliasSkip(d)}
-			if _, ok := c.over[iniKey(d, "www."+d, dnswire.TypeA)]; ok {
-				// It sorts before the challenge name under it.
-				at := slices.Index(lines, "_acme-challenge.www."+d+" TXT none")
-				lines, skips = slices.Insert(lines, at, "www."+d+" A 192.0.2.80"), nil
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d))+iniNotAsked(c.notAsked))+"yes\n"+s.wrote(d))
+			data := s.written(d)["example.com.expect"]
+			iniSame(t, "example.com.expect", data, iniStamp+strings.Join(iniLines(d), "\n")+"\n")
+			iniNoFindings(t, data, s.runner.observations())
+		})
+	}
+}
+
+// www.<d> is often an alias, of a name in the zone or outside it. Its A check
+// then gets the CNAME record, which no A line can hold, so init asks for the
+// CNAME and writes its line: a change of the alias gives an alert. A www with
+// an address gets its A line and no CNAME check.
+func TestInitWatchesWWWAsTheAliasOrTheAddressItIs(t *testing.T) {
+	d := "example.com."
+	www, cname := iniKey(d, "www."+d, dnswire.TypeA), iniKey(d, "www."+d, dnswire.TypeCNAME)
+	alias := func(target string) []obs.Answer { return iniBoth(iniRecords("www."+d, dnswire.TypeCNAME, target)) }
+	for _, c := range []struct {
+		name, line string
+		over       map[string][]obs.Answer
+		asked      bool // the CNAME of www
+	}{
+		{"an alias of a name outside the zone", "www." + d + " CNAME cdn.example.net.", nil, true},
+		{"an alias of a name in the zone", "www." + d + " CNAME " + d, map[string][]obs.Answer{www: alias(d), cname: alias(d)}, true},
+		{"an address", "www." + d + " A 192.0.2.80", map[string][]obs.Answer{www: iniBoth(iniRecords("www."+d, dnswire.TypeA, "192.0.2.80"))}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := iniNew(t, "example.com", iniURL, "yes")
+			s.runner.over = c.over
+			code, out := s.run()
+			if code != 0 {
+				t.Errorf("exit code %d; want 0", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, skips...)+iniNotAsked(c.notAsked))+"yes\n"+s.wrote(d))
+			lines := iniLines(d)
+			lines[slices.Index(lines, iniAliasLine(d))] = c.line
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines))+"yes\n"+s.wrote(d))
 			data := s.written(d)["example.com.expect"]
 			iniSame(t, "example.com.expect", data, iniStamp+strings.Join(lines, "\n")+"\n")
 			iniNoFindings(t, data, s.runner.observations())
+			if asked := slices.Contains(s.runner.keys(), cname); asked != c.asked {
+				t.Errorf("init asked for the CNAME of www: %v; want %v", asked, c.asked)
+			}
 		})
 	}
 }
@@ -1616,10 +1644,10 @@ func TestInitDoesNotWatchASetWithAnyOtherFailure(t *testing.T) {
 			}
 			if c.why != "" {
 				iniSame(t, "the dialogue", out,
-					s.shown("example.com", iniBlock(d, without, d+" A: "+c.why, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+					s.shown("example.com", iniBlock(d, without, d+" A: "+c.why))+"yes\n"+s.wrote(d))
 			}
 			lines, skips := iniShown(out, d)
-			if !slices.Equal(lines, without) || len(skips) != 2 || !strings.HasPrefix(skips[0], d+" A: ") {
+			if !slices.Equal(lines, without) || len(skips) != 1 || !strings.HasPrefix(skips[0], d+" A: ") {
 				t.Errorf("shown %q, not watched %q; want %s A only under not watched", lines, skips, d)
 			}
 			if strings.Contains(out, "Not asked:") {
@@ -1745,7 +1773,7 @@ func TestInitWritesAnEmptyListForAFlagNotGiven(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d)))+"yes\n"+s.wrote(d))
 	iniSame(t, "config.json", s.written(d)["config.json"], s.configText(d))
 	if _, problems := config.Read(s.config); len(problems) != 0 {
 		t.Errorf("config.Read: %v", problems)
@@ -1861,7 +1889,7 @@ func TestInitGivesAbsolutePathsForARelativeConfig(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d)))+"yes\n"+s.wrote(d))
 	iniSame(t, "config.json", s.written(d)["config.json"], s.configText(d))
 }
 
@@ -1988,7 +2016,7 @@ func TestInitWritesTheAddressOfAWildcardThatAnswers(t *testing.T) {
 	}
 	lines := slices.Clone(iniLines(d))
 	lines[slices.Index(lines, "*."+d+" A none")] = "*." + d + " A 192.0.2.99"
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines))+"yes\n"+s.wrote(d))
 	iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
 }
 
@@ -2007,6 +2035,6 @@ func TestInitLeavesOutAChallengeRecordThatIsThere(t *testing.T) {
 	}
 	lines := slices.DeleteFunc(slices.Clone(iniLines(d)), func(l string) bool { return l == "_acme-challenge."+d+" TXT none" })
 	challenge := "_acme-challenge." + d + " TXT: a certificate-challenge record is there now; write none once it is gone, or no line if you use DNS challenges"
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, challenge, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, challenge))+"yes\n"+s.wrote(d))
 	iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
 }

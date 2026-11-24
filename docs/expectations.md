@@ -27,7 +27,7 @@ For each domain, `init` writes these lines:
 - The NS set of the domain. When the parent zone and the domain's servers give two to four different sets, the line accepts each one, and `init` shows which server gave which set.
 - The DS set at the parent zone.
 - The A, AAAA, MX, TXT, and CAA sets of the domain itself.
-- The A set of `www.<domain>`, and the TXT sets of `_dmarc.<domain>` and `_mta-sts.<domain>`.
+- The A set of `www.<domain>`, or its CNAME when `www.<domain>` is an alias, and the TXT sets of `_dmarc.<domain>` and `_mta-sts.<domain>`.
 - The TXT sets of `_acme-challenge.<domain>` and `_acme-challenge.www.<domain>`, but only when no record is there.
 - The A set of `*.<domain>`, or `none` when no wildcard answers.
 - The A and AAAA sets of each nameserver host inside the domain, when the NS line names at most eight such hosts. With these lines, the service compares the glue at the parent zone.

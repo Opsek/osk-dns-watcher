@@ -58,7 +58,7 @@ func TestInitAsksAgainForAFieldWithAnOtherOctetWithoutAskingTheServers(t *testin
 					}
 				} else {
 					want := iniHello + iniDomainsQ + "[hidden]\n" + stfBadChars +
-						strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))), iniHello) + "no\n" + iniNothing
+						strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d))), iniHello) + "no\n" + iniNothing
 					iniSame(t, "the dialogue", out, want)
 					if n := strings.Count(out, "Try again."); n != 1 {
 						t.Errorf("the output asks again %d times; want once", n)
@@ -106,7 +106,7 @@ func TestInitGoesOnAfterSeveralRefusedDomainAnswers(t *testing.T) {
 	d := "example.com."
 	want := iniHello + iniDomainsQ + "[hidden]\n" + stfBadChars + iniDomainsQ + "[hidden]\n" + stfBadChars +
 		iniDomainsQ + "[hidden]\n" + stfBadChars +
-		strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d))), iniHello) + "yes\n" + s.wrote(d)
+		strings.TrimPrefix(s.shown("example.com", iniBlock(d, iniLines(d))), iniHello) + "yes\n" + s.wrote(d)
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
@@ -125,7 +125,7 @@ func TestInitStillTakesTheCharactersOfADomainName(t *testing.T) {
 	ds := []string{"_dmarc.example.com.", "example.com.", "xn--bcher-kva.de.", "9-a_b.test."}
 	var blocks []string
 	for _, d := range ds {
-		blocks = append(blocks, iniBlock(d, iniLines(d), iniAliasSkip(d)))
+		blocks = append(blocks, iniBlock(d, iniLines(d)))
 	}
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
@@ -221,7 +221,7 @@ func TestInitHidesAnAnswerToTheTrustQuestionThatIsNotAPlainAnswer(t *testing.T) 
 			if code != 1 {
 				t.Errorf("exit code %d; want 1", code)
 			}
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d), iniAliasSkip(d)))+c.echo+"\n"+iniNothing)
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, iniLines(d)))+c.echo+"\n"+iniNothing)
 			if c.echo == "[hidden]" {
 				stfNoField(t, out, c.answer)
 			}

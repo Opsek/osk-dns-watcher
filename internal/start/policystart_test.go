@@ -201,9 +201,10 @@ func TestPcsInitDoesNotAskForAFailedPolicyFetchAgain(t *testing.T) {
 			if got := r.runs(pcsRecordKey(d)); got != 1 {
 				t.Errorf("the check of the MTA-STS record ran %d times; want 1", got)
 			}
-			// The 14 DNS checks, then the policy fetch, and the one retry.
-			if got := r.all(); got != 14+1+1 {
-				t.Errorf("%d checks ran; want 16", got)
+			// The 14 DNS checks, then the CNAME of www and the policy fetch, and
+			// the one retry.
+			if got := r.all(); got != 14+2+1 {
+				t.Errorf("%d checks ran; want 17", got)
 			}
 		})
 	}
@@ -223,7 +224,7 @@ func TestPcsInitWritesTheMTASTSLineOfTheFetchedPolicy(t *testing.T) {
 		t.Errorf("exit code %d; want 0", code)
 	}
 	lines := pcsLines(d, pcsLine)
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines))+"yes\n"+s.wrote(d))
 	text := s.written(d)["example.com.expect"]
 	iniSame(t, "example.com.expect", text, iniStamp+strings.Join(lines, "\n")+"\n")
 	f, err := expect.Parse([]byte(text))
@@ -261,7 +262,7 @@ func TestPcsInitLeavesOutTheMTASTSLineOfAPolicyItCannotRead(t *testing.T) {
 				t.Errorf("exit code %d; want 0", code)
 			}
 			lines := pcsLines(d, "")
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, c.skip, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, c.skip))+"yes\n"+s.wrote(d))
 			iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(lines, "\n")+"\n")
 		})
 	}

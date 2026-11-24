@@ -59,7 +59,7 @@ func nswText(hosts []string) string { return strings.Join(hosts, " | ") }
 func nswLinesWith(ns string, hosts ...string) []string {
 	lines := slices.Clone(iniLines(nswD))
 	lines[2] = nswD + " NS " + ns
-	return slices.Insert(lines, len(lines)-1, hosts...)
+	return slices.Insert(lines, slices.Index(lines, iniAliasLine(nswD)), hosts...)
 }
 
 var (
@@ -82,25 +82,25 @@ func TestInitShowsEachNSSetBeforeTheQuestion(t *testing.T) {
 		skips   []string
 		warning string
 	}{
-		{"one set: no warning", nswApex(nswNet(1, 2), nswNet(2, 1)), iniLines(d), []string{iniAliasSkip(d)}, ""},
+		{"one set: no warning", nswApex(nswNet(1, 2), nswNet(2, 1)), iniLines(d), nil, ""},
 		{"the servers of the domain give one more nameserver", nswApex(nswNet(1, 2, 3), nswNet(1, 2, 3)),
-			nswLinesWith(nswText(nswNet(1, 2)) + " || " + nswText(nswNet(1, 2, 3))), []string{iniAliasSkip(d)},
+			nswLinesWith(nswText(nswNet(1, 2)) + " || " + nswText(nswNet(1, 2, 3))), nil,
 			iniSetsWarning(d, expect.NSSource{Text: nswText(nswNet(1, 2)), Parent: []string{nswP}},
 				expect.NSSource{Text: nswText(nswNet(1, 2, 3)), Zone: []string{nswC1, nswC2}})},
 		{"the servers of the domain differ among themselves", nswApex(nswNet(1, 2), nswNet(1, 3)),
-			nswLinesWith(nswText(nswNet(1, 2)) + " || " + nswText(nswNet(1, 3))), []string{iniAliasSkip(d)},
+			nswLinesWith(nswText(nswNet(1, 2)) + " || " + nswText(nswNet(1, 3))), nil,
 			iniSetsWarning(d, expect.NSSource{Text: nswText(nswNet(1, 2)), Parent: []string{nswP}, Zone: []string{nswC1}},
 				expect.NSSource{Text: nswText(nswNet(1, 3)), Zone: []string{nswC2}})},
 		{"four sets", nswApex(nswNet(1), nswNet(2), nswNet(1, 2, 3)),
 			nswLinesWith(nswText(nswNet(1)) + " || " + nswText(nswNet(1, 2)) + " || " + nswText(nswNet(1, 2, 3)) + " || " + nswText(nswNet(2))),
-			[]string{iniAliasSkip(d)},
+			nil,
 			iniSetsWarning(d, expect.NSSource{Text: nswText(nswNet(1)), Zone: []string{nswC1}},
 				expect.NSSource{Text: nswText(nswNet(1, 2)), Parent: []string{nswP}},
 				expect.NSSource{Text: nswText(nswNet(1, 2, 3)), Zone: []string{nswC3}},
 				expect.NSSource{Text: nswText(nswNet(2)), Zone: []string{nswC2}})},
 		{"five sets: no line and the warning of a missing line", nswApex(nswNet(1), nswNet(2), nswNet(1, 2, 3), nswNet(3)),
 			stfWithout(iniLines(d), "NS"),
-			[]string{d + " NS: servers disagree: " + nswP + " gives " + nswText(nswNet(1, 2)) + "; " + nswC1 + " gives " + nswText(nswNet(1)), iniAliasSkip(d)},
+			[]string{d + " NS: servers disagree: " + nswP + " gives " + nswText(nswNet(1, 2)) + "; " + nswC1 + " gives " + nswText(nswNet(1))},
 			stfWarning(d)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestInitShowsTheSetOfALyingServerBeforeTheQuestion(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			lines := nswLinesWith(line)
-			block := iniBlock(d, lines, iniAliasSkip(d)) + c.warning
+			block := iniBlock(d, lines) + c.warning
 			t.Run("yes", func(t *testing.T) {
 				s := iniNew(t, "example.com", iniURL, "yes")
 				s.runner.over = c.over
@@ -418,7 +418,7 @@ func TestInitWritesTheParentSetWhenTheWalkToTheServersOfTheDomainFails(t *testin
 	lines := nswLinesWith(nswNames(nswHosts), nswHostLines(nswHosts)...)
 	noPath := "warning osk-dns-watcher could not reach the servers of " + d + " (the walk from the root found no path to them), " +
 		"so its NS line holds what the parent zone gave. If the servers hold another set, osk-dns-watcher alerts at its first check.\n"
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d))+noPath)+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines)+noPath)+"yes\n"+s.wrote(d))
 	data := s.written(d)["example.com.expect"]
 	iniSame(t, "example.com.expect", data, iniStamp+strings.Join(lines, "\n")+"\n")
 	iniNoFindings(t, data, s.runner.observations())
@@ -538,7 +538,7 @@ func TestInitWritesTheAddressLinesOfEachNameServerInsideTheDomain(t *testing.T) 
 	if !slices.Contains(lines, "ns2.example.com. AAAA none") {
 		t.Fatalf("test fault: %q", lines)
 	}
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines))+"yes\n"+s.wrote(d))
 	data := s.written(d)["example.com.expect"]
 	iniSame(t, "example.com.expect", data, iniStamp+strings.Join(lines, "\n")+"\n")
 	iniNoFindings(t, data, s.runner.observations())
@@ -557,7 +557,7 @@ func TestInitAsksNoAddressOfANameServerOutsideTheDomain(t *testing.T) {
 		t.Errorf("exit code %d; want 0", code)
 	}
 	lines := nswLinesWith("ns.other.example. | ns1.example.com. | ns1.notexample.com.", nswHostLines(hosts[1:2])...)
-	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines))+"yes\n"+s.wrote(d))
 	nswChecked(t, s.runner, nswHostKeys(hosts[1:2]))
 }
 
@@ -587,10 +587,10 @@ func TestInitWatchesTheAddressesOfAtMostEightNameServers(t *testing.T) {
 			t.Errorf("exit code %d; want 0", code)
 		}
 		lines := nswLinesWith(nswNames(h), nswHostLines(h)...)
-		iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d)))+"yes\n"+s.wrote(d))
+		iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines))+"yes\n"+s.wrote(d))
 		nswChecked(t, s.runner, nswHostKeys(h))
-		if n := s.runner.count(); n != 14+16 {
-			t.Errorf("%d checks ran; want 30", n)
+		if n := s.runner.count(); n != 15+16 {
+			t.Errorf("%d checks ran; want 31", n)
 		}
 		iniNoFindings(t, s.written(d)["example.com.expect"], s.runner.observations())
 	})
@@ -603,7 +603,7 @@ func TestInitWatchesTheAddressesOfAtMostEightNameServers(t *testing.T) {
 			t.Errorf("exit code %d; want 0", code)
 		}
 		lines := nswLinesWith(nswNames(h))
-		iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, iniAliasSkip(d))+nswManyHosts(d))+"yes\n"+s.wrote(d))
+		iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines)+nswManyHosts(d))+"yes\n"+s.wrote(d))
 		nswChecked(t, s.runner, nil)
 		iniNoFindings(t, s.written(d)["example.com.expect"], s.runner.observations())
 	})
@@ -636,7 +636,7 @@ func TestInitDropsTheAddressLinesOfANameServerWhoseGlueDiffers(t *testing.T) {
 				t.Errorf("exit code %d; want 0", code)
 			}
 			lines := nswLinesWith(nswNames(nswHosts), nswHostLines(nswHosts[:1])...)
-			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, append(c.skip, iniAliasSkip(d))...))+"yes\n"+s.wrote(d))
+			iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, c.skip...))+"yes\n"+s.wrote(d))
 			data := s.written(d)["example.com.expect"]
 			iniNoFindings(t, data, s.runner.observations())
 			// The lines that were left out would have made the delegation
@@ -671,7 +671,6 @@ func TestInitLeavesOutTheAddressesOfANameServerWhoseAnswerFailed(t *testing.T) {
 	skips := []string{
 		"ns1.example.com. A: " + nswServer("ns1.example.com.", iniNS1Addr) + " gave no answer (timeout)",
 		"ns1.example.com. AAAA: the A address of the host could not be read, so its glue at the parent zone cannot be compared",
-		iniAliasSkip(d),
 	}
 	iniSame(t, "the dialogue", out, s.shown("example.com", iniBlock(d, lines, skips...))+"yes\n"+s.wrote(d))
 	iniNoFindings(t, s.written(d)["example.com.expect"], s.runner.observations())

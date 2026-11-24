@@ -62,6 +62,13 @@ func look(ctx context.Context, r Runner, domain dnswire.Name) view {
 	if policy, ok := WantsPolicy(domain, observations); ok {
 		more = append(more, policy)
 	}
+	if alias, ok := wwwAlias(domain, observations); ok {
+		// Its A check gives no line, only a skip that says to ask for the
+		// CNAME, which this does.
+		a := obs.RecordsKey(domain, alias.Name, dnswire.TypeA).String()
+		observations = slices.DeleteFunc(observations, func(o obs.Observation) bool { return o.Key.String() == a })
+		more = append(more, alias)
+	}
 	if len(more) > 0 {
 		observations = append(observations, runKeys(ctx, r, more)...)
 	}
@@ -118,6 +125,34 @@ func WantsPolicy(domain dnswire.Name, observations []obs.Observation) (obs.Key, 
 		}
 	}
 	return obs.Key{}, false
+}
+
+// wwwAlias gives the check of the CNAME of www.<domain> when the A check of
+// that name got one: an alias has no A set of its own, so the CNAME is what a
+// line can watch there.
+func wwwAlias(domain dnswire.Name, observations []obs.Observation) (obs.Key, bool) {
+	www, err := dnswire.NameFromLabels(append([]string{"www"}, domain.Labels()...))
+	if err != nil {
+		return obs.Key{}, false
+	}
+	a := obs.RecordsKey(domain, www, dnswire.TypeA).String()
+	for _, o := range observations {
+		if o.Key.String() == a && slices.ContainsFunc(o.Answers, isAlias) {
+			return obs.RecordsKey(domain, www, dnswire.TypeCNAME), true
+		}
+	}
+	return obs.Key{}, false
+}
+
+// isAlias reports an answer of records that holds a CNAME record.
+func isAlias(a obs.Answer) bool {
+	return obs.Match(a.Result,
+		func(r obs.Records) bool {
+			return slices.ContainsFunc(r.Set, func(rr dnswire.Record) bool { return rr.Type() == dnswire.TypeCNAME })
+		},
+		func(obs.NoData) bool { return false },
+		func(obs.NoName) bool { return false },
+		func(obs.Failure) bool { return false })
 }
 
 // runKeys runs the checks of keys at once. A check with a failure answer,

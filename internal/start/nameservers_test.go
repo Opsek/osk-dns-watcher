@@ -318,7 +318,7 @@ func TestInitWritesTheSameFileForTheSameAnswersInAnyOrder(t *testing.T) {
 	over[iniKey(d, d, dnswire.TypeNS)] = []obs.Answer{
 		iniAt("ns1.example.com.", iniNS1Addr, iniRecords(d, dnswire.TypeNS, "ns1.example.com.", "ns2.example.com.")),
 		iniAt("ns2.example.com.", iniNS2Addr, iniRecords(d, dnswire.TypeNS, "ns2.example.com.", "ns1.example.com.", "ns3.example.net.")),
-		iniAt("ns2.example.com.", "[2001:db8::54]:53", iniFail(obs.ReasonNetwork)),
+		iniAt("ns2.example.com.", "[2001:db8::54]:53", iniFail(obs.ReasonNoRoute)),
 	}
 	reversed := map[string][]obs.Answer{}
 	for k, answers := range over {

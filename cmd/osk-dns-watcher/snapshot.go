@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -42,7 +41,7 @@ func snapshot(args []string, stdout, stderr io.Writer) int {
 	observations = append(observations, runChecks(o, more)...)
 	f, skips := expect.Snapshot(domain, observations)
 	out := &lines{json: a.json}
-	formatSnapshot(out, domain, f, skips, len(expect.Unreached(observations)))
+	formatSnapshot(out, domain, f, skips, expect.Unreached(observations))
 	if _, ok := f.Find(domain, dnswire.TypeNS); ok {
 		formatNSNotes(out, domain, expect.NSNoAnswer(domain, observations), expect.NSSources(domain, observations))
 	}
@@ -84,18 +83,15 @@ type snapshotSkip struct {
 
 // formatSnapshot gives the file under a header that marks it for review, and
 // a comment line for each set that it leaves out, so the output stays a valid
-// file. One more comment counts the IPv6 addresses that the lines do not
-// rest on, when there are any. The JSON lines hold the lines of the file and
-// the sets left out.
-func formatSnapshot(out *lines, domain dnswire.Name, f *expect.File, skips []expect.Skip, unreached int) {
+// file. One more comment counts the addresses that the lines do not rest
+// on, because this machine has no route to them, when there are any. The
+// JSON lines hold the lines of the file and the sets left out.
+func formatSnapshot(out *lines, domain dnswire.Name, f *expect.File, skips []expect.Skip, unreached []obs.Server) {
 	if !out.json {
 		out.add("# Snapshot of "+domain.Lower().String()+" as seen now. Review every line: "+
 			"nothing in it is trusted until you pass this file to osk-dns-watcher check --expect.", nil)
-		switch {
-		case unreached == 1:
-			out.add("# not asked: 1 IPv6 address of the servers, which this machine cannot reach", nil)
-		case unreached > 1:
-			out.add(fmt.Sprintf("# not asked: %d IPv6 addresses of the servers, which this machine cannot reach", unreached), nil)
+		if len(unreached) > 0 {
+			out.add("# not asked: "+startpkg.AddressCount(unreached)+" of the servers, to which this machine has no route", nil)
 		}
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(f.String(), "\n"), "\n") {

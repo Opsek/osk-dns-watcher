@@ -56,7 +56,8 @@ func TestRules(t *testing.T) {
 			"internal/b/b.go:16 uses crypto/tls.NewListener",
 		}},
 		// The passing tree holds folders that "go build ./..." skips, and
-		// names the two signals of syscall that the tool may name.
+		// names the two signals and the three errors of syscall that the
+		// tool may name.
 		{"no-exec/pass", nil},
 		{"no-exec/fail", []string{
 			"internal/a/a.go:5 imports os/exec",
@@ -64,6 +65,7 @@ func TestRules(t *testing.T) {
 			"internal/a/a.go:12 uses os.StartProcess",
 			"internal/a/a.go:13 uses syscall.Exec", // through an alias
 			"internal/b/b.go:5 imports syscall",    // a dot import
+			"internal/c/c.go:11 uses syscall.ECONNREFUSED",
 		}},
 		{"no-unsafe/pass", nil},
 		{"no-unsafe/fail", []string{

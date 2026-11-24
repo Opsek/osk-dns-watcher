@@ -199,7 +199,7 @@ A webhook gets a POST with `Content-Type: application/json` and a body with `"sc
 - `check.kind` is `delegation`, `ds`, `records`, `serial`, `wildcard`, `certificates`, or `policy`. It is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks for a random name directly under `check.name`, and its `rtype` is `A`. A `policy` check fetches the MTA-STS policy file from the host `check.name`, and its `rtype` is `TXT`. A `certificates` check has an empty `rtype`.
 - `seen` lists each server whose answer differs, at most 6. `more` counts the servers left out. A resolve has an empty `seen`.
 - `value` holds at most 6 server lines. For `issuer`, `certname`, and `hostnames`, it holds every line, up to 200. For `spf`, `dmarc`, and `dkim`, one line `weaker <word>` follows the server lines for each way in which the record permits more than the file. For `mta-sts`, one such line follows for each way in which the record protects less than the file. An example is `weaker p=none in place of p=reject`. A word is a fixed English phrase of at most 240 characters. It holds no text of the record beyond an address, a name, or a key. There are at most 12 words. When there are more, the twelfth is `weaker and <k> more`.
-- Times are UTC. An empty string means none.
+- Times are UTC. An empty string means none. `last_clean` is the time of the last check of the set that was OK. [How an alert looks](alerts.md#how-an-alert-looks) in alerts.md says when a check is OK.
 - `text` is the Slack text.
 
 A notice has `schema`, `type`, `id`, `at`, `notice`, `domain`, `lines`, and `text`.
@@ -316,7 +316,7 @@ osk-dns-watcher doctor --config <file> [--json]
 | `query` | Sends one DNS query to one server and prints the answer. `--timeout` is for the whole exchange (default 5s). |
 | `check <domain>` | Asks the servers once, from the root down, and prints what the walk asked and every answer. `--timeout` is for one query (default 2s). |
 | `snapshot` | Prints the expectation lines of what the servers give now ([expectations.md](expectations.md#snapshot)). |
-| `check --expect` | Runs the checks of an expectations file once and prints what differs. `--json` works here too. With `--state`, it also keeps the alerts in that folder and sends them to the Slack URL in `OSK_SLACK_URL`. It sends the alerts from `--slack-min-severity` up (default `low`). |
+| `check --expect` | Runs the checks of an expectations file once and prints what differs. `--json` works here too. With `--state`, it also keeps the alerts in that folder and sends them to the Slack URL in `OSK_SLACK_URL`. It sends the alerts from `--slack-min-severity` up (default `low`). The addresses that this machine has no route to get one `not asked` line. They do not make the exit code 1. |
 | `run` | The service, which the container runs. Its log has one JSON object per line, with the keys `time`, `level`, `event`, `domain`, and `text`. `docker compose logs -f watcher` shows the log. Its history is `state.db` in the `state` folder. |
 | `validate` | Checks the config, its secrets as this process sees them, the expectations files, and the state folder. |
 | `status` | Says whether the service is healthy (exit 0) or not (exit 1), and lists the open alerts with their ids. |

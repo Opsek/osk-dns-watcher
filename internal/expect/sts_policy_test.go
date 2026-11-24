@@ -1086,10 +1086,10 @@ func TestSTSSnapshotWritesTheLine(t *testing.T) {
 			expObs(t, expRecordsKey(t, "_mta-sts.x.corp.test.", dnswire.TypeTXT), "corp.test.",
 				expAnswer(t, "ns1.corp.test.", expNS1Addr, expNoData(t, "corp.test."))),
 			stpRecordObs(t, stpGoodRecord), stpPolicyObs(t, good)}, stpLine},
-		{"an IPv6 server that cannot be reached, for the record", []obs.Observation{
+		{"an IPv6 server with no route, for the record", []obs.Observation{
 			expObs(t, expRecordsKey(t, "_mta-sts.corp.test.", dnswire.TypeTXT), "corp.test.",
 				expAnswer(t, "ns1.corp.test.", expNS1Addr, stpTXTResult(t, "_mta-sts.corp.test.", stpGoodRecord)),
-				expAnswer(t, "ns6.corp.test.", "[2001:db8::1]:53", expFailure(obs.ReasonNetwork))),
+				expAnswer(t, "ns6.corp.test.", "[2001:db8::1]:53", expFailure(obs.ReasonNoRoute))),
 			stpPolicyObs(t, good)}, stpLine},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1156,9 +1156,9 @@ func TestSTSSnapshotWritesNothingWhenTheRecordIsNotOn(t *testing.T) {
 				expAnswer(t, "ns1.corp.test.", expNS1Addr, stpTXTResult(t, "_mta-sts.corp.test.", stpGoodRecord)),
 				expAnswer(t, "ns2.corp.test.", expNS2Addr, expFailure(obs.ReasonTimeout))),
 			stpPolicyObs(t, good)}},
-		{"the record of an unreachable IPv6 server is the only answer", []obs.Observation{
+		{"the record of an IPv6 server with no route is the only answer", []obs.Observation{
 			expObs(t, expRecordsKey(t, "_mta-sts.corp.test.", dnswire.TypeTXT), "corp.test.",
-				expAnswer(t, "ns6.corp.test.", "[2001:db8::1]:53", expFailure(obs.ReasonNetwork))),
+				expAnswer(t, "ns6.corp.test.", "[2001:db8::1]:53", expFailure(obs.ReasonNoRoute))),
 			stpPolicyObs(t, good)}},
 		{"the servers disagree on the record", []obs.Observation{
 			expObs(t, expRecordsKey(t, "_mta-sts.corp.test.", dnswire.TypeTXT), "corp.test.",

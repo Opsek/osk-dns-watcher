@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ const (
 	textDNSOK      = "its parent zone answers; osk-dns-watcher found it from the root servers, without this machine's resolver"
 	textDNSFail    = "no answer from the root servers or its parent zone (%s). " +
 		"osk-dns-watcher asks them itself on port 53, over UDP and TCP: allow that traffic to the internet."
+	textNoRoute = "this machine has no route to %s of the servers. osk-dns-watcher cannot ask them. " +
+		"A check counts as OK when the other servers answer."
 	textSent      = "%s answered %d; a test message from osk-dns-watcher doctor was sent"
 	textRefused   = "%s answered %d%s. Check the URL in %s: a deleted or revoked webhook answers like this."
 	textUnreached = "no answer from %s: %s. Check that this machine can reach %s over HTTPS."
@@ -308,15 +311,48 @@ func secretFiles(c *config.Config) []string {
 
 // dnsCheck asks the parent zone of every domain at once: each check ends by
 // itself within its interval, so a domain that gets no answer holds up no
-// other. The results keep the config order.
+// other. The results keep the config order. One warning more counts the
+// addresses that this machine has no route to, which a check leaves out.
 func dnsCheck(ctx context.Context, o *observe.Observer, domains []config.Domain) []result {
 	results := make([]result, len(domains))
+	observations := make([]obs.Observation, len(domains))
 	var wg sync.WaitGroup
 	for i, d := range domains {
-		wg.Go(func() { results[i] = dnsResult(d.Name, delegation(ctx, o, d.Name)) })
+		wg.Go(func() {
+			observations[i] = delegation(ctx, o, d.Name)
+			results[i] = dnsResult(d.Name, observations[i])
+		})
 	}
 	wg.Wait()
+	if res, ok := noRouteResult(observations); ok {
+		results = append(results, res)
+	}
 	return results
+}
+
+// noRouteResult warns once of every address that this machine has no route
+// to: on a machine without IPv6 that is each IPv6 address of every server.
+// When a domain got no usable answer, its own line fails already.
+func noRouteResult(observations []obs.Observation) (result, bool) {
+	servers := Unrouted(observations)
+	if len(servers) == 0 {
+		return result{}, false
+	}
+	return newResult("warn", "dns", fmt.Sprintf(textNoRoute, AddressCount(servers))), true
+}
+
+// Unrouted gives the servers that obs.Routed leaves out of the observations,
+// each address once, sorted.
+func Unrouted(observations []obs.Observation) []obs.Server {
+	var servers []obs.Server
+	for _, o := range observations {
+		_, left := obs.Routed(o.Answers)
+		for _, a := range left {
+			servers = append(servers, a.Server)
+		}
+	}
+	slices.SortFunc(servers, func(a, b obs.Server) int { return a.Addr.Compare(b.Addr) })
+	return slices.CompactFunc(servers, func(a, b obs.Server) bool { return a.Addr == b.Addr })
 }
 
 func delegation(ctx context.Context, o *observe.Observer, domain dnswire.Name) obs.Observation {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/Opsek/osk-dns-watcher/internal/observe"
 	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 	"github.com/Opsek/osk-dns-watcher/internal/schedule"
+	startpkg "github.com/Opsek/osk-dns-watcher/internal/start"
 )
 
 // checkInterval is the interval each check of "osk-dns-watcher check" is given. The
@@ -228,18 +230,17 @@ func runChecks(o *observe.Observer, keys []obs.Key) []obs.Observation {
 }
 
 // formatObservations gives the walk entries and then the answers of each
-// observation. failed reports a failure among the answers; the walk is proof
-// only, and the answers show what it led to.
+// observation. failed reports an observation that missed a server (see
+// missed); the walk is proof only, and the answers show what it led to.
 func formatObservations(out *lines, observations []obs.Observation) (failed bool) {
 	for _, o := range observations {
 		for _, a := range o.Walk {
 			formatAnswer(out, "walk", o.Key.Kind, a)
 		}
 		for _, a := range o.Answers {
-			if formatAnswer(out, "answer", o.Key.Kind, a) {
-				failed = true
-			}
+			formatAnswer(out, "answer", o.Key.Kind, a)
 		}
+		failed = failed || missed(o)
 	}
 	return failed
 }
@@ -260,10 +261,10 @@ type answerJSON struct {
 }
 
 // formatAnswer writes one line for each record of the answer, or one line for
-// its other case, and reports whether it is a failure. Text from the network
-// is printed only through Name.String, Record.String and strconv.Quote, which
-// escape what could start a line or a field of its own.
-func formatAnswer(out *lines, role string, kind obs.Kind, a obs.Answer) (failed bool) {
+// its other case. Text from the network is printed only through Name.String,
+// Record.String and strconv.Quote, which escape what could start a line or a
+// field of its own.
+func formatAnswer(out *lines, role string, kind obs.Kind, a obs.Answer) {
 	j := answerJSON{Type: role, Kind: kind.String(), QName: a.Question.Name.String(), QType: a.Question.Type.String(),
 		Received: a.Received.UTC().Format(receivedLayout)}
 	if a.Server.Addr.IsValid() {
@@ -303,14 +304,12 @@ func formatAnswer(out *lines, role string, kind obs.Kind, a obs.Answer) (failed 
 			return [][2]string{{word, fmt.Sprintf("%d %s", n.TTL(), n.SOA)}}
 		},
 		func(f obs.Failure) [][2]string {
-			failed = true
 			return [][2]string{{"failure", f.Reason.String() + " " + strconv.Quote(f.Detail)}}
 		})
 	for _, c := range cases {
 		j.Case, j.Data = c[0], c[1]
 		out.add(prefix+c[0]+" "+c[1], j)
 	}
-	return failed
 }
 
 // checkExpect runs the checks of the file of expectations at path and prints
@@ -386,7 +385,9 @@ func expectKeys(f *expect.File) []obs.Key {
 // formatFindings gives for each observation the findings that decide makes of
 // it, then a line for each answer that is a failure, and at the end a count of
 // the checks and of both. clean reports that there are neither. decide gets no
-// open alert, so that what this prints never depends on stored state.
+// open alert, so that what this prints never depends on stored state. A
+// failure that obs.Routed leaves out is no unknown answer: one line before
+// the count names how many addresses this machine has no route to.
 func formatFindings(out *lines, f *expect.File, observations []obs.Observation, now time.Time) (clean bool) {
 	findings, unknown := 0, 0
 	for _, o := range observations {
@@ -394,13 +395,15 @@ func formatFindings(out *lines, f *expect.File, observations []obs.Observation, 
 			formatFinding(out, c.Finding)
 			findings++
 		}
-		for _, a := range o.Answers {
+		routed, _ := obs.Routed(o.Answers)
+		for _, a := range routed {
 			if isFailure(a.Result) {
 				formatAnswer(out, "unknown", o.Key.Kind, lowerNames(a))
 				unknown++
 			}
 		}
 	}
+	formatNotAsked(out, startpkg.Unrouted(observations))
 	domain := f.Domain.Lower().String()
 	out.add(fmt.Sprintf("checked %s %d sets: %d findings, %d unknown answers", domain, len(observations), findings, unknown),
 		struct {
@@ -411,6 +414,20 @@ func formatFindings(out *lines, f *expect.File, observations []obs.Observation, 
 			Unknown  int    `json:"unknown"`
 		}{"checked", domain, len(observations), findings, unknown})
 	return findings == 0 && unknown == 0
+}
+
+// formatNotAsked gives one line for the addresses that this machine has no
+// route to, when there are any.
+func formatNotAsked(out *lines, servers []obs.Server) {
+	if len(servers) == 0 {
+		return
+	}
+	out.add("not asked: "+startpkg.AddressCount(servers)+" of the servers, to which this machine has no route",
+		struct {
+			Type      string `json:"type"`
+			Addresses int    `json:"addresses"`
+			Reason    string `json:"reason"`
+		}{"notasked", len(servers), obs.ReasonNoRoute.String()})
 }
 
 type findingJSON struct {
@@ -468,6 +485,14 @@ func seenOf(s decide.Seen) seenJSON {
 		j.Host = s.Answer.Server.Name.Lower().String()
 	}
 	return j
+}
+
+// missed reports whether a run of o missed a server that it could ask: an
+// answer that obs.Routed keeps is a failure. Such a run does not show the
+// check clean.
+func missed(o obs.Observation) bool {
+	routed, _ := obs.Routed(o.Answers)
+	return slices.ContainsFunc(routed, func(a obs.Answer) bool { return isFailure(a.Result) })
 }
 
 func isFailure(r obs.Result) bool {

@@ -14,6 +14,7 @@ var (
 	ErrInvalidQuery = errors.New("dnswire: invalid query")
 	ErrMismatch     = errors.New("dnswire: answer does not match the query")
 	ErrTSIG         = errors.New("dnswire: TSIG check failed")
+	ErrNoRoute      = errors.New("dnswire: no route from this machine")
 )
 
 // malformed puts where in front of err and wraps ErrMalformed, unless err

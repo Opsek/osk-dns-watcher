@@ -33,7 +33,7 @@ For each domain, `init` writes these lines:
 - The A and AAAA sets of each nameserver host inside the domain, when the NS line names at most eight such hosts. With these lines, the service compares the glue at the parent zone.
 - The `mta-sts` line, when `_mta-sts.<domain>` holds an MTA-STS record and `init` can read the policy file.
 
-A set gets a line only when every server answered and all servers agree. An empty set gets a `none` line. `init` does not ask servers at IPv6 addresses that this machine cannot reach, and says how many. A file for `example.com.` can look like this:
+A set gets a line only when every server answered and all servers agree. An empty set gets a `none` line. `init` does not ask a server at an address that this machine has no route to, and it says how many such addresses there are. The service does the same at every check. A file for `example.com.` can look like this:
 
 ```
 # Written by osk-dns-watcher init at 2026-11-15 14:00:00 UTC from what the servers gave. Edit a line to change what osk-dns-watcher trusts.

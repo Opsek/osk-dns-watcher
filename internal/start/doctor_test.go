@@ -39,6 +39,7 @@ import (
 	"github.com/Opsek/osk-dns-watcher/internal/dnswire"
 	"github.com/Opsek/osk-dns-watcher/internal/httpclient"
 	"github.com/Opsek/osk-dns-watcher/internal/observe"
+	"github.com/Opsek/osk-dns-watcher/internal/observe/obs"
 	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
@@ -1045,6 +1046,43 @@ func TestDoctorFilesReadableConfigAndNoStatePass(t *testing.T) {
 func TestDoctorDNSFailsAloneForThatDomain(t *testing.T) {
 	s := docStart(t, docWorld{refuse: "shop.test."})
 	s.check(t, s.want(t, map[string]string{"dns shop.test.": docDNSFail("shop.test.", "refused")}))
+}
+
+// One warning counts each address of every domain that this machine has no
+// route to, once. A domain with no usable answer fails on its own line, and
+// a network failure is no lack of route, so neither adds to the count.
+func TestDoctorWarnsOnceOfAddressesWithNoRoute(t *testing.T) {
+	ns := iniRecords("example.com.", dnswire.TypeNS, "ns1.example.net.")
+	noRoute := func(addr string) obs.Answer { return iniAt("a.gtld.example.", addr, iniFail(obs.ReasonNoRoute)) }
+	com := obs.Observation{Answers: []obs.Answer{iniAt("a.gtld.example.", "192.0.2.1:53", ns), noRoute(iniNS1v6Addr), noRoute(iniNS2v6Addr)}}
+	org := obs.Observation{Answers: []obs.Answer{iniAt("a.gtld.example.", "192.0.2.1:53", ns), noRoute(iniNS1v6Addr)}}
+	v4 := obs.Observation{Answers: []obs.Answer{iniAt("a.gtld.example.", "192.0.2.1:53", ns), noRoute("192.0.2.9:53")}}
+	dead := obs.Observation{Answers: []obs.Answer{noRoute("[2001:db8::99]:53")}}
+	network := obs.Observation{Answers: []obs.Answer{iniAt("a.gtld.example.", "192.0.2.1:53", ns),
+		iniAt("a.gtld.example.", "[2001:db8::98]:53", iniFail(obs.ReasonNetwork))}}
+	warn := func(count string) string {
+		return "this machine has no route to " + count + " of the servers. osk-dns-watcher cannot ask them. " +
+			"A check counts as OK when the other servers answer."
+	}
+	for _, c := range []struct {
+		name         string
+		observations []obs.Observation
+		want         string // "" for no warning
+	}{
+		{"two domains share an address", []obs.Observation{com, org, dead, network}, warn("2 IPv6 addresses")},
+		{"one address", []obs.Observation{org}, warn("1 IPv6 address")},
+		{"an IPv4 address too", []obs.Observation{com, v4}, warn("3 addresses")},
+		{"no usable answer", []obs.Observation{dead}, ""},
+		{"a network failure", []obs.Observation{network}, ""},
+	} {
+		res, ok := noRouteResult(c.observations)
+		switch {
+		case c.want == "" && ok:
+			t.Errorf("%s: %+v, want no warning", c.name, res)
+		case c.want != "" && (!ok || res != newResult("warn", "dns", c.want)):
+			t.Errorf("%s: %+v (%v), want the warning %q", c.name, res, ok, c.want)
+		}
+	}
 }
 
 // A service that answers with a status other than 2xx fails its channel

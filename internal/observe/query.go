@@ -179,6 +179,10 @@ func (s *session) send(ctx context.Context, srv obs.Server, q dnswire.Question) 
 	resp, err := s.o.exchange(qctx, srv.Addr, query, false)
 	if err != nil {
 		reason, down := exchangeFailure(ctx, err)
+		if reason == obs.ReasonNoRoute {
+			// The dial failed before any packet left this machine.
+			p.Sent = time.Time{}
+		}
 		return fail(reason, err.Error(), down)
 	}
 	p.Wire, p.TCP = resp.Wire, resp.TCP
@@ -225,10 +229,13 @@ func (s *session) wait(ctx context.Context, d time.Duration) error {
 // the check. When a UDP wait ends after a bad datagram was dropped, the error
 // wraps both the timeout and the bad datagram: the bad datagram is the
 // finding, and the wait still costs the same for the next question. A wait
-// cut by the end of the check is no sign of a dead server.
+// cut by the end of the check is no sign of a dead server. An address that
+// this machine has no route to is down too: it stays so for the check.
 func exchangeFailure(ctx context.Context, err error) (reason obs.Reason, down bool) {
 	waited := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 	switch {
+	case errors.Is(err, dnswire.ErrNoRoute):
+		return obs.ReasonNoRoute, true
 	case errors.Is(err, dnswire.ErrMalformed), errors.Is(err, dnswire.ErrMismatch):
 		return obs.ReasonMalformed, waited
 	case ctx.Err() != nil:

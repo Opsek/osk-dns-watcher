@@ -279,8 +279,8 @@ func nslNoFinding(t *testing.T, f *File, observations []obs.Observation) {
 
 // NSNoAnswer names each server whose failed answer the NS line rests
 // without, so that the operator learns that a set may be missing; only when
-// the line is written, and never an IPv6 address that this machine cannot
-// reach, which the snapshot counts apart.
+// the line is written, and never an address that this machine has no route
+// to, which the snapshot counts apart.
 func TestNSNoAnswerNamesEachServerTheLineRestsWithout(t *testing.T) {
 	fails := func(k int, why obs.Reason) obs.Answer { return nslAt(t, k, expFailure(why)) }
 	evil, err := dnswire.NameFromLabels([]string{"ns2\x1b[2J\n", "corp", "test"})
@@ -307,8 +307,11 @@ func TestNSNoAnswerNamesEachServerTheLineRestsWithout(t *testing.T) {
 		{"two failed walks and a server: the walk is named once", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
 			expFailedWalk(expRecordsKey(t, "corp.test.", dnswire.TypeNS)), expFailedWalk(expRecordsKey(t, "corp.test.", dnswire.TypeNS)),
 			nslApex(t, fails(1, obs.ReasonTimeout))}, []string{NoPath, nslC1 + " (timeout)"}},
-		{"an IPv6 address that cannot be reached is not named", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
-			nslApex(t, nslGives(t, 1, 1, 2), expAnswer(t, "ns1.corp.test.", "[fd53::11]:53", expFailure(obs.ReasonNetwork)))}, nil},
+		{"an address with no route is not named", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
+			nslApex(t, nslGives(t, 1, 1, 2), expAnswer(t, "ns1.corp.test.", "[fd53::11]:53", expFailure(obs.ReasonNoRoute)))}, nil},
+		{"an IPv6 address with a network failure is named", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
+			nslApex(t, nslGives(t, 1, 1, 2), expAnswer(t, "ns1.corp.test.", "[fd53::11]:53", expFailure(obs.ReasonNetwork)))},
+			[]string{"[fd53::11]:53 ns1.corp.test. (network)"}},
 		{"an IPv6 address that timed out is named", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
 			nslApex(t, nslGives(t, 1, 1, 2), expAnswer(t, "ns1.corp.test.", "[fd53::11]:53", expFailure(obs.ReasonTimeout)))},
 			[]string{"[fd53::11]:53 ns1.corp.test. (timeout)"}},
@@ -360,10 +363,10 @@ func TestNSSourcesOfAnotherDomainIsNil(t *testing.T) {
 	}
 }
 
-// An IPv6 address that this machine cannot reach is left out of the NS line
+// An address that this machine has no route to is left out of the NS line
 // of several sets as of any other line, and Unreached names it.
-func TestSnapshotNSLineOfSeveralSetsCountsAnUnreachedIPv6Address(t *testing.T) {
-	v6 := expAnswer(t, "ns1.corp.test.", "[fd53::11]:53", expFailure(obs.ReasonNetwork))
+func TestSnapshotNSLineOfSeveralSetsCountsAnAddressWithNoRoute(t *testing.T) {
+	v6 := expAnswer(t, "ns1.corp.test.", "[fd53::11]:53", expFailure(obs.ReasonNoRoute))
 	observations := []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)), nslApex(t, nslGives(t, 1, 1, 2, 3), v6)}
 	f, skips := expSnapshot(t, observations...)
 	if want := "corp.test. NS " + nslText(1, 2) + " || " + nslText(1, 2, 3); nslNSLine(f) != want || len(skips) != 0 {

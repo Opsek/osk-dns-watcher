@@ -15,6 +15,8 @@ A message has four parts, in this order:
 
 The [README](../README.md) shows a full message.
 
+The times say when the service first saw the problem and when a check of the same set was last OK. A check is OK when no alert of the set is open and every nameserver answered. A nameserver address that this machine has no route to does not count. `no clean check before` means that no check of the set was OK since the service made its state folder.
+
 The headline starts with an emoji and the severity:
 
 | Start of the headline | Severity |
@@ -97,7 +99,7 @@ The last three alerts come only when the config turns on the certificate logs. S
 
 | Headline | What it means | What to do |
 |---|---|---|
-| **MEDIUM** · the records check of `www.example.com. A` has had no usable answer for too long | No server gave a usable answer for too long. At the default intervals, too long is 5 minutes for the `parent` and `fast` checks, 15 minutes for the `other` and `serial` checks, and 30 minutes for the certificate source. Until a server answers, the service does not see a change there. | Find out why no server answers this machine. For the policy file or the certificate source, the log of the service names the reason. |
+| **MEDIUM** · the records check of `www.example.com. A` has had no usable answer for too long | No server gave a usable answer for too long. An address that this machine has no route to gives no answer. At the default intervals, too long is 5 minutes for the `parent` and `fast` checks, 15 minutes for the `other` and `serial` checks, and 30 minutes for the certificate source. Until a server answers, the service does not see a change there. | Find out why no server answers this machine. For the policy file or the certificate source, the log of the service names the reason. |
 | **LOW** · the zone `example.com.` changed, and no watched record differs | The zone serial moved, and no line differs. The cause is a change of a record that the file does not watch, or a change that was undone. | If you did not change the zone, find out who did. The alert cannot say which record changed. |
 | **MEDIUM** · the expectations file of `example.com.` is not valid | The file has a fault. The service goes on with the last valid file. | Fix the file. `validate` names each fault. |
 
@@ -115,7 +117,7 @@ Notices go to every channel, whatever its `min_severity`. They have no severity 
 
 ## How an alert ends
 
-Most alerts end when the servers give what the file allows again. They also end when you change the file so that it allows what the servers give, for example with `accept`. The end message starts with ✅ **RESOLVED**. An alert stays open while a server that showed the problem gives no answer.
+Most alerts end when the servers give what the file allows again. They also end when you change the file so that it allows what the servers give, for example with `accept`. The end message starts with ✅ **RESOLVED**. An alert stays open while a server that showed the problem gives no answer. This is also true when this machine loses its route to the address of that server.
 
 Some alerts end in their own way:
 

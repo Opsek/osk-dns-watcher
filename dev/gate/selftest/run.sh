@@ -569,6 +569,38 @@ func Quiet() {
 EOF
 }
 
+# The three errors by which a UDP dial says that there is no route, and no
+# other error of syscall.
+syscall_no_route() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import (
+	"errors"
+	"syscall"
+)
+
+func NoRoute(err error) bool {
+	return errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EAFNOSUPPORT)
+}
+EOF
+}
+
+syscall_other_error() {
+	put internal/zzfault/zzfault.go <<'EOF'
+package zzfault
+
+import (
+	"errors"
+	"syscall"
+)
+
+func Fault(err error) bool {
+	return errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.ECONNREFUSED)
+}
+EOF
+}
+
 syscall_other_name() {
 	put internal/zzfault/zzfault.go <<'EOF'
 package zzfault
@@ -1652,6 +1684,8 @@ check syscall-blank-import          syscall_blank_import       archcheck no-exec
 check syscall-dot-import            syscall_dot_import         archcheck no-exec "$Z:3 imports syscall"
 check syscall-signals               syscall_signals            archcheck 'ok no-exec'
 check syscall-other-name            syscall_other_name         archcheck no-exec "$Z:10 uses syscall.Kill"
+check syscall-no-route              syscall_no_route           archcheck 'ok no-exec'
+check syscall-other-error           syscall_other_error        archcheck no-exec "$Z:9 uses syscall.ECONNREFUSED"
 check syscall-not-under-no-listener syscall_import             archcheck 'ok no-listener'
 
 check unsafe-import                 unsafe_import              archcheck no-unsafe $Z

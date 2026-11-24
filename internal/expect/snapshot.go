@@ -20,9 +20,9 @@ type Skip struct {
 
 // Snapshot turns observations of one domain into a file. A set gets a line
 // only when every server answered and all agree, because the file is what
-// later answers are judged against. The exceptions: an IPv6 address that
-// this machine cannot reach (see reachable), and the NS set of the domain
-// (see nsAlternatives). Skips are sorted by Name, then Type.
+// later answers are judged against. The exceptions: an address that this
+// machine has no route to (see reachable), and the NS set of the domain (see
+// nsAlternatives). Skips are sorted by Name, then Type.
 func Snapshot(domain dnswire.Name, observations []obs.Observation) (*File, []Skip) {
 	file := &File{Domain: domain}
 	var skips []Skip
@@ -66,8 +66,8 @@ func unreadable(domain dnswire.Name, line string) string {
 }
 
 // Unreached gives the servers that a snapshot of these observations leaves
-// out of a set that gets a line: IPv6 addresses that this machine could not
-// reach. Each address is given once, sorted.
+// out of a set that gets a line: addresses that this machine has no route
+// to. Each address is given once, sorted.
 func Unreached(observations []obs.Observation) []obs.Server {
 	var servers []obs.Server
 	for _, g := range groupSets(observations) {
@@ -312,8 +312,8 @@ const NoPath = "no path from the root to the servers of the domain"
 
 // NSNoAnswer gives the servers that gave no answer about the NS set of
 // domain, each as "<addr> <host> (<reason>)", or NoPath, when the NS line
-// that Snapshot writes rests on the others. An IPv6 address that this
-// machine cannot reach is not among them: Unreached gives it.
+// that Snapshot writes rests on the others. An address that this machine
+// has no route to is not among them: Unreached gives it.
 func NSNoAnswer(domain dnswire.Name, observations []obs.Observation) []string {
 	ns, _ := nsOf(domain, observations)
 	return ns.noAnswer
@@ -332,7 +332,7 @@ func nsOf(domain dnswire.Name, observations []obs.Observation) (nsLine, bool) {
 type nsLine struct {
 	line     Expectation
 	sources  []NSSource
-	left     []obs.Server // IPv6 addresses that this machine cannot reach
+	left     []obs.Server // addresses that this machine has no route to
 	noAnswer []string     // every other server that gave no answer
 }
 
@@ -355,7 +355,9 @@ func (g *setGroup) nsAlternatives() (nsLine, bool) {
 	for i, a := range g.answers {
 		set, failure, failed := readAnswer(a)
 		switch {
-		case failed && failure.Reason == obs.ReasonNetwork && a.Server.Addr.Addr().Is6():
+		case obs.NoRoute(a):
+			// As obs.Routed leaves it out: when no answer is usable, there
+			// is no alternative, so the line is not written anyway.
 			ns.left = append(ns.left, a.Server)
 			continue
 		case failed && !g.parent[i] && a.Server.Name.LabelCount() == 0 && !a.Server.Addr.IsValid():
@@ -406,25 +408,14 @@ func IsChallengeName(name dnswire.Name) bool {
 	return len(labels) > 0 && strings.EqualFold(labels[0], "_acme-challenge")
 }
 
-// reachable gives the answers that judge the set, and the servers left out.
-// On a machine without IPv6, every IPv6 address fails with network, and
-// almost no set would get a line. So such an answer is left out when another
-// answer is usable: the line then rests on the servers that answered.
+// reachable gives the answers that judge the set, and the servers left out:
+// those of obs.Routed. On a machine without IPv6, almost no set would get a
+// line otherwise. The line then rests on the servers that answered.
 func (g *setGroup) reachable() ([]obs.Answer, []obs.Server) {
-	var kept []obs.Answer
+	kept, unrouted := obs.Routed(g.answers)
 	var left []obs.Server
-	usable := false
-	for _, a := range g.answers {
-		_, failure, failed := readAnswer(a)
-		if failed && failure.Reason == obs.ReasonNetwork && a.Server.Addr.Addr().Is6() {
-			left = append(left, a.Server)
-			continue
-		}
-		kept = append(kept, a)
-		usable = usable || !failed
-	}
-	if !usable {
-		return g.answers, nil
+	for _, a := range unrouted {
+		left = append(left, a.Server)
 	}
 	return kept, left
 }

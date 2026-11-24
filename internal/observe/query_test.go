@@ -284,6 +284,7 @@ func TestAskMapsErrors(t *testing.T) {
 		{"canceled", fmt.Errorf("read udp 10.53.7.11:53: %w", context.Canceled), obs.ReasonTimeout},
 		{"connection refused", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, obs.ReasonNetwork},
 		{"anything else", errors.New("socket: too many open files"), obs.ReasonNetwork},
+		{"no route", fmt.Errorf("%w to [fd53::11]:53: dial udp: connect: network is unreachable", dnswire.ErrNoRoute), obs.ReasonNoRoute},
 	}
 	for _, c := range cases {
 		base := time.Now()
@@ -291,7 +292,8 @@ func TestAskMapsErrors(t *testing.T) {
 		o := askObserver(t, Config{ExtraRanges: askLab}, f, &askClock{t: base})
 		srv := askServer(t, "ns1.corp.test.", "10.53.7.11:53")
 		p, _, fail := askDo(t, context.Background(), o.newSession(base.Add(time.Minute)), srv, askQuestion(t, "www.corp.test.", dnswire.TypeA))
-		askFailed(t, c.name, p, fail, c.want, true)
+		// Nothing leaves this machine when it has no route.
+		askFailed(t, c.name, p, fail, c.want, c.want != obs.ReasonNoRoute)
 		if fail != nil && !strings.Contains(fail.Detail, c.err.Error()) {
 			t.Errorf("%s: Detail %q, want the error text %q", c.name, fail.Detail, c.err.Error())
 		}
@@ -314,6 +316,7 @@ func TestAskRemembersTransportFailure(t *testing.T) {
 	}{
 		{fmt.Errorf("read: %w", context.DeadlineExceeded), obs.ReasonTimeout},
 		{errors.New("connection refused"), obs.ReasonNetwork},
+		{fmt.Errorf("%w to 10.53.7.11:53", dnswire.ErrNoRoute), obs.ReasonNoRoute},
 	} {
 		f := &askFake{reply: func(askCall) (*dnswire.Response, error) { return nil, c.err }}
 		s := askObserver(t, Config{ExtraRanges: askLab}, f, nil).newSession(time.Now().Add(time.Minute))

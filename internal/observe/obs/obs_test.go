@@ -200,15 +200,15 @@ func TestReasonString(t *testing.T) {
 	reasons := []obs.Reason{obs.ReasonNoResult, obs.ReasonTimeout, obs.ReasonNetwork, obs.ReasonMalformed,
 		obs.ReasonTruncated, obs.ReasonRefused, obs.ReasonServFail, obs.ReasonRcode, obs.ReasonLame,
 		obs.ReasonBadAnswer, obs.ReasonNotPermitted, obs.ReasonRateLimited, obs.ReasonBudget, obs.ReasonWalk,
-		obs.ReasonDeadline}
+		obs.ReasonDeadline, obs.ReasonNoRoute}
 	words := []string{"none", "timeout", "network", "malformed", "truncated", "refused", "servfail", "rcode",
-		"lame", "bad-answer", "not-permitted", "rate-limited", "budget", "walk", "deadline"}
+		"lame", "bad-answer", "not-permitted", "rate-limited", "budget", "walk", "deadline", "no-route"}
 	for i, r := range reasons {
 		if int(r) != i || r.String() != words[i] {
 			t.Errorf("Reason %d prints %q; want value %d, %q", uint8(r), r.String(), i, words[i])
 		}
 	}
-	for _, r := range []obs.Reason{15, 255} {
+	for _, r := range []obs.Reason{16, 255} {
 		if want := fmt.Sprintf("reason%d", uint8(r)); r.String() != want {
 			t.Errorf("Reason %d prints %q, want %q", uint8(r), r.String(), want)
 		}

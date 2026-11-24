@@ -66,6 +66,7 @@ const (
 	ReasonBudget                     // the check had used all its queries
 	ReasonWalk                       // the walk from the root hit a bound, or found no address for the server
 	ReasonDeadline                   // the check ended before the query could be sent
+	ReasonNoRoute                    // this machine has no route to the address, so nothing was sent
 )
 
 var reasonWords = map[Reason]string{
@@ -84,6 +85,7 @@ var reasonWords = map[Reason]string{
 	ReasonBudget:       "budget",
 	ReasonWalk:         "walk",
 	ReasonDeadline:     "deadline",
+	ReasonNoRoute:      "no-route",
 }
 
 func (r Reason) String() string {

@@ -213,11 +213,13 @@ func noExec(t tree) []string {
 	return append(faults, syscallUses(t.pkgs)...)
 }
 
-// signals are the only names of syscall that the tool may use.
-var signals = []string{"SIGPIPE", "SIGTERM"}
+// allowedSyscall are the only names of syscall that the tool may use: two
+// signals, and the three errors by which a UDP dial says that this machine
+// has no route to an address. None of them starts a process or listens.
+var allowedSyscall = []string{"SIGPIPE", "SIGTERM", "ENETUNREACH", "EADDRNOTAVAIL", "EAFNOSUPPORT"}
 
-// syscallUses reports each name of syscall other than signals, and a dot or
-// blank import of it, after which its uses cannot be told.
+// syscallUses reports each name of syscall other than allowedSyscall, and a
+// dot or blank import of it, after which its uses cannot be told.
 func syscallUses(pkgs []*pkg) []string {
 	var faults []string
 	for _, p := range pkgs {
@@ -236,7 +238,7 @@ func syscallUses(pkgs []*pkg) []string {
 				}
 				ast.Inspect(f.ast, func(n ast.Node) bool {
 					if s, ok := n.(*ast.SelectorExpr); ok {
-						if id, ok := s.X.(*ast.Ident); ok && id.Name == name && !slices.Contains(signals, s.Sel.Name) {
+						if id, ok := s.X.(*ast.Ident); ok && id.Name == name && !slices.Contains(allowedSyscall, s.Sel.Name) {
 							faults = append(faults, fmt.Sprintf("%s uses syscall.%s", f.pos(s.Pos()), s.Sel.Name))
 						}
 					}

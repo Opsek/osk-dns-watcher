@@ -9,7 +9,9 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -459,6 +461,32 @@ func TestExchangeWaitsAfterRefusedPort(t *testing.T) {
 	_, err = Exchange(transportCtx(t, 300*time.Millisecond), server, q, false)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "refused") {
 		t.Errorf("error %v after %v, want the deadline and the refusal", err, time.Since(start))
+	}
+}
+
+// Only the errors by which this machine refuses to send at all mean no
+// route. A refusal, an unreachable host and a timeout can come from the
+// network, so they never do.
+func TestNoRouteIsOnlyThisMachinesRefusal(t *testing.T) {
+	dial := func(errno error) error {
+		return &net.OpError{Op: "dial", Net: "udp", Err: os.NewSyscallError("connect", errno)}
+	}
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no route", dial(syscall.ENETUNREACH), true},
+		{"no source address", dial(syscall.EADDRNOTAVAIL), true},
+		{"no IPv6 at all", &net.OpError{Op: "dial", Net: "udp", Err: os.NewSyscallError("socket", syscall.EAFNOSUPPORT)}, true},
+		{"refused", dial(syscall.ECONNREFUSED), false},
+		{"host unreachable", dial(syscall.EHOSTUNREACH), false},
+		{"timeout", fmt.Errorf("dial udp: %w", context.DeadlineExceeded), false},
+		{"another error", errors.New("network is unreachable"), false},
+	} {
+		if got := noRoute(c.err); got != c.want {
+			t.Errorf("%s: noRoute(%v) = %v, want %v", c.name, c.err, got, c.want)
+		}
 	}
 }
 

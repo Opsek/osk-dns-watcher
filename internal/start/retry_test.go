@@ -432,9 +432,10 @@ func TestInitWarnsOnlyForTheDomainWithoutAnNSLine(t *testing.T) {
 	}
 }
 
-// An IPv6 address that cannot be reached is not worth a second try: this
-// machine has no IPv6, so another run gives the same. Any other failure is.
-func TestInitRetriesAFailureAnswerExceptAnUnreachedIPv6Address(t *testing.T) {
+// An address that this machine has no route to is not worth a second try
+// when another answer is usable: another run gives the same. Any other
+// failure is, and so is a check with no usable answer at all.
+func TestInitRetriesAFailureAnswerExceptAnAddressWithNoRoute(t *testing.T) {
 	d := "example.com."
 	key := iniKey(d, d, dnswire.TypeA)
 	a := iniRecords(d, dnswire.TypeA, "192.0.2.10")
@@ -443,19 +444,24 @@ func TestInitRetriesAFailureAnswerExceptAnUnreachedIPv6Address(t *testing.T) {
 		answers []obs.Answer
 		twice   bool
 	}{
+		{"an IPv6 address, no route", []obs.Answer{
+			iniAt("ns1.example.net.", iniNS1Addr, a),
+			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
+			iniAt("ns2.example.net.", iniNS2Addr, a),
+		}, false},
+		{"only IPv6 addresses, no route", []obs.Answer{
+			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
+			iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNoRoute)),
+		}, true},
+		{"an IPv6 address, no route, and an IPv4 address that timed out", []obs.Answer{
+			iniAt("ns1.example.net.", iniNS1Addr, a),
+			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
+			iniAt("ns2.example.net.", iniNS2Addr, iniFail(obs.ReasonTimeout)),
+		}, true},
 		{"an IPv6 address, network", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a),
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
 			iniAt("ns2.example.net.", iniNS2Addr, a),
-		}, false},
-		{"only IPv6 addresses, network", []obs.Answer{
-			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
-			iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNetwork)),
-		}, false},
-		{"an IPv6 address, network, and an IPv4 address that timed out", []obs.Answer{
-			iniAt("ns1.example.net.", iniNS1Addr, a),
-			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
-			iniAt("ns2.example.net.", iniNS2Addr, iniFail(obs.ReasonTimeout)),
 		}, true},
 		{"an IPv6 address, timeout", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a),

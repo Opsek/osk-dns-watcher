@@ -27,7 +27,7 @@ type view struct {
 	delegation obs.Observation
 	file       *expect.File
 	skips      []expect.Skip
-	unreached  int               // IPv6 addresses left out of the lines
+	unreached  []obs.Server      // addresses with no route, left out of the lines
 	nsSources  []expect.NSSource // the sets of an NS line that accepts several
 	nsNoAnswer []string          // the servers that the NS line rests without
 	manyHosts  bool              // the NS line names more than maxNSHosts hosts inside the domain
@@ -67,7 +67,7 @@ func look(ctx context.Context, r Runner, domain dnswire.Name) view {
 	}
 	file, skips := expect.Snapshot(domain, observations)
 	return view{domain: domain, delegation: observations[0], file: file, skips: skips,
-		unreached: len(expect.Unreached(observations)), nsSources: expect.NSSources(domain, observations),
+		unreached: expect.Unreached(observations), nsSources: expect.NSSources(domain, observations),
 		nsNoAnswer: expect.NSNoAnswer(domain, observations), manyHosts: !fewHosts}
 }
 
@@ -141,11 +141,11 @@ func runKeys(ctx context.Context, r Runner, keys []obs.Key) []obs.Observation {
 			first := observations[i]
 			// A second fetch of a policy file seconds after the first tells
 			// nothing new.
-			if keys[i].Kind == obs.KindPolicy || !slices.ContainsFunc(first.Answers, worthRetry) {
+			if keys[i].Kind == obs.KindPolicy || !worthRetry(first) {
 				return
 			}
 			o, err := r.Run(ctx, observe.Check{Key: keys[i], Interval: checkInterval})
-			if err == nil && failures(o) <= failures(first) {
+			if err == nil && failures(o.Answers) <= failures(first.Answers) {
 				observations[i] = o
 			}
 		})
@@ -163,10 +163,10 @@ func atOnce(n int, f func(int)) {
 	wg.Wait()
 }
 
-// failures counts the failure answers of o.
-func failures(o obs.Observation) int {
+// failures counts the failure answers among answers.
+func failures(answers []obs.Answer) int {
 	n := 0
-	for _, a := range o.Answers {
+	for _, a := range answers {
 		n += obs.Match(a.Result,
 			func(obs.Records) int { return 0 },
 			func(obs.NoData) int { return 0 },
@@ -176,15 +176,12 @@ func failures(o obs.Observation) int {
 	return n
 }
 
-// worthRetry reports a failure answer that a second run could change. An
-// IPv6 address that failed with network is not one: the snapshot leaves it
-// out, and on a machine without IPv6 every check would run twice for nothing.
-func worthRetry(a obs.Answer) bool {
-	return obs.Match(a.Result,
-		func(obs.Records) bool { return false },
-		func(obs.NoData) bool { return false },
-		func(obs.NoName) bool { return false },
-		func(f obs.Failure) bool { return f.Reason != obs.ReasonNetwork || !a.Server.Addr.Addr().Is6() })
+// worthRetry reports a failure answer that a second run could change: one
+// that obs.Routed keeps. The snapshot leaves out the others, and on a
+// machine without IPv6 every check would run twice for nothing.
+func worthRetry(o obs.Observation) bool {
+	routed, _ := obs.Routed(o.Answers)
+	return failures(routed) > 0
 }
 
 // lookKeys gives the delegation first, then the checks that osk-dns-watcher snapshot

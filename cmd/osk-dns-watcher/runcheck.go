@@ -72,6 +72,7 @@ type watched struct {
 	sched   *schedule.Schedule
 	running int                  // checks of the domain in flight
 	judged  map[string]time.Time // by check: its last judged run, or when it entered the plan
+	noRoute map[string]bool      // by check: its last run met an address that this machine has no route to
 	last    fileRead             // the read that was taken last
 	next    fileRead             // the read before, which the next one must repeat
 	since   time.Time            // when next was read first
@@ -85,13 +86,14 @@ type watched struct {
 
 func newWatched(d config.Domain, f *expect.File, iv schedule.Intervals, now time.Time) *watched {
 	w := &watched{
-		name:   d.Name,
-		label:  d.Name.Lower().String(),
-		path:   d.Expect,
-		fast:   d.Fast,
-		file:   f,
-		sched:  schedule.New(f, d.Fast, iv),
-		judged: map[string]time.Time{},
+		name:    d.Name,
+		label:   d.Name.Lower().String(),
+		path:    d.Expect,
+		fast:    d.Fast,
+		file:    f,
+		sched:   schedule.New(f, d.Fast, iv),
+		judged:  map[string]time.Time{},
+		noRoute: map[string]bool{},
 	}
 	w.replan(now)
 	return w
@@ -109,6 +111,7 @@ func (w *watched) replan(now time.Time) {
 		}
 	}
 	maps.DeleteFunc(w.judged, func(k string, _ time.Time) bool { return !keep[k] })
+	maps.DeleteFunc(w.noRoute, func(k string, _ bool) bool { return !keep[k] })
 }
 
 // scope is the key of the alerts about the whole domain, as decide gives
@@ -314,7 +317,8 @@ func (m *monitor) judge(r result) error {
 	for _, mv := range rep.Moves {
 		m.out.log(levelInfo, d.label, movedLine(d.name, mv))
 	}
-	failed := slices.ContainsFunc(o.Answers, func(a obs.Answer) bool { return isFailure(a.Result) })
+	m.noteRoutes(d, o)
+	failed := missed(o)
 	nsOpen, err := m.nameServersOpen(d, o.Key)
 	if err != nil {
 		return err
@@ -335,6 +339,34 @@ func (m *monitor) judge(r result) error {
 		return nil
 	}
 	return m.zoneChanges(d, moves, now)
+}
+
+// noteRoutes keeps which checks of d met an address that this machine has no
+// route to in their last run. It logs one line when the first such check
+// comes and one when the last one goes: a machine without IPv6 meets such
+// addresses in almost every run, and one line for each would hide the rest.
+func (m *monitor) noteRoutes(d *watched, o obs.Observation) {
+	before := m.metNoRoute()
+	i := slices.IndexFunc(o.Answers, obs.NoRoute)
+	if i < 0 {
+		delete(d.noRoute, o.Key.String())
+	} else {
+		d.noRoute[o.Key.String()] = true
+	}
+	switch after := m.metNoRoute(); {
+	case after && !before:
+		m.out.log(levelWarning, "", "warning this machine has no route to some addresses of the nameservers, such as "+
+			o.Answers[i].Server.Addr.Addr().String()+". osk-dns-watcher cannot ask them. "+
+			"A check counts as OK when the other servers answer.")
+	case before && !after:
+		m.out.print("route back: this machine has a route to every address of the nameservers again")
+	}
+}
+
+// metNoRoute reports whether the last run of some check met an address that
+// this machine has no route to.
+func (m *monitor) metNoRoute() bool {
+	return slices.ContainsFunc(m.domains, func(d *watched) bool { return len(d.noRoute) > 0 })
 }
 
 // judgeCerts takes one run of the certificates check of d. A run records a

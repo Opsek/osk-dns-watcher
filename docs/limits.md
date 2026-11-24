@@ -38,8 +38,9 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 
 ## Nameservers and answers
 
-- A nameserver that gives no answer while another one answers gives no alert. The alert of a failing check opens only when no nameserver answers.
-- Nameserver addresses that this machine cannot reach are not checked. Docker's default network has no IPv6, so on that network no IPv6 address of a nameserver is checked.
+- A nameserver that gives no answer while another one answers gives no alert. The alert of a failing check opens only when no nameserver answers. Such a check does not count as OK. The `last OK` time of an alert comes from an earlier check.
+- The service does not ask a nameserver address that this machine has no route to. A check counts as OK when the other nameservers answer. Docker's default network has no IPv6, so on that network the service asks no IPv6 address of a nameserver. A nameserver that gives false answers only over IPv6 is then not seen.
+- The log says once that this machine has no route to some nameserver addresses, and once that the route is back. `doctor` shows a warning. `status` does not show it.
 - A line with `in`, `like`, or `||` trusts every answer that it allows. A nameserver that gives another allowed answer only at times is not reported.
 - The alert about nameservers that give different answers needs a steady split. A nameserver whose answers rotate hides a stale one beside it. Nameservers that each keep another allowed answer for some minutes can cause this alert again and again. No line turns it off.
 - TTLs are not compared.

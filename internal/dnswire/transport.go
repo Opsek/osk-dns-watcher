@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"slices"
+	"syscall"
 	"time"
 )
 
@@ -28,7 +29,9 @@ type Response struct {
 // that does not parse or does not match, and an ICMP error such as a refused
 // port, is dropped and the wait goes on until ctx ends, because anyone on the
 // path can send them. A truncated answer, also one cut inside a record, is
-// asked again over TCP. With tcp set, TCP is used from the start.
+// asked again over TCP. With tcp set, TCP is used from the start. When this
+// machine has no route to the server, the error wraps ErrNoRoute, and
+// nothing was sent.
 func Exchange(ctx context.Context, server netip.AddrPort, q Query, tcp bool) (*Response, error) {
 	if q.Type == TypeAXFR || q.Type == TypeIXFR {
 		return nil, fmt.Errorf("%w: type %v needs a zone transfer", ErrInvalidQuery, q.Type)
@@ -51,6 +54,9 @@ func Exchange(ctx context.Context, server netip.AddrPort, q Query, tcp bool) (*R
 func exchangeUDP(ctx context.Context, server netip.AddrPort, q Query) (r *Response, truncated bool, err error) {
 	c, closeConn, err := dial(ctx, "udp", server)
 	if err != nil {
+		if noRoute(err) {
+			return nil, false, fmt.Errorf("%w to %v: %w", ErrNoRoute, server, err)
+		}
 		return nil, false, netError(ctx, server, err)
 	}
 	defer closeConn()
@@ -227,6 +233,15 @@ func dial(ctx context.Context, network string, server netip.AddrPort) (net.Conn,
 		stop()
 		_ = c.Close()
 	}, nil
+}
+
+// noRoute reports an error of a UDP dial that says this machine cannot send
+// to the address at all: it has no route to it, no source address for it,
+// or no support for its family. A UDP dial sends no packet, so only this
+// machine can give these errors. A TCP dial sends one, and a forged ICMP
+// message can end it with the same errors, so they mean no-route only here.
+func noRoute(err error) bool {
+	return errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EAFNOSUPPORT)
 }
 
 // readTCP reads one message with its two-octet length prefix (RFC 1035

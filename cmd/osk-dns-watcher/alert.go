@@ -129,8 +129,7 @@ func alertEvents(s *store.Store, f *expect.File, o obs.Observation, now time.Tim
 		findings[i] = a.Finding()
 	}
 	changes := decide.Decide(decide.Input{Expect: f, Open: findings, Observation: o, Now: now})
-	failed := slices.ContainsFunc(o.Answers, func(a obs.Answer) bool { return isFailure(a.Result) })
-	return alert.Transition(alert.Input{Open: open, Changes: changes, Failed: failed, LastClean: lastClean, Now: now}), nil
+	return alert.Transition(alert.Input{Open: open, Changes: changes, Failed: missed(o), LastClean: lastClean, Now: now}), nil
 }
 
 // deliverOnce makes one attempt for each due delivery, this run's and those

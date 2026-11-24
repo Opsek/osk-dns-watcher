@@ -7,6 +7,7 @@ You can run osk-dns-watcher in two ways: build it from a clone of this repositor
 - Docker with the Compose plugin, recent enough to know `docker compose up --wait`, on Linux or macOS. On Windows, you need WSL 2, which is not tested. Rootless Docker and Podman are not tested either.
 - The URL of a Slack incoming webhook.
 - A network that reaches the DNS root servers directly on port 53, over UDP and TCP. VPNs, some routers, and some office networks answer those queries themselves. On such a network, the setup says so and stops. Run osk-dns-watcher on another network or machine.
+- IPv6 is optional. Without it, the service asks no IPv6 address of a nameserver. Its log and `doctor` say so. See [limits.md](limits.md#nameservers-and-answers).
 - For a clone, and to verify a release: git 2.34 or later, plus `ssh-keygen` and `ssh` of OpenSSH 8.2 or later. `start.sh` checks the git version and that `ssh-keygen` is there. With an older `ssh`, its tag check fails, and `start.sh` stops.
 
 ## Build from a clone

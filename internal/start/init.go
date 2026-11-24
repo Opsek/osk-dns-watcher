@@ -69,9 +69,7 @@ const (
 
 	textSees     = "\n%s as osk-dns-watcher sees it now. Once you confirm, osk-dns-watcher alerts when the servers differ from these lines:\n"
 	textSkips    = "Not watched, and why:\n"
-	textNotAsked = "Not asked: %s of the servers, which this machine cannot reach.\n"
-	textOneIPv6  = "1 IPv6 address"
-	textIPv6     = "%d IPv6 addresses"
+	textNotAsked = "Not asked: %s of the servers, to which this machine has no route.\n"
 	textNoNS     = "warning osk-dns-watcher cannot watch the nameservers of %s yet. Until its file has an NS line, " +
 		"a change of the nameservers gives no critical alert, only an update of the alert about the missing line; " +
 		"osk-dns-watcher sends that alert at its first check.\n"
@@ -388,8 +386,8 @@ func show(views []view) string {
 		for _, s := range v.skips {
 			b.WriteString("  " + s.Name.Lower().String() + " " + s.Type.String() + ": " + s.Why + "\n")
 		}
-		if v.unreached > 0 {
-			fmt.Fprintf(&b, textNotAsked, ipv6Count(v.unreached))
+		if len(v.unreached) > 0 {
+			fmt.Fprintf(&b, textNotAsked, AddressCount(v.unreached))
 		}
 		if _, ok := v.file.Find(v.domain, dnswire.TypeNS); !ok {
 			fmt.Fprintf(&b, textNoNS, v.domain)
@@ -441,11 +439,18 @@ func comparesRecords(e expect.Expectation) bool {
 	return e.Type != dnswire.TypeNS && e.Type != dnswire.TypeDS
 }
 
-func ipv6Count(n int) string {
-	if n == 1 {
-		return textOneIPv6
+// AddressCount says how many servers there are, as "1 address" or
+// "3 IPv6 addresses". It names the family when every address is IPv6, as on
+// a machine without IPv6, so that the operator sees the cause.
+func AddressCount(servers []obs.Server) string {
+	family := "IPv6 "
+	if slices.ContainsFunc(servers, func(s obs.Server) bool { return !s.Addr.Addr().Is6() }) {
+		family = ""
 	}
-	return fmt.Sprintf(textIPv6, n)
+	if len(servers) == 1 {
+		return "1 " + family + "address"
+	}
+	return fmt.Sprintf("%d %saddresses", len(servers), family)
 }
 
 func problemLines(problems []config.Problem) string {

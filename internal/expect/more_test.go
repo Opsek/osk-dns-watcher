@@ -119,13 +119,13 @@ func expWWWAnswer(t *testing.T, host, addr string) obs.Answer {
 	return expAnswer(t, host, addr, expRecords(t, dnswire.TypeA, "www.corp.test.", "10.53.0.81"))
 }
 
-// A machine without IPv6 gets the failure network from every IPv6 address.
-// The set still gets its line from the servers that answered, and the
-// address that was left out is reported.
-func TestSnapshotLeavesOutAnIPv6ServerThatCannotBeReached(t *testing.T) {
+// A machine without IPv6 has no route to any IPv6 address. The set still
+// gets its line from the servers that answered, and the address that was
+// left out is reported.
+func TestSnapshotLeavesOutAServerThatHasNoRoute(t *testing.T) {
 	o := expWWW(t,
 		expWWWAnswer(t, "ns1.corp.test.", expNS1Addr),
-		expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNetwork)))
+		expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNoRoute)))
 	f, skips := expSnapshot(t, o)
 	if got, want := f.String(), "domain corp.test.\nwww.corp.test. A 10.53.0.81\n"; got != want {
 		t.Errorf("String() = %q; want %q", got, want)
@@ -139,8 +139,9 @@ func TestSnapshotLeavesOutAnIPv6ServerThatCannotBeReached(t *testing.T) {
 	}
 }
 
-// Only an IPv6 address that failed with network is left out: a timeout, or
-// a network failure of an IPv4 address, still blocks the line.
+// Only an address that this machine has no route to is left out: a timeout,
+// or a network failure, still blocks the line, at an IPv6 address too. Such
+// a failure can come from the network.
 func TestSnapshotKeepsOtherFailuresOfServers(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -149,6 +150,8 @@ func TestSnapshotKeepsOtherFailuresOfServers(t *testing.T) {
 	}{
 		{"an IPv6 timeout", expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonTimeout)),
 			"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: timeout"},
+		{"an IPv6 network failure", expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNetwork)),
+			"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: network"},
 		{"an IPv4 network failure", expAnswer(t, "ns2.corp.test.", expNS2Addr, expFailure(obs.ReasonNetwork)),
 			"www.corp.test. A: 10.53.0.12:53 ns2.corp.test. gave no answer: network"},
 	} {
@@ -164,13 +167,13 @@ func TestSnapshotKeepsOtherFailuresOfServers(t *testing.T) {
 }
 
 // When no server gave a usable answer, no server is left out: the skip
-// names the first answer, even an IPv6 one that failed with network.
+// names the first answer, even one with no route.
 func TestSnapshotLeavesNoServerOutWhenNoneAnswered(t *testing.T) {
 	o := expWWW(t,
-		expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNetwork)),
+		expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNoRoute)),
 		expAnswer(t, "ns1.corp.test.", expNS1Addr, expFailure(obs.ReasonTimeout)))
 	_, skips := expSnapshot(t, o)
-	want := []string{"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: network"}
+	want := []string{"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: no-route"}
 	if !slices.Equal(skips, want) {
 		t.Errorf("skips %q; want %q", skips, want)
 	}
@@ -183,7 +186,7 @@ func TestSnapshotLeavesNoServerOutWhenNoneAnswered(t *testing.T) {
 // the sets; and it skips a set that gets no line.
 func TestUnreachedIsSortedAndHasNoDuplicates(t *testing.T) {
 	down := func(host, addr string) obs.Answer {
-		return expAnswer(t, host, addr, expFailure(obs.ReasonNetwork))
+		return expAnswer(t, host, addr, expFailure(obs.ReasonNoRoute))
 	}
 	api := expObs(t, expRecordsKey(t, "api.corp.test.", dnswire.TypeA), "corp.test.",
 		expAnswer(t, "ns1.corp.test.", expNS1Addr, expRecords(t, dnswire.TypeA, "api.corp.test.", "10.53.0.82")),

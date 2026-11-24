@@ -243,7 +243,7 @@ func snnFormat(asJSON bool, observations []obs.Observation) (out string, f *expe
 	d := cliName("corp.test.")
 	f, skips := expect.Snapshot(d, observations)
 	l := &lines{json: asJSON}
-	formatSnapshot(l, d, f, skips, len(expect.Unreached(observations)))
+	formatSnapshot(l, d, f, skips, expect.Unreached(observations))
 	if _, ok := f.Find(d, dnswire.TypeNS); ok {
 		formatNSNotes(l, d, expect.NSNoAnswer(d, observations), expect.NSSources(d, observations))
 	}

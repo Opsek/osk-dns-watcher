@@ -796,13 +796,13 @@ func (s *iniSetup) refused(domains, why string) string {
 	return iniHello + iniDomainsQ + domains + "\n" + iniURLQ + "[hidden]\n\n" + iniAsking + why + "\n" + iniNothing
 }
 
-// iniNotAsked is the line after the block of a domain when some IPv6
-// addresses of its servers could not be reached.
+// iniNotAsked is the line after the block of a domain when this machine has
+// no route to some IPv6 addresses of its servers.
 func iniNotAsked(n int) string {
 	if n == 1 {
-		return "Not asked: 1 IPv6 address of the servers, which this machine cannot reach.\n"
+		return "Not asked: 1 IPv6 address of the servers, to which this machine has no route.\n"
 	}
-	return "Not asked: " + strconv.Itoa(n) + " IPv6 addresses of the servers, which this machine cannot reach.\n"
+	return "Not asked: " + strconv.Itoa(n) + " IPv6 addresses of the servers, to which this machine has no route.\n"
 }
 
 // configText is the config that init writes for the domains and the network
@@ -1512,16 +1512,16 @@ func TestInitDoesNotTrustASetTheServersDisagreeOn(t *testing.T) {
 	}
 }
 
-// A machine without IPv6 cannot reach an IPv6 address of a server. That
+// A machine without IPv6 has no route to an IPv6 address of a server. That
 // alone does not keep a set out of the file when another address answers and
 // all that answer agree: the set is written, the file says nothing of the
 // address, and the dialogue counts each such address once under the domain.
 // Every other failure still keeps the set out.
-func TestInitWritesASetWhoseOnlyFailureIsAnUnreachedIPv6Address(t *testing.T) {
+func TestInitWritesASetWhoseOnlyFailureIsAnAddressWithNoRoute(t *testing.T) {
 	d := "example.com."
 	a := func(data string) obs.Result { return iniRecords(d, dnswire.TypeA, data) }
 	ok := []obs.Answer{iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10"))}
-	unreached := func(addr string) obs.Answer { return iniAt("ns1.example.net.", addr, iniFail(obs.ReasonNetwork)) }
+	unreached := func(addr string) obs.Answer { return iniAt("ns1.example.net.", addr, iniFail(obs.ReasonNoRoute)) }
 	ns2 := iniAt("ns2.example.net.", iniNS2Addr, a("192.0.2.10"))
 	mx := func(answers ...obs.Answer) []obs.Answer { return answers }
 	for _, c := range []struct {
@@ -1536,7 +1536,7 @@ func TestInitWritesASetWhoseOnlyFailureIsAnUnreachedIPv6Address(t *testing.T) {
 			iniKey(d, d, dnswire.TypeA): slices.Concat(ok, []obs.Answer{unreached(iniNS1v6Addr), ns2}),
 			iniKey(d, d, dnswire.TypeMX): mx(
 				iniAt("ns1.example.net.", iniNS1Addr, iniRecords(d, dnswire.TypeMX, "10 mail."+d)),
-				iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
+				iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
 				iniAt("ns2.example.net.", iniNS2Addr, iniRecords(d, dnswire.TypeMX, "10 mail."+d))),
 		}, 1},
 		{"two addresses", map[string][]obs.Answer{
@@ -1544,7 +1544,7 @@ func TestInitWritesASetWhoseOnlyFailureIsAnUnreachedIPv6Address(t *testing.T) {
 			iniKey(d, d, dnswire.TypeMX): mx(
 				iniAt("ns1.example.net.", iniNS1Addr, iniRecords(d, dnswire.TypeMX, "10 mail."+d)),
 				iniAt("ns2.example.net.", iniNS2Addr, iniRecords(d, dnswire.TypeMX, "10 mail."+d)),
-				iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNetwork))),
+				iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNoRoute))),
 		}, 2},
 		// www.<d> has an address here, so no set is left out and the count
 		// follows the lines.
@@ -1592,13 +1592,18 @@ func TestInitDoesNotWatchASetWithAnyOtherFailure(t *testing.T) {
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonTimeout)),
 			iniAt("ns2.example.net.", iniNS2Addr, a("192.0.2.10")),
 		}, iniNS1v6Addr + " ns1.example.net. gave no answer: timeout"},
-		{"only IPv6 addresses, none reached", []obs.Answer{
-			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
-			iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNetwork)),
-		}, iniNS1v6Addr + " ns1.example.net. gave no answer: network"},
-		{"an IPv6 address that cannot be reached, and answers that differ", []obs.Answer{
+		{"an IPv6 address with a network failure", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10")),
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
+			iniAt("ns2.example.net.", iniNS2Addr, a("192.0.2.10")),
+		}, iniNS1v6Addr + " ns1.example.net. gave no answer: network"},
+		{"only IPv6 addresses, none with a route", []obs.Answer{
+			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
+			iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNoRoute)),
+		}, iniNS1v6Addr + " ns1.example.net. gave no answer: no-route"},
+		{"an IPv6 address with no route, and answers that differ", []obs.Answer{
+			iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10")),
+			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
 			iniAt("ns2.example.net.", iniNS2Addr, a("203.0.113.66")),
 		}, ""},
 	} {
@@ -1618,7 +1623,7 @@ func TestInitDoesNotWatchASetWithAnyOtherFailure(t *testing.T) {
 				t.Errorf("shown %q, not watched %q; want %s A only under not watched", lines, skips, d)
 			}
 			if strings.Contains(out, "Not asked:") {
-				t.Errorf("init counts an IPv6 address of a set that it does not write")
+				t.Errorf("init counts an address of a set that it does not write")
 			}
 			iniSame(t, "example.com.expect", s.written(d)["example.com.expect"], iniStamp+strings.Join(without, "\n")+"\n")
 		})

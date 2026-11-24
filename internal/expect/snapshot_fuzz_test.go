@@ -50,7 +50,7 @@ var (
 		{Name: sfzName("ns1.corp.test."), Addr: netip.MustParseAddrPort("[fd53::11]:53")},
 		{},
 	}
-	sfzReasons = []obs.Reason{obs.ReasonTimeout, obs.ReasonNetwork, obs.ReasonRefused, obs.ReasonLame, obs.ReasonWalk, obs.ReasonDeadline}
+	sfzReasons = []obs.Reason{obs.ReasonTimeout, obs.ReasonNetwork, obs.ReasonRefused, obs.ReasonLame, obs.ReasonWalk, obs.ReasonDeadline, obs.ReasonNoRoute}
 )
 
 func sfzName(s string) dnswire.Name {

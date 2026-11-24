@@ -12,7 +12,7 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 
 **An audit.** The service compares answers with your file. It does not judge whether the file is safe. It does not say that a domain lacks a registry lock, DNSSEC, a CAA record bound to your account, or a strict DMARC policy. Nor does it say that your SPF record has `+all` or that your MTA-STS mode is `testing`.
 
-**Zone transfers.** The service asks for the sets that your file lists. It does not copy the zone. A change that is made and undone between two checks can be missed. When the change moves the zone serial, a low alert says that the zone changed, but not which record.
+**Zone transfers.** The service asks for the sets that your file lists. It does not copy the zone. A change that is made and undone between two checks can be missed. When the change moves the zone serial, a low alert says that the zone changed, but not which record. That alert does not come while an alert of a watched record of the zone is open. It does not come when the new serial equals one that was reported before, for example when a zone is restored with its old serial.
 
 **Routes.** The routes to your nameservers and hosts are not watched. A route hijack is not seen.
 
@@ -29,7 +29,7 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 
 ## Timing
 
-- The intervals were tested in a lab. A drill on a real test domain and a long run on real domains are not done yet.
+- The intervals were tested in a lab. They were also measured on one real domain at one DNS provider: an alert came 2 to 20 seconds after the provider took a change, an edit of the expectations file took effect in 6 to 10 seconds, and an alert ended 5 to 18 seconds after the record was put back, or at the next run of its check. A long run on real domains is not done yet.
 - On the real internet, a provider can limit the rate of the frequent serial queries, anycast servers can differ for a moment, and EDNS answers can be odd. Each can cause alerts of failing checks or of different answers that the lab never showed.
 - A zone delegated below your domain has no serial check. A change there is seen only at the interval of its lines.
 - Names outside the domain's own zone and the CAA policies of names below the domain are checked every 5 minutes. The CAA policies are also checked at once when the serial moves.
@@ -39,13 +39,15 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 ## Nameservers and answers
 
 - Some DNS providers have many machines behind one nameserver address. For up to about a minute after a change, some of them still give the old answer. While one of them does, the alert stays open. The `RESOLVED` message can then wait for the next run of the check: 1 minute for the fast tier, 5 minutes for the others. It does not come 15 seconds after the change.
+- One more server that gives a value that the alert already shows sends no `changed again` message. Only a new value, a new severity, or a new expected line does. The `seen at` list of a later message names the servers of the first message or of the last update.
+- A new subzone whose nameservers do not answer gives no zone alert, only the alert of a failing check after its limit.
 - A nameserver that gives no answer while another one answers gives no alert. The alert of a failing check opens only when no nameserver answers. Such a check does not count as OK. The `last OK` time of an alert comes from an earlier check.
 - The service does not ask a nameserver address that this machine has no route to. A check counts as OK when the other nameservers answer. Docker's default network has no IPv6, so on that network the service asks no IPv6 address of a nameserver. A nameserver that gives false answers only over IPv6 is then not seen.
 - The log says once that this machine has no route to some nameserver addresses, and once that the route is back. `doctor` shows a warning. `status` does not show it.
 - A line with `in`, `like`, or `||` trusts every answer that it allows. A nameserver that gives another allowed answer only at times is not reported.
 - The alert about nameservers that give different answers needs a steady split. A nameserver whose answers rotate hides a stale one beside it. Nameservers that each keep another allowed answer for some minutes can cause this alert again and again. No line turns it off.
 - TTLs are not compared.
-- A removed NS or DS line ends its open alert with "as expected again", while the alert about the missing line opens.
+- A removed NS or DS line ends its open alert with a `RESOLVED` message that says "as expected again", and the alert about the missing line opens. The `delegation` and `ds` checks stay, so no `CHANGED` line closes that alert.
 
 ## Dangling names
 

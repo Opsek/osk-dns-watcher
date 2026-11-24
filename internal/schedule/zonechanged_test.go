@@ -427,3 +427,32 @@ func TestFirstSightInTheRunOfAMoveLeavesTheMoveNews(t *testing.T) {
 	zcSerialRun(t, s, schSec(7), 2, 2, 1, false, nil)
 	zcRound(t, s, "the round", schSec(8), nil, []string{rndMove(2, schT0, 1, schSec(7), 2)})
 }
+
+// ---- The serial seen unchanged ----
+
+// A serial run shows the zone unchanged when it has a usable answer and no
+// move, and no earlier move waits in a round, for the next run of a check, or
+// for its report. That is the last OK time of the zone-changed alert, also at
+// a run that Judged does not call ok, as one soon after a report.
+func TestQuietSerialRunNeedsNoMoveThatWaits(t *testing.T) {
+	quiet := func(s *Schedule, what string, at int, s1, s2 uint32, want bool) {
+		t.Helper()
+		if r, _, _ := schEnd(t, s, schSerialObs(t, schSec(at), s1, s2), schSec(at+1)); r.Quiet != want {
+			t.Errorf("%s: Quiet %v, want %v", what, r.Quiet, want)
+		}
+	}
+	quiet(New(schBase(t), nil, schIv), "the first serial run", 0, 1, 1, true)
+
+	s := schMoved(t)
+	quiet(s, "a quiet run while the round runs", 9, 2, 2, false)
+	zcRound(t, s, "the round", schSec(10), nil, schBothMoved)
+	quiet(s, "a quiet run soon after the report", 20, 2, 2, true)
+	quiet(s, "a run with a move", 25, 3, 3, false)
+	zcRound(t, s, "the round held by the bound of reports", schSec(27), nil, nil)
+	quiet(s, "a quiet run while the moves wait for their report", 30, 3, 3, false)
+	quiet(s, "a run with no usable answer", 35, 0, 0, false)
+	quiet(s, "the quiet run that reports the held moves", 400, 3, 3, false)
+	quiet(s, "the next quiet run", 410, 3, 3, true)
+
+	quiet(zcWaiting(t, decide.RuleRecordSet), "a quiet run while the moves wait for the next run of a check", 20, 2, 2, false)
+}

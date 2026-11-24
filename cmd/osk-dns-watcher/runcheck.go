@@ -344,8 +344,13 @@ func (m *monitor) judge(r result) error {
 	moves, ok := d.sched.Judged(o, open, changes, now)
 	// After a start the schedule knows no move of before it, so a quiet
 	// serial run could end a zone-changed alert whose last moves were never
-	// told; one other-interval of quiet must pass first.
+	// told; one other-interval of quiet must pass first. Such a run, and one
+	// soon after a report, still saw the zone unchanged: it is the last OK
+	// time of the next zone-changed alert.
 	if !ok || len(moves) == 0 && now.Sub(m.started) < m.cfg.Intervals.Other {
+		if rep.Quiet {
+			return m.write(d, d.scope(), true, now, nil)
+		}
 		return nil
 	}
 	return m.zoneChanges(d, moves, now)

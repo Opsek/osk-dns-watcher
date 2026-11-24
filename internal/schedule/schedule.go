@@ -94,6 +94,10 @@ type Report struct {
 	DisagreeLong bool          // for decide.Input
 	DisagreeOver bool          // for decide.Input
 	Moves        []decide.Move // serial checks only: the servers whose serial moved in o
+	// Quiet is for serial checks only: o has a usable answer and no move, and
+	// no earlier move waits in a round or for its report. The zone is then
+	// seen unchanged, which is the last OK time of the zone-changed alert.
+	Quiet bool
 }
 
 // DisagreeRuns is how many runs in a row a split must last before it is
@@ -240,6 +244,7 @@ func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 		// zone at the same moment, so its notice shows no later change.
 		if usable && !s.serialMoved {
 			s.quiet = now
+			r.Quiet = s.round == nil && len(s.held) == 0
 		}
 		if s.serialMoved {
 			s.startRound(moves, now)

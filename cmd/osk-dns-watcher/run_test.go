@@ -2905,6 +2905,61 @@ func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 	runNoSecret(t, state, svc.out.String(), again.out.String())
 }
 
+// The zone-changed alert shows the last serial run that saw no move as its
+// last OK time. That holds in the first other-interval after a start too,
+// in which a quiet run may not end the alert yet, on a new state folder and
+// on one that holds an older time from the service before.
+func TestRunZoneChangedShowsTheLastQuietSerialRun(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		older bool
+	}{{"a new state folder", false}, {"an older time in the state folder", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			var serial atomic.Uint32
+			serial.Store(1)
+			s := transportStart(t, svcWorld(&serial, nil))
+			t.Setenv("OSK_SLACK_URL", runDeadURL)
+			state := filepath.Join(t.TempDir(), "state")
+			if c.older {
+				st, err := store.Open(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				scope := obs.Key{Domain: cliName("corp.test."), Name: cliName("corp.test.")}
+				if err := errors.Join(st.Apply(scope, true, time.Now().Add(-time.Hour), nil), st.Close()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			svc := runStart(t, runLocal(t, s, expFile(t, runFile), state, runIntervals("5s", "1h", "1h", "1h"))...)
+			_, i := svc.wait(t, "the first serial run", 0, time.Now().Add(runPatience), runRunOf(runSerialKey))
+			serial.Store(2)
+			svc.wait(t, "the zone-changed alert", i, time.Now().Add(runPatience), runIs("alert open low zone-changed corp.test."))
+			lines := svc.stop(t)
+
+			// The serial runs up to the one that saw the move, whose checked line
+			// comes just before its moved line.
+			m := slices.IndexFunc(lines, func(l runLine) bool { return strings.HasPrefix(l.text, "moved corp.test. ") })
+			var serials []runLine
+			for _, l := range lines[:max(m, 0)] {
+				if c, ok, _ := runParse(l.text); ok && c.key == runSerialKey {
+					serials = append(serials, l)
+				}
+			}
+			open, err := svcReader(t, state).AllOpenAlerts()
+			z := slices.IndexFunc(open, func(a alert.Alert) bool { return a.Rule == decide.RuleZoneChanged })
+			if err != nil || z < 0 || len(serials) < 2 {
+				t.Fatalf("open alerts %+v, error %v, %d serial runs up to the move:\n%s", open, err, len(serials), runDump(lines))
+			}
+			quiet := serials[len(serials)-2]
+			run, _, _ := runParse(quiet.text)
+			if got := open[z].LastClean; got.Before(run.start) || got.After(quiet.at.Add(time.Millisecond)) {
+				t.Errorf("the zone-changed alert shows last OK %s, want the quiet serial run of %s to %s:\n%s",
+					got.UTC(), run.start.UTC(), quiet.at.UTC(), runDump(lines))
+			}
+		})
+	}
+}
+
 // Each domain has its own serial and rounds: a move of each opens the
 // zone-changed alert of that domain, and a zone check of other.test. that
 // never gets an answer holds its round only until the limit of its

@@ -431,7 +431,17 @@ func TestSerialMoveStartsZoneChecks(t *testing.T) {
 	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
 }
 
-var runMoveLine = regexp.MustCompile(`^(\S+) (\S+) serial (\d+) until (\S+), (\d+) since (\S+)$`)
+var runMoveLine = regexp.MustCompile(`^(\S+) (\S+) serial (\d+) until (.+), (\d+) since (.+)$`)
+
+// runMoveTime reads a time of a move line as the clock line writes it: the
+// time of day when it falls on the date of first seen, else the date, the
+// time and UTC.
+func runMoveTime(text string, first time.Time) (time.Time, error) {
+	if at, err := time.Parse("2 Jan 2006 15:04:05 UTC", text); err == nil {
+		return at, nil
+	}
+	return time.Parse("2 Jan 2006 15:04:05", first.UTC().Format("2 Jan 2006")+" "+text)
+}
 
 // runZoneText checks a notice of moved serials: its headline, one line for
 // each server of the zone with its serial before and after, the action, and
@@ -446,6 +456,11 @@ func runZoneText(t *testing.T, text, n, headline, from, to string, changed, chan
 		t.Errorf("message:\n%s\nwant the headline %q, a code block of two lines, the times and the action", runShow(text), headline)
 		return ""
 	}
+	clock, _ := slkClock(t, lines[7])
+	if len(clock) == 0 {
+		t.Errorf("the times %q hold no first seen time", lines[7])
+		return lines[7]
+	}
 	var servers []string
 	for _, l := range lines[3:5] {
 		m := runMoveLine.FindStringSubmatch(l)
@@ -454,8 +469,8 @@ func runZoneText(t *testing.T, text, n, headline, from, to string, changed, chan
 			continue
 		}
 		servers = append(servers, m[1]+" "+m[2])
-		until, err1 := time.Parse(runSecondLayout, m[4])
-		since, err2 := time.Parse(runSecondLayout, m[6])
+		until, err1 := runMoveTime(m[4], clock[0])
+		since, err2 := runMoveTime(m[6], clock[0])
 		if err1 != nil || err2 != nil || until.After(changed) || since.Before(changedEnd.Truncate(time.Second)) {
 			t.Errorf("the line %q: want the old serial last seen by %s and the new one first seen from %s",
 				l, changed.UTC().Format(runSecondLayout), changedEnd.UTC().Format(runSecondLayout))
@@ -500,6 +515,8 @@ func TestZoneChangedNotice(t *testing.T) {
 		t.Errorf("the times %q do not start with the first seen time and then the last OK time", times)
 	} else {
 		slkWithin(t, "the first seen time", clock[0], set.Truncate(time.Second), opened.at)
+		// The last serial run that saw no move, in the first other-interval.
+		slkWithin(t, "the last OK time", clock[1], begin.Truncate(time.Second), opened.at)
 	}
 
 	// The record goes and comes back between two serial runs: only the

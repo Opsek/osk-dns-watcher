@@ -1240,6 +1240,8 @@ func (m *schModel) done(o obs.Observation, failed bool, now time.Time) (want Rep
 	delete(m.unsure, k)
 	if o.Key.Kind == obs.KindSerial {
 		want.Moves = m.serialRun(o, now)
+		// The serial is seen unchanged only when no earlier move waits.
+		want.Quiet = !failed && len(want.Moves) == 0 && m.round == nil && len(m.held) == 0
 	}
 	return want, alt
 }
@@ -1691,8 +1693,8 @@ func (sim *schSim) open(k obs.Key) []decide.Finding {
 }
 
 func schReportText(r Report) string {
-	return fmt.Sprintf("known %v tier%d failing since %s limit %v moves %q", r.Known, uint8(r.Tier),
-		schWhen(r.FailingSince), r.FailLimit, schMoveTexts(r.Moves))
+	return fmt.Sprintf("known %v tier%d failing since %s limit %v moves %q quiet %v", r.Known, uint8(r.Tier),
+		schWhen(r.FailingSince), r.FailLimit, schMoveTexts(r.Moves), r.Quiet)
 }
 
 func (sim *schSim) finish() {

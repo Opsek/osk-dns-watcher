@@ -194,7 +194,7 @@ A webhook gets a POST with `Content-Type: application/json` and a body with `"sc
 }
 ```
 
-- `event`: `open`, `update`, `escalate`, `reminder`, or `resolve`. `severity` is the severity after the event, and `was` is the severity before it. The three dangling-name alerts also end with a `resolve` that carries the `CHECK` text ([alerts.md](alerts.md#how-an-alert-ends)).
+- `event`: `open`, `update`, `escalate`, `reminder`, or `resolve`. `severity` is the severity after the event, and `was` is the severity before it. The three dangling-name alerts also end with a `resolve` that carries the `CHECK` text ([alerts.md](alerts.md#how-an-alert-ends)). An alert that ends because you removed its line gets no `resolve`. The notice of the file lists it in `lines`, with a line that starts with `closed `.
 - `rule`: `nameservers`, `record-set`, `zone`, `not-covered`, `glue`, `ds`, `gone`, `invalid-file`, `check-failing`, `zone-changed`, `disagree`, `alias-target`, `nameserver-host`, `mail-target`, `challenge`, `wildcard`, `caa`, `issuer`, `certname`, `hostnames`, `spf`, `dmarc`, `dkim`, or `mta-sts`.
 - `check.kind` is `delegation`, `ds`, `records`, `serial`, `wildcard`, `certificates`, or `policy`. It is empty for an alert about the whole domain (`invalid-file`, `zone-changed`). A `wildcard` check asks for a random name directly under `check.name`, and its `rtype` is `A`. A `policy` check fetches the MTA-STS policy file from the host `check.name`, and its `rtype` is `TXT`. A `certificates` check has an empty `rtype`.
 - `seen` lists each server whose answer differs, at most 6. `more` counts the servers left out. A resolve has an empty `seen`.

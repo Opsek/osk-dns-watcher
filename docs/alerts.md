@@ -44,7 +44,7 @@ A channel gets the messages of an alert when the highest severity of the alert r
 | **CRITICAL** · nameserver addresses of `example.com.` changed at the parent zone | The glue address that the parent zone gives for one of your nameserver hosts differs from its address line. | If you did not change it, contact your registrar now. If you did, edit the address line. |
 | **HIGH** · DS of `example.com.` changed at the parent zone | The DS set at the parent zone differs from the DS line, or is gone. The service raises it to **CRITICAL** when the nameservers alert of the domain is open. It then stays **CRITICAL**. | If you did not change your DNSSEC keys, contact your registrar now. If you did, run `accept`. |
 | **CRITICAL** · `example.com.` does not exist at the parent zone | The parent zone says that the domain does not exist. | Contact your registrar now. The registration may have expired, been deleted, or been transferred. |
-| **MEDIUM** · `example.com. NS` has no expectation and is not checked | The file has no NS line or no DS line, so the service cannot judge that set. | Run `accept` to add the line. |
+| **MEDIUM** · `example.com. NS` has no expectation and is not checked | The file has no NS line or no DS line, so the service cannot judge that set. | Run `accept` to add the line. If `accept` refuses, add the line by hand. |
 | **HIGH** · `shop.example.com.` is answered from an unexpected zone | A name of the file is answered from a zone other than the one that the file declares, for example a new subzone. | If you did not create this zone, check the delegations under your domain at your DNS provider. If you did, add its NS line by hand. |
 | **MEDIUM** · the nameservers of `example.com.` give different answers for `www.example.com. A` | Each nameserver has given its own answer, steadily, for 10 to 50 minutes. The file allows each answer. | Find out why one nameserver answers otherwise. It may be out of date or not yours. |
 
@@ -99,8 +99,8 @@ The last three alerts come only when the config turns on the certificate logs. S
 
 | Headline | What it means | What to do |
 |---|---|---|
-| **MEDIUM** · the records check of `www.example.com. A` has had no usable answer for too long | No server gave a usable answer for too long. An address that this machine has no route to gives no answer. At the default intervals, too long is 5 minutes for the `parent` and `fast` checks, 15 minutes for the `other` and `serial` checks, and 30 minutes for the certificate source. Until a server answers, the service does not see a change there. | Find out why no server answers this machine. For the policy file or the certificate source, the log of the service names the reason. |
-| **LOW** · the zone `example.com.` changed, and no watched record differs | The zone serial moved, and no line differs. The cause is a change of a record that the file does not watch, or a change that was undone. | If you did not change the zone, find out who did. The alert cannot say which record changed. |
+| **MEDIUM** · the records check of `www.example.com. A` has had no usable answer for too long | No server gave a usable answer for too long. An address that this machine has no route to gives no answer. At the default intervals, too long is 5 minutes for the `parent` and `fast` checks, 15 minutes for the `other` and `serial` checks, and 30 minutes for the certificate source. Until a server answers, the service does not see a change there. | Find out why no server answers this machine. For the `delegation` and `ds` checks, the servers are those of the parent zone. For the policy file or the certificate source, the log of the service names the reason. |
+| **LOW** · the zone `example.com.` changed, and no watched record differs | The zone serial moved, and no line differs. The cause is a change of a record that the file does not watch, or a change that was undone. | If you did not change the zone, find out who did. Only a zone transfer shows which record changed. |
 | **MEDIUM** · the expectations file of `example.com.` is not valid | The file has a fault. The service goes on with the last valid file. | Fix the file. `validate` names each fault. |
 
 In the first headline, the word after "the" is the kind of check: `delegation`, `ds`, `records`, `serial`, `wildcard`, `policy`, or `certificates`.
@@ -113,11 +113,13 @@ Notices go to every channel, whatever its `min_severity`. They have no severity 
 |---|---|---|
 | **TEST** · osk-dns-watcher can send to this channel | `test-alert` or `doctor` asked for it. `start.sh` sends one at its end. | Nothing. |
 | **DOWN** · osk-dns-watcher did not run for 7 min 34 s | At its start, the service found that it had not run for a minute or more. It did not see the changes of that time when they happened. | If you did not stop it, find out who did. |
-| **CHANGED** · the expectations of `example.com.` changed | The file changed. Lines that start with `- ` show what was removed, and lines that start with `+ ` show what was added. | If you did not make this change, find out who did and restore the file. |
+| **CHANGED** · the expectations of `example.com.` changed | The file changed. Lines that start with `- ` show what was removed, and lines that start with `+ ` show what was added. Lines that start with `closed ` show the alerts that the removed lines ended. | If you did not make this change, find out who did and restore the file. |
 
 ## How an alert ends
 
 Most alerts end when the servers give what the file allows again. They also end when you change the file so that it allows what the servers give, for example with `accept`. The end message starts with ✅ **RESOLVED**. An alert stays open while a server that showed the problem gives no answer. This is also true when this machine loses its route to the address of that server.
+
+An alert also stays open while a server still gives the old answer. Some DNS providers have many machines behind one nameserver address, and for up to about a minute after a change some of them still give the old answer. The `RESOLVED` message can then wait for the next run of the check. See [Nameservers and answers](limits.md#nameservers-and-answers) in limits.md.
 
 Some alerts end in their own way:
 
@@ -126,10 +128,12 @@ Some alerts end in their own way:
 | has no expectation and is not checked | the file has the line |
 | the expectations file is not valid | the file is valid again |
 | has had no usable answer for too long | a server gives a usable answer |
-| the zone changed | the serial has not moved for 5 minutes, the `other` interval |
+| the zone changed | the serial has been quiet for one `other` interval, 5 minutes at the defaults, after the last message of the alert. Moves that come in between are sent first as one update. |
 | the nameservers give different answers | the split has been gone for 11 checks in a row |
 | the three certificate alerts | no valid certificate shows the problem any more. Each certificate that showed it has expired, or the file now allows it. A revoked certificate counts until it expires. |
 | the three dangling-name alerts | the name exists again. The end message starts with ⚠️ **CHECK**. |
+
+An alert also ends when you remove the line that its check belongs to. The end then comes inside the `CHANGED` notice of the file, not as a `RESOLVED` or `CHECK` message. The notice lists `closed <severity> <rule> <kind> <name> <type>` for each alert that ended. A webhook gets that notice with those lines, and no `resolve` event. This holds for the dangling-name alerts too.
 
 The three dangling-name alerts end with a `CHECK` warning, not a green `RESOLVED`. The name can exist again because you fixed it, or because someone else registered it to take its traffic. The service cannot tell which. The end message asks you to find out who holds the name now. A webhook gets `"event": "resolve"` for both kinds of end.
 

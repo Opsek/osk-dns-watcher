@@ -138,7 +138,7 @@ docker compose exec watcher vi example.com.expect
 ./osk-dns-watcher validate
 ```
 
-The service reads the files every 5 seconds and takes a change within about 10 seconds. Each change sends a `CHANGED` notice to every channel. The notice shows the removed lines with `- ` and the added lines with `+ `. The service does not use a file that is not valid, and keeps the last valid file. When the file stays not valid for 30 seconds, the service opens an alert.
+The service reads the files every 5 seconds and takes a change within about 10 seconds. Each change of a line sends a `CHANGED` notice to every channel. An edit that changes only comments or blank lines sends none. The notice shows the removed lines with `- ` and the added lines with `+ `. The service does not use a file that is not valid, and keeps the last valid file. When the file stays not valid for 30 seconds, the service opens an alert.
 
 To check a name every minute, list it in `fast` in the config. See [Domains](config.md#domains) in config.md.
 

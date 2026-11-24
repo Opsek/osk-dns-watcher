@@ -38,6 +38,7 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 
 ## Nameservers and answers
 
+- Some DNS providers have many machines behind one nameserver address. For up to about a minute after a change, some of them still give the old answer. While one of them does, the alert stays open. The `RESOLVED` message can then wait for the next run of the check: 1 minute for the fast tier, 5 minutes for the others. It does not come 15 seconds after the change.
 - A nameserver that gives no answer while another one answers gives no alert. The alert of a failing check opens only when no nameserver answers. Such a check does not count as OK. The `last OK` time of an alert comes from an earlier check.
 - The service does not ask a nameserver address that this machine has no route to. A check counts as OK when the other nameservers answer. Docker's default network has no IPv6, so on that network the service asks no IPv6 address of a nameserver. A nameserver that gives false answers only over IPv6 is then not seen.
 - The log says once that this machine has no route to some nameserver addresses, and once that the route is back. `doctor` shows a warning. `status` does not show it.
@@ -53,7 +54,7 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 - A missing name whose zone answers "no data" and not "no such name" is not seen.
 - A nameserver that answers "no such name" for a name that has only records of another type gives a false alert. Such an answer breaks RFC 8020.
 - The `CHECK` end message does not show what the name answers now.
-- A removed line that pointed at a missing name ends its alert with a `CHECK` message too.
+- A removed line that pointed at a missing name ends its alert inside the `CHANGED` message, which lists it with a line that starts with `closed `. No `RESOLVED` and no `CHECK` message comes, and a webhook gets no `resolve` event. See [How an alert ends](alerts.md#how-an-alert-ends).
 - A nameserver that alternates between two zones when it signs "no such name" gives an update at each check.
 
 ## Wildcards
@@ -110,8 +111,10 @@ These limits hold when the config turns on the certificate logs.
 - The service cannot report its own crash. Docker starts it again. If the service was down for a minute or more, the next start sends a `DOWN` notice. A crash loop shorter than the limit of a failing check gives no alert. Docker does not restart a container that is only unhealthy. Set a [`heartbeat`](config.md#heartbeat) to an outside service that alerts when the beats stop.
 - After a restart, the count toward the alert of a failing check starts again.
 - If the service stops after it sends a message and before the answer comes, the next start sends that message again. A webhook gets the same `id`.
+- Slack shows a bounded view. A `CHANGED` message shows 12 lines and then `and N more lines`. A record set shows 6 records and then `and N more records`. A long line ends with ` [cut]`. A webhook body holds up to 200 lines of a `CHANGED` notice and the `value` of an alert, as [Webhooks](config.md#webhooks) describes. `check` shows what the servers give now.
 - When you raise a channel's `min_severity` above the highest severity of an open alert, that channel misses the end of the alert.
 - The service gives up a message after 30 failed attempts, which take about 21 hours. It gives up at once on a 3xx or 4xx status other than 408 and 429.
+- After a give-up, the channel counts as failing, also when no message is pending. `status` exits with 1, and the heartbeat stops. This holds until the service delivers the next message to that channel. After you fix the cause, run `osk-dns-watcher test-alert` to prove the channel.
 - A changed expectations file that is not valid opens an alert only when it stays not valid for 30 seconds. Until then, and after, the service uses the last valid file.
 
 ## Install and update

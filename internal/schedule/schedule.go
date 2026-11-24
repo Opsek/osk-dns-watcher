@@ -27,14 +27,15 @@ type Schedule struct {
 	disagreeing map[string]*series   // the unbroken series of runs with two differing answers
 
 	serials     []sighting // one per address of the domain's servers
+	known       []uint32   // serials that tell nothing new, the one seen last at the end; see know
 	serialMoved bool       // the last serial run saw a move
 	quiet       time.Time  // when the last serial run with a usable answer and no move was judged
-	noticed     time.Time  // latest start of a run of a zone check that gave a notice of its own
+	noticed     time.Time  // latest start of a run of a zone check that told of a difference; see told
 	moved       time.Time  // when the last move was seen
 	round       *round     // nil when no round is pending
 
-	held       []decide.Move // moves of ended rounds that wait for their report
-	lastReport time.Time     // when moves were last reported
+	held       []move    // moves of ended rounds that wait for their report
+	lastReport time.Time // when moves were last reported
 }
 
 // series is what a records check has shown about its servers disagreeing.
@@ -55,10 +56,17 @@ type sighting struct {
 	at     time.Time
 }
 
+// move is what a round and the report keep of the moves of one address:
+// merged, from the first serial to the last.
+type move struct {
+	decide.Move
+	news bool // one of the moves went to a serial that was not known
+}
+
 // round is the work that a move of the serial starts: each zone check must
 // give a usable answer once after the move, before the move is judged.
 type round struct {
-	moves   []decide.Move   // one per address, in order of first sight
+	moves   []move          // one per address, in order of first sight
 	pending map[string]bool // the zone checks still to run
 	// since is quiet when the round was created: the serial was last seen
 	// quiet before the first move of the round, and a quiet serial run while
@@ -213,16 +221,19 @@ func (s *Schedule) Done(o obs.Observation, now time.Time) Report {
 		r.DisagreeLong, r.DisagreeOver = s.disagreeState(k, o, now)
 	}
 	if o.Key.Kind == obs.KindSerial {
-		r.Moves = s.serialMoves(o)
-		s.serialMoved = len(r.Moves) > 0
+		moves := s.serialMoves(o)
+		for _, m := range moves {
+			r.Moves = append(r.Moves, m.Move)
+		}
+		s.serialMoved = len(moves) > 0
 		// Not o.Start: a zone check that started in the same tick saw the
 		// zone at the same moment, so its notice shows no later change.
 		if usable && !s.serialMoved {
 			s.quiet = now
 		}
-	}
-	if len(r.Moves) > 0 {
-		s.startRound(r.Moves, now)
+		if s.serialMoved {
+			s.startRound(moves, now)
+		}
 	}
 	return r
 }
@@ -325,26 +336,57 @@ func (iv Intervals) DisagreeLimit() time.Duration { return 2 * iv.Other }
 // serialMoves compares the serial of each address in o with the one it gave
 // before. An address that gave no serial keeps what it gave before, and the
 // first serial of an address is only remembered: there is nothing to compare
-// it with.
-func (s *Schedule) serialMoves(o obs.Observation) []decide.Move {
-	var moves []decide.Move
+// it with. A move is news when its serial is not known.
+func (s *Schedule) serialMoves(o obs.Observation) []move {
+	var moves []move
+	var again []uint32 // serials to know once o is judged, in the order seen
 	for _, a := range o.Answers {
 		serial, ok := soaSerial(a.Result)
 		if !ok {
 			continue
 		}
+		news := !slices.Contains(s.known, serial)
 		seen := sighting{a.Server, serial, a.Received}
 		i := slices.IndexFunc(s.serials, func(x sighting) bool { return x.server.Addr == a.Server.Addr })
 		if i < 0 {
 			s.serials = append(s.serials, seen)
+			again = append(again, serial)
 			continue
 		}
 		if last := s.serials[i]; last.serial != serial {
-			moves = append(moves, decide.Move{Server: a.Server, From: last.serial, To: serial, Until: last.at, Since: a.Received})
+			moves = append(moves, move{decide.Move{Server: a.Server, From: last.serial, To: serial, Until: last.at, Since: a.Received}, news})
+		}
+		if !news {
+			again = append(again, serial)
 		}
 		s.serials[i] = seen
 	}
+	// Only after the loop: a serial that one address shows for the first
+	// time does not make the move of another address to it in the same run
+	// old.
+	for _, serial := range again {
+		s.know(serial)
+	}
 	return moves
+}
+
+// knownSerials bounds known. A machine behind an address that lags a change
+// serves a serial from shortly before it, so the last serials are enough;
+// the bound keeps a zone whose serial moves at every run from filling
+// memory. A serial that a server still gives is seen at every run and stays.
+const knownSerials = 64
+
+// know puts serial at the end of known, the serials whose moves tell nothing
+// new: each one is the first serial seen at an address, or the operator was
+// told of a change to it. The membership of a value is all that counts, never
+// an order of serials: two providers of one domain number their serials
+// apart, and a new serial at either one is news.
+func (s *Schedule) know(serial uint32) {
+	s.known = slices.DeleteFunc(s.known, func(x uint32) bool { return x == serial })
+	s.known = append(s.known, serial)
+	if len(s.known) > knownSerials {
+		s.known = slices.Delete(s.known, 0, 1)
+	}
 }
 
 func soaSerial(r obs.Result) (uint32, bool) {
@@ -362,8 +404,10 @@ func soaSerial(r obs.Result) (uint32, bool) {
 }
 
 // startRound makes every zone check pending again, also those that a running
-// round had already seen, because each move may have changed any record.
-func (s *Schedule) startRound(moves []decide.Move, now time.Time) {
+// round had already seen, because each move may have changed any record. A
+// move that is no news starts a round too: to run the checks again costs
+// little, and a machine that lags can still show a record that differs.
+func (s *Schedule) startRound(moves []move, now time.Time) {
 	s.moved = now
 	if s.round == nil {
 		s.round = &round{since: s.quiet}
@@ -374,13 +418,15 @@ func (s *Schedule) startRound(moves []decide.Move, now time.Time) {
 	s.round.pending = s.zoneChecks()
 }
 
-// merge keeps one move per address, from the first serial to the last.
-func merge(moves []decide.Move, m decide.Move) []decide.Move {
-	i := slices.IndexFunc(moves, func(x decide.Move) bool { return x.Server.Addr == m.Server.Addr })
+// merge keeps one move per address, from the first serial to the last; it is
+// news when one of its moves was.
+func merge(moves []move, m move) []move {
+	i := slices.IndexFunc(moves, func(x move) bool { return x.Server.Addr == m.Server.Addr })
 	if i < 0 {
 		return append(moves, m)
 	}
 	moves[i].To, moves[i].Since = m.To, m.Since
+	moves[i].news = moves[i].news || m.news
 	return moves
 }
 
@@ -394,11 +440,12 @@ func (s *Schedule) zoneChecks() map[string]bool {
 	return zone
 }
 
-// Judged takes what decide made of o. ok with moves: rounds ended and no
-// notice of its own came since the serial was last seen quiet, so the caller
-// reports the moves. ok without moves: the serial has been quiet for a while,
-// so the caller ends the notice of earlier moves.
-func (s *Schedule) Judged(o obs.Observation, changes []decide.Change, now time.Time) (moves []decide.Move, ok bool) {
+// Judged takes what decide made of o: open is the Open that decide was given,
+// changes what it gave. ok with moves: rounds ended and no run told of a
+// difference since the serial was last seen quiet, so the caller reports the
+// moves. ok without moves: the serial has been quiet for a while, so the
+// caller ends the notice of earlier moves.
+func (s *Schedule) Judged(o obs.Observation, open []decide.Finding, changes []decide.Change, now time.Time) (moves []decide.Move, ok bool) {
 	k := o.Key.String()
 	i := slices.Index(s.keys, k)
 	if i < 0 {
@@ -408,7 +455,7 @@ func (s *Schedule) Judged(o obs.Observation, changes []decide.Change, now time.T
 	// before it to differ from, so its notice tells of the state, not of a
 	// change. Runs end out of the order of their starts; the latest start
 	// counts.
-	if s.judged[k] && s.plan[i].Zone && !decide.Failed(o) && o.Start.After(s.noticed) && slices.ContainsFunc(changes, ownNotice) {
+	if s.judged[k] && s.plan[i].Zone && !decide.Failed(o) && o.Start.After(s.noticed) && told(k, open, changes) {
 		s.noticed = o.Start
 	}
 	s.judged[k] = s.judged[k] || !decide.Failed(o)
@@ -442,14 +489,23 @@ func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, now time.T
 		return nil, false
 	}
 	s.round = nil
-	// A notice from a run that started after the serial was last seen quiet
-	// told the operator of a change in the window in which the serial moved:
-	// the move is that change, or comes with it.
+	// A run that started after the serial was last seen quiet and told of a
+	// difference told the operator of a change in the window in which the
+	// serial moved: the move is that change, or comes with it.
 	if s.noticed.After(r.since) {
+		for _, m := range r.moves {
+			s.know(m.To)
+		}
 		return nil, false
 	}
 	for _, m := range r.moves {
 		s.held = merge(s.held, m)
+	}
+	// A move to a known serial tells nothing new, and an address that is
+	// back at the serial it started from shows no change.
+	s.held = slices.DeleteFunc(s.held, func(m move) bool { return !m.news || m.From == m.To })
+	if len(s.held) == 0 {
+		return nil, false
 	}
 	return s.report(now)
 }
@@ -460,26 +516,51 @@ func (s *Schedule) report(now time.Time) ([]decide.Move, bool) {
 	if !s.lastReport.IsZero() && now.Sub(s.lastReport) < s.iv.Other {
 		return nil, false
 	}
-	moves := s.held
-	s.held, s.lastReport = nil, now
-	return moves, true
+	s.lastReport = now
+	return s.tell(), true
 }
 
 // Flush gives the moves that report holds back and forgets them, for a
 // stop: they live only in memory, so a stop that kept them would never tell
 // them.
 func (s *Schedule) Flush(now time.Time) []decide.Move {
-	moves := s.held
-	s.held = nil
+	moves := s.tell()
 	if len(moves) > 0 {
 		s.lastReport = now
 	}
 	return moves
 }
 
+// tell gives the held moves and forgets them. Their serials are known from
+// then on: the operator is told of them.
+func (s *Schedule) tell() []decide.Move {
+	var moves []decide.Move
+	for _, m := range s.held {
+		moves = append(moves, m.Move)
+		s.know(m.To)
+	}
+	s.held = nil
+	return moves
+}
+
+// noticeRule reports a rule whose alert tells the operator that a watched
+// record of the zone differs from the file, or, when it ends, that it
+// differed.
+func noticeRule(r decide.Rule) bool {
+	return decide.LineRule(r) || r == decide.RuleZone || r == decide.RuleWildcard || r == decide.RuleCAA
+}
+
 // ownNotice reports a change that tells the operator about the zone anyway,
 // also when it ends an alert because a change was put back.
-func ownNotice(c decide.Change) bool {
-	r := c.Finding.Rule
-	return decide.LineRule(r) || r == decide.RuleZone || r == decide.RuleWildcard || r == decide.RuleCAA
+func ownNotice(c decide.Change) bool { return noticeRule(c.Finding.Rule) }
+
+// told reports whether a run of check k told the operator of a difference
+// of the zone: it gave a notice of its own, or an alert of a notice rule of
+// k was open before it. Such an alert stands, or the run ended it, which is a
+// notice. A difference that stands gives no change, but its open alert
+// already says that a watched record differs; a zone-changed notice beside
+// it would say that none does. Only the alerts of k count, as in decide.
+func told(k string, open []decide.Finding, changes []decide.Change) bool {
+	return slices.ContainsFunc(changes, ownNotice) ||
+		slices.ContainsFunc(open, func(f decide.Finding) bool { return f.Check.String() == k && noticeRule(f.Rule) })
 }

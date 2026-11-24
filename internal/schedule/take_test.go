@@ -287,7 +287,7 @@ func (tc *schTakeCase) end() {
 	now := tc.now
 	tc.domains[r.domain].do(func(s *Schedule) {
 		s.Done(o, now)
-		s.Judged(o, changes, now)
+		s.Judged(o, nil, changes, now)
 	})
 	tc.record("end %s %s", k, schWhen(now))
 }

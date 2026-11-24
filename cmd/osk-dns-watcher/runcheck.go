@@ -323,15 +323,19 @@ func (m *monitor) judge(r result) error {
 	if err != nil {
 		return err
 	}
-	changes, err := m.apply(d, o.Key, failed, now, func(open []decide.Finding) []decide.Change {
-		return decide.Decide(decide.Input{Expect: d.file, Open: open, Observation: o, Now: now,
+	// The schedule reads the open alerts too: a difference that stands gives
+	// no change, and its alert still tells of the zone.
+	var open []decide.Finding
+	changes, err := m.apply(d, o.Key, failed, now, func(found []decide.Finding) []decide.Change {
+		open = found
+		return decide.Decide(decide.Input{Expect: d.file, Open: found, Observation: o, Now: now,
 			FailingSince: rep.FailingSince, FailLimit: rep.FailLimit, NameServersOpen: nsOpen,
 			DisagreeLong: rep.DisagreeLong, DisagreeOver: rep.DisagreeOver})
 	})
 	if err != nil {
 		return err
 	}
-	moves, ok := d.sched.Judged(o, changes, now)
+	moves, ok := d.sched.Judged(o, open, changes, now)
 	// After a start the schedule knows no move of before it, so a quiet
 	// serial run could end a zone-changed alert whose last moves were never
 	// told; one other-interval of quiet must pass first.

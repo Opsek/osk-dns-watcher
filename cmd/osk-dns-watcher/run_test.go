@@ -2855,13 +2855,15 @@ func TestRunTakesAnInvalidFileOnlyAfterItStaysInvalid(t *testing.T) {
 // A move of the serial that the stop finds held, because the last notice
 // of moves came less than one other-interval before, is told at the stop
 // and not lost. After a restart, a quiet serial ends the notice only one
-// other-interval after the start.
+// other-interval after the start. runFile has no zone check: in the fake
+// world a zone check shows a zone finding that stands, and its open alert
+// would explain every move.
 func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 	var serial atomic.Uint32
 	serial.Store(1)
 	s := transportStart(t, svcWorld(&serial, nil))
 	t.Setenv("OSK_SLACK_URL", runDeadURL)
-	file := expFile(t, svcNSFile)
+	file := expFile(t, runFile)
 	state := filepath.Join(t.TempDir(), "state")
 	args := runLocal(t, s, file, state, runIntervals("5s", "1h", "1h", "15s"))
 	svc := runStart(t, args...)
@@ -2906,14 +2908,16 @@ func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 // Each domain has its own serial and rounds: a move of each opens the
 // zone-changed alert of that domain, and a zone check of other.test. that
 // never gets an answer holds its round only until the limit of its
-// failures.
+// failures. Neither file has a zone check that gives an answer: in the fake
+// world such a check shows a zone finding that stands, and its open alert
+// would explain every move.
 func TestRunZoneChangedOfEachDomainAndABlindZoneCheck(t *testing.T) {
 	var corp, other atomic.Uint32
 	corp.Store(1)
 	other.Store(1)
 	s := transportStart(t, svcWorld(&corp, &other))
 	t.Setenv("OSK_SLACK_URL", runDeadURL)
-	fileA, fileB := expFile(t, svcNSFile), expFile(t, svcOtherFile+"blind.other.test. A 192.0.2.5\n")
+	fileA, fileB := expFile(t, runFile), expFile(t, "domain other.test.\nother.test. DS none\nblind.other.test. A 192.0.2.5\n")
 	state := filepath.Join(t.TempDir(), "state")
 	svc := runStart(t, svcTwo(t, s, fileA, fileB, state, runIntervals("5s", "1h", "1h", "5s"))...)
 	blind := "records other.test. blind.other.test. A"
@@ -2938,6 +2942,32 @@ func TestRunZoneChangedOfEachDomainAndABlindZoneCheck(t *testing.T) {
 	for _, l := range lines {
 		if c, ok, _ := runParse(l.text); ok && c.key == blind && c.result == "ok" {
 			t.Errorf("the blind check gave %q", l.text)
+		}
+	}
+	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
+}
+
+// A move of the serial while a zone check shows a difference that stands
+// opens no zone-changed alert: the run of that check in the round gives no
+// change, but its open alert already says that a watched record differs. In
+// the fake world the NS line of svcNSFile shows a zone finding that stands.
+func TestRunOpenDifferenceExplainsTheMove(t *testing.T) {
+	var serial atomic.Uint32
+	serial.Store(1)
+	s := transportStart(t, svcWorld(&serial, nil))
+	t.Setenv("OSK_SLACK_URL", runDeadURL)
+	state := filepath.Join(t.TempDir(), "state")
+	svc := runStart(t, runLocal(t, s, expFile(t, svcNSFile), state, runIntervals("5s", "1h", "1h", "1h"))...)
+	const ns = "records corp.test. corp.test. NS"
+	_, i := svc.wait(t, "the zone alert", 0, time.Now().Add(runPatience), runIs("alert open high zone records corp.test. NS"))
+	_, i = svc.wait(t, "a serial run", i, time.Now().Add(runPatience), runRunOf(runSerialKey))
+	serial.Store(2)
+	_, i = svc.wait(t, "the move", i, time.Now().Add(runPatience), runIs("moved corp.test. "+s.addr+" - serial 1 to 2"))
+	_, i = svc.wait(t, "the run of the NS set in the round", i, time.Now().Add(runPatience), runRunOf(ns))
+	svc.wait(t, "the next serial run", i, time.Now().Add(runPatience), runRunOf(runSerialKey))
+	for _, l := range svc.stop(t) {
+		if l.event == "alert" && strings.Contains(l.text, " zone-changed ") {
+			t.Errorf("a move while a difference stands gave %q", l.text)
 		}
 	}
 	runNoSecret(t, state, svc.out.String(), svc.errOut.String())

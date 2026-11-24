@@ -155,11 +155,18 @@ func schStart(t testing.TB, s *Schedule, now time.Time, keys ...obs.Key) []Check
 	return got
 }
 
-// schEnd ends a run as the caller does: Done, then Judged with the changes.
+// schEnd ends a run as the caller does: Done, then Judged with the changes,
+// for a check with no open alert.
 func schEnd(t testing.TB, s *Schedule, o obs.Observation, now time.Time, changes ...decide.Change) (Report, []decide.Move, bool) {
 	t.Helper()
+	return schEndOpen(t, s, o, nil, now, changes...)
+}
+
+// schEndOpen is schEnd for a check whose open alerts have the findings open.
+func schEndOpen(t testing.TB, s *Schedule, o obs.Observation, open []decide.Finding, now time.Time, changes ...decide.Change) (Report, []decide.Move, bool) {
+	t.Helper()
 	r := s.Done(o, now)
-	moves, ok := s.Judged(o, changes, now)
+	moves, ok := s.Judged(o, open, changes, now)
 	return r, moves, ok
 }
 
@@ -738,7 +745,7 @@ func TestJudgedOfKeyOutsideThePlanIsFalse(t *testing.T) {
 	schSettle(t, s)
 	o := schSerialObs(t, schSec(7), 1, 1)
 	o.Key = obs.SerialKey(schName(t, "shop.test."))
-	if moves, ok := s.Judged(o, nil, schSec(8)); ok || len(moves) != 0 {
+	if moves, ok := s.Judged(o, nil, nil, schSec(8)); ok || len(moves) != 0 {
 		t.Fatalf("Judged of %s gave %v %q", o.Key, ok, schMoveTexts(moves))
 	}
 }
@@ -940,9 +947,8 @@ func schDrive(t testing.TB, s *Schedule, at time.Time, serial uint32, blind func
 	return reports, quiet
 }
 
-// A serial that moves at every serial run, as a serial taken from the clock
-// or two backends behind one address give, is reported at most once for each
-// other-interval. The zone checks still run at once after each move, and the
+// A serial that moves to a new value at every serial run, as a serial taken
+// from the clock gives, is reported at most once for each other-interval. The zone checks still run at once after each move, and the
 // last report names the newest serial of each server.
 func TestMovingSerialIsReportedAtMostOncePerOtherInterval(t *testing.T) {
 	iv := Defaults()
@@ -1069,8 +1075,28 @@ type schSeen struct {
 
 type schRound struct {
 	pending map[string]bool
-	moves   []decide.Move
+	moves   []schEntry
 	since   time.Time // the quiet instant when the round was created
+}
+
+// schEntry is the moves of one address merged, as a round or the report
+// keeps them.
+type schEntry struct {
+	move decide.Move
+	news bool // one of the moves went to a serial that was not known
+}
+
+// schMergeEntry keeps the first From and Until and the last To and Since of
+// each address; news when one of its moves was.
+func schMergeEntry(entries []schEntry, e schEntry) []schEntry {
+	for i := range entries {
+		if entries[i].move.Server.Addr == e.move.Server.Addr {
+			entries[i].move.To, entries[i].move.Since = e.move.To, e.move.Since
+			entries[i].news = entries[i].news || e.news
+			return entries
+		}
+	}
+	return append(entries, e)
 }
 
 // schModel is the schedule as the rules state it, kept by key text and by
@@ -1085,20 +1111,22 @@ type schModel struct {
 	series     map[string]time.Time
 	unsure     map[string]bool // left the plan with a series: kept or dropped
 	serials    map[string]schSeen
+	known      map[uint32]bool // first seen at an address, or told; a set, as the cases give serials 1 to 4 only, far below the bound
 	moved      time.Time
 	quiet      time.Time       // when the last serial run with an answer and no move was judged
-	noticed    time.Time       // the latest start of a run of a zone check with a notice of its own
+	noticed    time.Time       // the latest start of a run of a zone check that told of a difference
 	judgedOnce map[string]bool // the keys judged since the plan was made or replaced
 	early      int             // rounds that a notice started before their move explained
+	standing   int             // runs that told of a difference only by an open alert
 	round      *schRound
-	held       []decide.Move // the moves of unexplained rounds not told yet
-	lastReport time.Time     // when moves were last told
+	held       []schEntry // the moves of unexplained rounds not told yet
+	lastReport time.Time  // when moves were last told
 }
 
 func schNewModel(plan []Check, iv Intervals) *schModel {
 	m := &schModel{iv: iv, start: map[string]time.Time{}, running: map[string]time.Time{},
 		series: map[string]time.Time{}, unsure: map[string]bool{}, serials: map[string]schSeen{},
-		judgedOnce: map[string]bool{}}
+		known: map[uint32]bool{}, judgedOnce: map[string]bool{}}
 	m.setPlan(plan)
 	return m
 }
@@ -1219,16 +1247,28 @@ func schSerialOf(r obs.Result) (uint32, bool) {
 
 func (m *schModel) serialRun(o obs.Observation, now time.Time) []decide.Move {
 	var moves []decide.Move
+	var entries []schEntry
+	var first []uint32
 	for _, a := range o.Answers {
 		serial, ok := schSerialOf(a.Result)
 		if !ok {
 			continue
 		}
 		addr := a.Server.Addr.String()
-		if old, seen := m.serials[addr]; seen && old.serial != serial {
-			moves = append(moves, decide.Move{Server: a.Server, From: old.serial, To: serial, Until: old.at, Since: a.Received})
+		old, seen := m.serials[addr]
+		switch {
+		case !seen:
+			first = append(first, serial)
+		case old.serial != serial:
+			mv := decide.Move{Server: a.Server, From: old.serial, To: serial, Until: old.at, Since: a.Received}
+			moves = append(moves, mv)
+			entries = append(entries, schEntry{mv, !m.known[serial]})
 		}
 		m.serials[addr] = schSeen{serial, a.Received}
+	}
+	// A first sight in the run makes no move of the same run old.
+	for _, serial := range first {
+		m.known[serial] = true
 	}
 	if len(moves) == 0 {
 		return nil
@@ -1237,13 +1277,8 @@ func (m *schModel) serialRun(o obs.Observation, now time.Time) []decide.Move {
 	if m.round == nil {
 		m.round = &schRound{since: m.quiet}
 	}
-	for _, mv := range moves {
-		i := slices.IndexFunc(m.round.moves, func(x decide.Move) bool { return x.Server.Addr == mv.Server.Addr })
-		if i < 0 {
-			m.round.moves = append(m.round.moves, mv)
-		} else {
-			m.round.moves[i].To, m.round.moves[i].Since = mv.To, mv.Since
-		}
+	for _, e := range entries {
+		m.round.moves = schMergeEntry(m.round.moves, e)
 	}
 	m.round.pending = map[string]bool{}
 	for i, c := range m.plan {
@@ -1260,6 +1295,14 @@ func schExplains(changes []decide.Change) bool {
 	})
 }
 
+// schStands reports an open record-set or zone alert of the check k: its
+// difference stands, or the run ended it.
+func schStands(k string, open []decide.Finding) bool {
+	return slices.ContainsFunc(open, func(f decide.Finding) bool {
+		return f.Check.String() == k && (f.Rule == decide.RuleRecordSet || f.Rule == decide.RuleZone)
+	})
+}
+
 type schVerdict struct {
 	moves          []decide.Move
 	ok             bool
@@ -1267,21 +1310,26 @@ type schVerdict struct {
 	held           bool // unexplained moves wait: the last report is less than an other-interval ago
 	flushed        bool // a quiet serial run told the moves that waited
 	excused        bool // a zone check past its failure limit left the round
+	nothingNew     bool // an unexplained round ended, and no address has news to tell
 }
 
 // told is the rule of the reports: the moves that wait are told at once when
 // none was told yet or the last report is one other-interval old, else they
-// keep waiting.
+// keep waiting. The serials told are known from then on.
 func (m *schModel) told(now time.Time) schVerdict {
 	if !m.lastReport.IsZero() && now.Sub(m.lastReport) < m.iv.Other {
 		return schVerdict{held: true}
 	}
-	v := schVerdict{moves: m.held, ok: true}
+	v := schVerdict{ok: true}
+	for _, e := range m.held {
+		v.moves = append(v.moves, e.move)
+		m.known[e.move.To] = true
+	}
 	m.held, m.lastReport = nil, now
 	return v
 }
 
-func (m *schModel) judged(o obs.Observation, failed, moved bool, changes []decide.Change, now time.Time) schVerdict {
+func (m *schModel) judged(o obs.Observation, failed, moved bool, open []decide.Finding, changes []decide.Change, now time.Time) schVerdict {
 	k := o.Key.String()
 	c, known := m.find(k)
 	if !known {
@@ -1291,8 +1339,11 @@ func (m *schModel) judged(o obs.Observation, failed, moved bool, changes []decid
 	// notice: it may have seen a change that came before the service.
 	first := !m.judgedOnce[k]
 	m.judgedOnce[k] = m.judgedOnce[k] || !failed
-	if c.Zone && !first && !failed && schExplains(changes) && o.Start.After(m.noticed) {
+	if c.Zone && !first && !failed && (schExplains(changes) || schStands(k, open)) && o.Start.After(m.noticed) {
 		m.noticed = o.Start
+		if !schExplains(changes) {
+			m.standing++
+		}
 	}
 	if o.Key.Kind == obs.KindSerial && !moved && !failed {
 		m.quiet = now
@@ -1317,15 +1368,25 @@ func (m *schModel) judged(o obs.Observation, failed, moved bool, changes []decid
 			if m.noticed.Before(m.moved) {
 				m.early++
 			}
+			for _, e := range r.moves {
+				m.known[e.move.To] = true
+			}
 			return schVerdict{explainedEnded: true, excused: excused}
 		}
-		for _, mv := range r.moves {
-			i := slices.IndexFunc(m.held, func(x decide.Move) bool { return x.Server.Addr == mv.Server.Addr })
-			if i < 0 {
-				m.held = append(m.held, mv)
-			} else {
-				m.held[i].To, m.held[i].Since = mv.To, mv.Since
+		for _, e := range r.moves {
+			m.held = schMergeEntry(m.held, e)
+		}
+		// Only an address with news that is not back at its first serial is
+		// told.
+		var tell []schEntry
+		for _, e := range m.held {
+			if e.news && e.move.From != e.move.To {
+				tell = append(tell, e)
 			}
+		}
+		m.held = tell
+		if len(m.held) == 0 {
+			return schVerdict{excused: excused, nothingNew: true}
 		}
 		v := m.told(now)
 		v.excused = excused
@@ -1361,7 +1422,7 @@ func (m *schModel) replace(plan []Check) {
 }
 
 type schCounts struct {
-	capped, moves, unexplained, explained, replaced, quiet, series, held, flushed, excused, early int
+	capped, moves, unexplained, explained, replaced, quiet, series, held, flushed, excused, early, standing, nothingNew int
 }
 
 type schInFlight struct {
@@ -1468,12 +1529,14 @@ type schKit struct {
 	ns1, ns2           obs.Server
 	a, noName, refused obs.Result
 	noData, soa        []obs.Result // by serial, 0 to 9
+	elsewhere          obs.Key      // a check that no file of the cases has
 }
 
 func schNewKit(t testing.TB) *schKit {
 	t.Helper()
 	k := &schKit{ns1: schServer(t, "ns1.corp.test.", schNS1), ns2: schServer(t, "ns2.corp.test.", schNS2),
-		a: schA(t), noName: schNoName(t, 1), refused: obs.FailureResult(obs.Failure{Reason: obs.ReasonRefused})}
+		a: schA(t), noName: schNoName(t, 1), refused: obs.FailureResult(obs.Failure{Reason: obs.ReasonRefused}),
+		elsewhere: obs.RecordsKey(schName(t, "corp.test."), schName(t, "elsewhere.example."), dnswire.TypeA)}
 	for serial := range uint32(10) {
 		k.noData = append(k.noData, schNoData(t, serial))
 		k.soa = append(k.soa, schSOA(t, serial))
@@ -1539,6 +1602,21 @@ func (sim *schSim) changes(k obs.Key) []decide.Change {
 	return changes
 }
 
+// open gives the findings of the open alerts that decide is given: mostly
+// none, else one of a rule that tells of the zone or one that does not, now
+// and then of another check.
+func (sim *schSim) open(k obs.Key) []decide.Finding {
+	rng := sim.rng
+	if rng.IntN(10) < 8 {
+		return nil
+	}
+	if rng.IntN(4) == 0 {
+		k = sim.kit.elsewhere
+	}
+	rule := schPick(rng, decide.RuleRecordSet, decide.RuleZone, decide.RuleNotCovered, decide.RuleCheckFailing)
+	return []decide.Finding{{Rule: rule, Check: k}}
+}
+
 func schReportText(r Report) string {
 	return fmt.Sprintf("known %v tier%d failing since %s limit %v moves %q", r.Known, uint8(r.Tier),
 		schWhen(r.FailingSince), r.FailLimit, schMoveTexts(r.Moves))
@@ -1571,6 +1649,8 @@ func (sim *schSim) finish() {
 	delete(sim.run, k)
 	sim.n.early += sim.m.early
 	sim.m.early = 0
+	sim.n.standing += sim.m.standing
+	sim.m.standing = 0
 	if len(got.Moves) > 0 {
 		sim.moves = append(sim.moves, sim.now)
 		sim.n.moves++
@@ -1578,15 +1658,15 @@ func (sim *schSim) finish() {
 	if !got.FailingSince.IsZero() && got.FailingSince.Before(o.Start) {
 		sim.n.series++
 	}
-	changes := sim.changes(run.key)
-	moves, ok := sim.s.Judged(o, changes, sim.now)
-	if twinMoves, twinOK := sim.twin.Judged(o, changes, sim.now); twinOK != ok || !reflect.DeepEqual(twinMoves, moves) {
+	open, changes := sim.open(run.key), sim.changes(run.key)
+	moves, ok := sim.s.Judged(o, open, changes, sim.now)
+	if twinMoves, twinOK := sim.twin.Judged(o, open, changes, sim.now); twinOK != ok || !reflect.DeepEqual(twinMoves, moves) {
 		sim.fail("an equal schedule gave Judged %v %q, the first %v %q", twinOK, schMoveTexts(twinMoves), ok,
 			schMoveTexts(moves))
 	}
-	v := sim.m.judged(o, failed, len(want.Moves) > 0, changes, sim.now)
+	v := sim.m.judged(o, failed, len(want.Moves) > 0, open, changes, sim.now)
 	if ok != v.ok || !schSameMoves(schMoveTexts(moves), schMoveTexts(v.moves)) {
-		sim.fail("Judged of %s (failed %v, changes %v) gave %v %q, want %v %q", k, failed, changes, ok,
+		sim.fail("Judged of %s (failed %v, open %v, changes %v) gave %v %q, want %v %q", k, failed, open, changes, ok,
 			schMoveTexts(moves), v.ok, schMoveTexts(v.moves))
 	}
 	switch {
@@ -1600,7 +1680,7 @@ func (sim *schSim) finish() {
 	for _, c := range []struct {
 		hit bool
 		n   *int
-	}{{v.held, &sim.n.held}, {v.flushed, &sim.n.flushed}, {v.excused, &sim.n.excused}} {
+	}{{v.held, &sim.n.held}, {v.flushed, &sim.n.flushed}, {v.excused, &sim.n.excused}, {v.nothingNew, &sim.n.nothingNew}} {
 		if c.hit {
 			*c.n++
 		}
@@ -1671,7 +1751,7 @@ func TestScheduleProperty(t *testing.T) {
 	}
 	t.Logf("seed %d: %+v", schSeed, *n)
 	if n.capped == 0 || n.moves == 0 || n.unexplained == 0 || n.explained == 0 || n.replaced == 0 || n.quiet == 0 || n.series == 0 ||
-		n.held == 0 || n.flushed == 0 || n.excused == 0 || n.early == 0 {
+		n.held == 0 || n.flushed == 0 || n.excused == 0 || n.early == 0 || n.standing == 0 || n.nothingNew == 0 {
 		t.Fatalf("seed %d: the cases miss a kind of event: %+v", schSeed, *n)
 	}
 }

@@ -99,6 +99,9 @@ func (m *monitor) reread(d *watched, r fileRead, now time.Time) error {
 		return nil
 	}
 	if r.same(d.last) {
+		if !d.validRead.IsZero() {
+			d.validRead = now
+		}
 		return nil
 	}
 	if _, problem := d.parse(r); problem != nil && now.Sub(d.since) < readSettle {
@@ -135,10 +138,16 @@ func (m *monitor) take(d *watched, r fileRead, now time.Time) error {
 			m.out.log(levelWarning, d.label, line)
 		}
 	}
+	// The alert that opens here takes validRead as it stood before this read.
 	if err := m.fileChanges(d, problem, now); err != nil {
 		return err
 	}
-	if problem != nil || f.String() == d.file.String() {
+	if problem != nil {
+		d.validRead = time.Time{}
+		return nil
+	}
+	d.validRead = now
+	if f.String() == d.file.String() {
 		return nil
 	}
 	d.file = f

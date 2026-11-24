@@ -78,6 +78,10 @@ type watched struct {
 	since   time.Time            // when next was read first
 	reading time.Time            // when the read in flight started; zero when none
 	stuck   bool                 // the read in flight was reported
+	// validRead is when a read last gave the file in force, the last OK time
+	// of the invalid-file alert. It is zero while the read taken last is not
+	// valid, so that the repeats of a bad file do not move it.
+	validRead time.Time
 	// certs is used only by the run of the certificates check, never by the
 	// writer: the schedule starts no run of a check while another is in
 	// flight. nil: the certificate logs are not read.
@@ -94,6 +98,8 @@ func newWatched(d config.Domain, f *expect.File, iv schedule.Intervals, now time
 		sched:   schedule.New(f, d.Fast, iv),
 		judged:  map[string]time.Time{},
 		noRoute: map[string]bool{},
+		// The service starts only with a valid file, read just before.
+		validRead: now,
 	}
 	w.replan(now)
 	return w
@@ -392,11 +398,23 @@ func (m *monitor) judgeCerts(d *watched, c obs.Certificates) error {
 	return err
 }
 
+// zoneChanges opens, updates or ends the zone-changed alert of d. The
+// invalid-file alert shares the scope key but not its clean time, which is
+// that of the zone: a serial run that saw no move. The file alert has no run
+// of its own, so its reminder comes here.
 func (m *monitor) zoneChanges(d *watched, moves []decide.Move, now time.Time) error {
-	_, err := m.apply(d, d.scope(), false, now, func(open []decide.Finding) []decide.Change {
+	k := d.scope()
+	lastClean, err := m.store.LastClean(k)
+	if err != nil {
+		return err
+	}
+	_, out, err := m.events(k, false, lastClean, now, func(open []decide.Finding) []decide.Change {
 		return decide.ZoneChanges(d.name, moves, open, now)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return m.write(d, k, len(moves) == 0, now, out.Events)
 }
 
 // flush tells, as an update of zone-changed, the moves that its rate bound
@@ -412,12 +430,18 @@ func (m *monitor) flush(now time.Time) error {
 	return nil
 }
 
-// fileChanges opens, updates or ends the invalid-file alert of d.
+// fileChanges opens, updates or ends the invalid-file alert of d. A file says
+// nothing of the zone, so it records no clean time of the scope; its alert
+// takes the last read that gave the file in force.
 func (m *monitor) fileChanges(d *watched, problem error, now time.Time) error {
-	_, err := m.apply(d, d.scope(), false, now, func(open []decide.Finding) []decide.Change {
+	k := d.scope()
+	_, out, err := m.events(k, false, d.validRead, now, func(open []decide.Finding) []decide.Change {
 		return decide.FileChanges(d.name, problem, open, now)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return m.write(d, k, false, now, out.Events)
 }
 
 // nameServersOpen tells whether an alert of rule nameservers is open for the
@@ -439,13 +463,23 @@ func (m *monitor) nameServersOpen(d *watched, k obs.Key) (bool, error) {
 // their deliveries and the clean time of k are stored in one transaction.
 // failed tells that the run cannot show k clean, so it records no clean time.
 func (m *monitor) apply(d *watched, k obs.Key, failed bool, now time.Time, judge func(open []decide.Finding) []decide.Change) ([]decide.Change, error) {
-	open, err := m.store.OpenAlerts(k)
-	if err != nil {
-		return nil, err
-	}
 	lastClean, err := m.store.LastClean(k)
 	if err != nil {
 		return nil, err
+	}
+	changes, out, err := m.events(k, failed, lastClean, now, judge)
+	if err != nil {
+		return nil, err
+	}
+	return changes, m.write(d, k, out.Clean, now, out.Events)
+}
+
+// events gives the changes that judge finds for key k and their events. An
+// alert that opens takes lastClean.
+func (m *monitor) events(k obs.Key, failed bool, lastClean, now time.Time, judge func(open []decide.Finding) []decide.Change) ([]decide.Change, alert.Output, error) {
+	open, err := m.store.OpenAlerts(k)
+	if err != nil {
+		return nil, alert.Output{}, err
 	}
 	findings := make([]decide.Finding, len(open))
 	for i, a := range open {
@@ -453,13 +487,19 @@ func (m *monitor) apply(d *watched, k obs.Key, failed bool, now time.Time, judge
 	}
 	changes := judge(findings)
 	out := alert.Transition(alert.Input{Open: open, Changes: changes, Failed: failed, LastClean: lastClean, Now: now, Policy: m.policy})
-	if err := m.store.Apply(k, out.Clean, now, deliver.Writes(out.Events, m.channels)); err != nil {
-		return nil, err
+	return changes, out, nil
+}
+
+// write stores the events, their deliveries and, when clean, now as the
+// clean time of k, in one transaction.
+func (m *monitor) write(d *watched, k obs.Key, clean bool, now time.Time, events []alert.Event) error {
+	if err := m.store.Apply(k, clean, now, deliver.Writes(events, m.channels)); err != nil {
+		return err
 	}
-	for _, e := range out.Events {
+	for _, e := range events {
 		m.out.log(levelInfo, d.label, "alert "+e.Label())
 	}
-	return changes, nil
+	return nil
 }
 
 // tick is the beat of the writer: the stored beat with the late checks, and

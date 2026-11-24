@@ -83,7 +83,8 @@ func dlvSplit(s, sep string) []string {
 	return append(parts, s[from:])
 }
 
-// dlvList writes records under a label, one on each line, at most six.
+// dlvList writes records under a label, one on each line, at most six. A
+// record with no text shows as "-", as a whole empty answer does.
 func dlvList(label string, records []string) []string {
 	var out []string
 	for i, r := range records {
@@ -94,7 +95,11 @@ func dlvList(label string, records []string) []string {
 		if i == 0 {
 			prefix = dlvLabel(label)
 		}
-		out = append(out, prefix+dlvClean(r, 120))
+		text := dlvClean(r, 120)
+		if text == "" {
+			text = "-"
+		}
+		out = append(out, prefix+text)
 	}
 	return out
 }
@@ -718,6 +723,16 @@ func TestSlackTextSplitsRecordsOutsideQuotes(t *testing.T) {
 		[]alert.Line{dlvAt(t, "ns1.corp.test.", "10.53.0.11:53", `"v=spf1 | y"`, 60)})
 	e.Alert.Expected = `"v=spf1 | x" | "other"`
 	dlvSame(t, e, dlvRS(`expected   "v=spf1 | x"`, `           "other"`, "", `now        "v=spf1 | y"`,
+		"seen at    ns1.corp.test. (10.53.0.11)   TTL 60"))
+}
+
+// A record with no text, as the first part of the text " | x", shows as "-" like an
+// answer with no text, so no line of the list stays empty.
+func TestSlackTextEmptyRecordShowsDash(t *testing.T) {
+	e := dlvRecordSetEvent(t, alert.EventOpen, decide.SeverityHigh,
+		[]alert.Line{dlvAt(t, "ns1.corp.test.", "10.53.0.11:53", " | x", 60)})
+	e.Alert.Expected = "10.53.0.81"
+	dlvSame(t, e, dlvRS("expected   10.53.0.81", "", "now        -", "           x",
 		"seen at    ns1.corp.test. (10.53.0.11)   TTL 60"))
 }
 

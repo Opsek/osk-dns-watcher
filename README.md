@@ -92,6 +92,6 @@ To move to the newest signed release:
 - [Work on the code](docs/development.md)
 - [Report a security fault](SECURITY.md)
 
-Anyone may use, change and share osk-dns-watcher for a noncommercial purpose as the [PolyForm Noncommercial License 1.0.0](LICENSE.md) defines it, for example personal study or a hobby project, or use by a charity, an educational institution, a public research organization or a government institution.
+Anyone may use, change and share osk-dns-watcher, also for commercial work, under the [PolyForm Shield License 1.0.0](LICENSE.md). The license does not allow a product that competes with osk-dns-watcher or with a product that its owner provides with it.
 
 Issues are welcome. Pull requests are not taken yet.

@@ -30,7 +30,7 @@ func checkFailing(in Input) (Finding, bool) {
 		return Finding{}, false
 	}
 	return Finding{Rule: RuleCheckFailing, Severity: severity(RuleCheckFailing, o.Key.Type), Check: o.Key,
-		Value: "no usable answer for " + in.FailLimit.String()}, true
+		Value: "no usable answer for " + ShortDuration(in.FailLimit)}, true
 }
 
 // Move is a change of the serial that one server gives for the zone.

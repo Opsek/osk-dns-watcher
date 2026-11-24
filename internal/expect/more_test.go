@@ -149,11 +149,11 @@ func TestSnapshotKeepsOtherFailuresOfServers(t *testing.T) {
 		want   string
 	}{
 		{"an IPv6 timeout", expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonTimeout)),
-			"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: timeout"},
+			"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer (timeout)"},
 		{"an IPv6 network failure", expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNetwork)),
-			"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: network"},
+			"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer (network)"},
 		{"an IPv4 network failure", expAnswer(t, "ns2.corp.test.", expNS2Addr, expFailure(obs.ReasonNetwork)),
-			"www.corp.test. A: 10.53.0.12:53 ns2.corp.test. gave no answer: network"},
+			"www.corp.test. A: 10.53.0.12:53 ns2.corp.test. gave no answer (network)"},
 	} {
 		o := expWWW(t, expWWWAnswer(t, "ns1.corp.test.", expNS1Addr), c.answer)
 		f, skips := expSnapshot(t, o)
@@ -173,7 +173,7 @@ func TestSnapshotLeavesNoServerOutWhenNoneAnswered(t *testing.T) {
 		expAnswer(t, "ns2.corp.test.", expV6Addr2, expFailure(obs.ReasonNoRoute)),
 		expAnswer(t, "ns1.corp.test.", expNS1Addr, expFailure(obs.ReasonTimeout)))
 	_, skips := expSnapshot(t, o)
-	want := []string{"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer: no-route"}
+	want := []string{"www.corp.test. A: [fd00::12]:53 ns2.corp.test. gave no answer (no-route)"}
 	if !slices.Equal(skips, want) {
 		t.Errorf("skips %q; want %q", skips, want)
 	}

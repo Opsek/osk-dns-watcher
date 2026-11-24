@@ -194,7 +194,7 @@ func dngRules() []dngRule {
 				"seen at    ns1.corp.test. (10.53.0.11)   TTL 300",
 				"           ns2.corp.test. (10.53.0.12)   TTL 300",
 			},
-			action:       "If you did not add a wildcard under `corp.test.`, remove it at your DNS provider and find out who added it.",
+			action:       "If you did not add a wildcard under `corp.test.`, remove it at your DNS provider and find out who added it. If you did, write its lines by hand.",
 			resolveHead:  "no wildcard answers under `corp.test.` again",
 			resolveView:  []string{"now        no wildcard"},
 			openSpans:    2,

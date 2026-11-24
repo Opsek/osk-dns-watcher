@@ -245,7 +245,7 @@ func TestPcsInitLeavesOutTheMTASTSLineOfAPolicyItCannotRead(t *testing.T) {
 		answer []obs.Answer
 		skip   string
 	}{
-		{"a failed fetch", pcsPolicyFails(d, obs.ReasonTimeout), host + " TXT: " + pcsPolicyAt + " " + host + " gave no answer: timeout"},
+		{"a failed fetch", pcsPolicyFails(d, obs.ReasonTimeout), host + " TXT: " + pcsPolicyAt + " " + host + " gave no answer (timeout)"},
 		{"a file with no mx line", pcsPolicy(d, "version: STSv1\nmode: enforce\nmax_age: 1\n"), host + " TXT: the policy file cannot be read: no mx line"},
 		{"a file that is no policy", pcsPolicy(d, "<html>not found</html>\n"), host + " TXT: the policy file cannot be read: a line without a colon"},
 		{"an empty file", pcsPolicy(d, ""), host + " TXT: the policy file cannot be read: no version line"},

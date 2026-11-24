@@ -143,7 +143,7 @@ func DecideCertificates(in CertInput) []Change {
 	}
 	if !c.Usable && !in.FailingSince.IsZero() && in.FailLimit > 0 && in.Now.Sub(in.FailingSince) >= in.FailLimit {
 		found = append(found, Finding{Rule: RuleCheckFailing, Severity: severity(RuleCheckFailing, 0), Check: c.Key,
-			Value: "no usable answer for " + in.FailLimit.String()})
+			Value: "no usable answer for " + ShortDuration(in.FailLimit)})
 	}
 	open := firstOpen(in.Open, c.Key.String())
 	changes := openOrUpdate(found, open, in.Now)

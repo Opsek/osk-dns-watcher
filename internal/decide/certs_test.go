@@ -657,7 +657,7 @@ func crtNews(was, f Finding) bool {
 }
 
 func crtFailing(key obs.Key, limit time.Duration) Finding {
-	return Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: key, Value: "no usable answer for " + limit.String()}
+	return Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: key, Value: "no usable answer for " + ShortDuration(limit)}
 }
 
 func crtDecideOracle(in CertInput) []Change {
@@ -964,7 +964,7 @@ func TestDecideCertificatesCheckFailing(t *testing.T) {
 	t.Run("the finding", func(t *testing.T) {
 		in := CertInput{Expect: f, Certificates: c, Now: since.Add(3 * time.Hour), FailingSince: since, FailLimit: 3 * time.Hour}
 		got := DecideCertificates(in)
-		want := Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: crtKey, Expected: "", Seen: nil, Value: "no usable answer for 3h0m0s"}
+		want := Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: crtKey, Expected: "", Seen: nil, Value: "no usable answer for 3 h"}
 		decSameChanges(t, got, []Change{{Op: OpOpen, Finding: want, At: in.Now}})
 		if got[0].Finding.Rule.String() != "check-failing" {
 			t.Errorf("rule %v", got[0].Finding.Rule)

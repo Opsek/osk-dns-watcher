@@ -73,18 +73,18 @@ var wordings = map[decide.Rule]wording{
 	decide.RuleNameServers: {
 		phrase:   "nameservers of {D} changed at the parent zone",
 		resolved: "nameservers of {D} are as expected again",
-		action:   "If you did not change the nameservers, contact your registrar now.",
+		action:   "If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleGlue: {
 		phrase:   "nameserver addresses of {D} changed at the parent zone",
 		resolved: "nameserver addresses of {D} are as expected again",
-		action:   "If you did not change the addresses of your nameservers, contact your registrar now.",
+		action:   "If you did not change the addresses of your nameservers, contact your registrar now. If you did, edit the address line.",
 		now:      "as expected again",
 	},
 	decide.RuleDS: {
 		phrase:   "DS of {D} changed at the parent zone",
 		resolved: "DS of {D} is as expected again",
-		action:   "If you did not change your DNSSEC keys, contact your registrar now.",
+		action:   "If you did not change your DNSSEC keys, contact your registrar now. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleGone: {
 		phrase:   "{D} does not exist at the parent zone",
@@ -124,13 +124,13 @@ var wordings = map[decide.Rule]wording{
 	decide.RuleWildcard: {
 		phrase:   "a wildcard answers for names under {N} that do not exist",
 		resolved: "no wildcard answers under {N} again",
-		action:   "If you did not add a wildcard under {N}, remove it at your DNS provider and find out who added it.",
+		action:   "If you did not add a wildcard under {N}, remove it at your DNS provider and find out who added it. If you did, write its lines by hand.",
 		now:      "no wildcard",
 	},
 	decide.RuleCAA: {
 		phrase:   "the CAA policy for {N} is weaker than expected",
 		resolved: "the CAA policy for {N} is as strict as expected again",
-		action:   "If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for {N} that you did not ask for.",
+		action:   "If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for {N} that you did not ask for. If you did, run osk-dns-watcher accept.",
 		now:      "as strict as expected",
 	},
 	decide.RuleIssuer: {
@@ -154,48 +154,48 @@ var wordings = map[decide.Rule]wording{
 	decide.RuleRecordSet: {
 		phrase:   "{NT} changed",
 		resolved: "{NT} is as expected again",
-		action:   "If you did not make this change, check your DNS provider account now.",
+		action:   "If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleSPF: {
 		phrase:   "the SPF record at {N} changed",
 		more:     "the SPF record at {N} lets more senders pass than the file",
 		resolved: "the SPF record at {N} is as expected again",
-		action:   "If you did not make this change, restore the record at your DNS provider: every sender that it lets pass can send mail as {N}.",
+		action:   "If you did not make this change, restore the record at your DNS provider: every sender that it lets pass can send mail as {N}. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleDMARC: {
 		phrase:   "the DMARC record {N} changed",
 		more:     "the DMARC record {N} asks receivers to do less than the file",
 		resolved: "the DMARC record {N} is as expected again",
-		action:   "If you did not make this change, restore the record at your DNS provider: receivers follow it for mail that claims to come from your domain.",
+		action:   "If you did not make this change, restore the record at your DNS provider: receivers follow it for mail that claims to come from your domain. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleDKIM: {
 		phrase:   "the DKIM key {N} changed",
 		more:     "the DKIM key {N} lets another key sign mail",
 		resolved: "the DKIM key {N} is as expected again",
-		action:   "If you did not change this key, remove the key that is not yours at your DNS provider: whoever holds its private key can sign mail that receivers trust.",
+		action:   "If you did not change this key, remove the key that is not yours at your DNS provider: whoever holds its private key can sign mail that receivers trust. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleMTASTS: {
 		phrase:   "MTA-STS at {N} changed",
 		more:     "MTA-STS at {N} protects less than the file",
 		resolved: "MTA-STS at {N} is as expected again",
-		action:   "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours.",
+		action:   "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours. If you did, run osk-dns-watcher accept.",
 	},
 	decide.RuleZone: {
 		phrase:   "{N} is answered from an unexpected zone",
 		resolved: "{N} is answered from the expected zone again",
-		action:   "If you did not create this zone, check the delegations under {D} at your DNS provider.",
+		action:   "If you did not create this zone, check the delegations under {D} at your DNS provider. If you did, add its NS line by hand.",
 		now:      "the expected zone",
 	},
 	decide.RuleNotCovered: {
 		phrase:   "{NT} has no expectation and is not checked",
 		resolved: "{NT} has an expectation now",
-		action:   "Add a line for {NT} to the expectations file of {D}.",
+		action:   "Run osk-dns-watcher accept to add the line for {NT}. If it refuses, add the line to the expectations file of {D} by hand.",
 		now:      "covered by the expectations",
 	},
 	decide.RuleInvalidFile: {
 		phrase:   "the expectations file of {D} is not valid",
 		resolved: "the expectations file of {D} is valid again",
-		action:   "Fix the file. Until then the last valid file is used.",
+		action:   "Fix the file. osk-dns-watcher validate names each fault. Until then the last valid file is used.",
 		now:      "the file is valid",
 	},
 	decide.RuleCheckFailing: {
@@ -266,6 +266,10 @@ func SlackText(e alert.Event) string {
 	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindPolicy {
 		// The policy file comes from an HTTPS host, not from the DNS servers.
 		w.action = "Find out why osk-dns-watcher cannot fetch the policy file from {N}; the log of osk-dns-watcher names the reason. Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
+	}
+	if e.Alert.Rule == decide.RuleCheckFailing && (e.Alert.Check.Kind == obs.KindDelegation || e.Alert.Check.Kind == obs.KindDS) {
+		// These checks ask the servers of the parent zone, not those of {D}.
+		w.action = "Find out why no server of the parent zone of {D} answers this machine; until one does, a change there is not seen."
 	}
 	phrase, action, pointing := w.phrase, w.action, ""
 	if e.Kind == alert.EventResolve {
@@ -663,7 +667,7 @@ func times(e alert.Event) string {
 	switch {
 	case e.Kind == alert.EventResolve:
 		end := e.At.UTC()
-		return ":clock3: Open for " + openFor(end.Sub(first)) + dot + span("first seen", "resolved", first, end)
+		return ":clock3: Open for " + decide.ShortDuration(end.Sub(first)) + dot + span("first seen", "resolved", first, end)
 	case a.LastClean.IsZero():
 		return ":clock3: First seen " + first.Format(timeOfDay) + dot + "no clean check before" + dot + first.Format(dateLayout) + " UTC"
 	}
@@ -676,25 +680,4 @@ func span(firstWord, secondWord string, first, second time.Time) string {
 		return firstWord + " " + first.Format(timeOfDay) + dot + secondWord + " " + second.Format(timeOfDay) + dot + first.Format(dateLayout) + " UTC"
 	}
 	return firstWord + " " + first.Format(dateLayout+" "+timeOfDay) + dot + secondWord + " " + second.Format(dateLayout+" "+timeOfDay) + dot + "UTC"
-}
-
-// openFor writes d, cut to whole seconds: its largest unit that is not zero,
-// and the next smaller unit when that one is not zero either.
-func openFor(d time.Duration) string {
-	left := max(int64(d/time.Second), 0)
-	var amounts []int64
-	names := []string{"d", "h", "min", "s"}
-	for _, secs := range []int64{86400, 3600, 60, 1} {
-		amounts = append(amounts, left/secs)
-		left %= secs
-	}
-	i := slices.IndexFunc(amounts, func(n int64) bool { return n > 0 })
-	if i < 0 {
-		return "0 s"
-	}
-	out := strconv.FormatInt(amounts[i], 10) + " " + names[i]
-	if i+1 < len(amounts) && amounts[i+1] > 0 {
-		out += " " + strconv.FormatInt(amounts[i+1], 10) + " " + names[i+1]
-	}
-	return out
 }

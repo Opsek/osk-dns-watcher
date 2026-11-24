@@ -669,7 +669,7 @@ func TestInitLeavesOutTheAddressesOfANameServerWhoseAnswerFailed(t *testing.T) {
 	}
 	lines := nswLinesWith(nswNames(nswHosts), nswHostLines(nswHosts[1:])...)
 	skips := []string{
-		"ns1.example.com. A: " + nswServer("ns1.example.com.", iniNS1Addr) + " gave no answer: timeout",
+		"ns1.example.com. A: " + nswServer("ns1.example.com.", iniNS1Addr) + " gave no answer (timeout)",
 		"ns1.example.com. AAAA: the A address of the host could not be read, so its glue at the parent zone cannot be compared",
 		iniAliasSkip(d),
 	}

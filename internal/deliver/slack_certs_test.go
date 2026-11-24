@@ -281,10 +281,10 @@ func TestSlackTextOfTheCertificatesCheckFailing(t *testing.T) {
 		lines: func(testing.TB) []alert.Line { return nil },
 	}
 	open := dngEvent(t, alert.EventOpen, r)
-	open.Alert.Value = "no usable answer for 30m0s"
+	open.Alert.Value = "no usable answer for 30 min"
 	head := ":large_orange_circle: *MEDIUM* · the certificates check of `corp.test.` has had no usable answer for too long"
 	action := ":point_right: Find out why osk-dns-watcher gets no usable answer from the certificate source; the log of osk-dns-watcher names the reason. Until it does, a new certificate is not seen."
-	view := []string{"problem    no usable answer for 30m0s"}
+	view := []string{"problem    no usable answer for 30 min"}
 	dngCheck(t, open, dlvFull(head, view, dngOpenClock, action), 1)
 
 	update := dngEvent(t, alert.EventUpdate, r)
@@ -304,10 +304,10 @@ func TestSlackTextOfADNSCheckFailingKeepsItsWords(t *testing.T) {
 		lines: func(testing.TB) []alert.Line { return nil },
 	}
 	open := dngEvent(t, alert.EventOpen, r)
-	open.Alert.Value = "no usable answer for 30m0s"
+	open.Alert.Value = "no usable answer for 30 min"
 	head := ":large_orange_circle: *MEDIUM* · the records check of `www.corp.test. A` has had no usable answer for too long"
 	action := ":point_right: Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen."
-	dngCheck(t, open, dlvFull(head, []string{"problem    no usable answer for 30m0s"}, dngOpenClock, action), 2)
+	dngCheck(t, open, dlvFull(head, []string{"problem    no usable answer for 30 min"}, dngOpenClock, action), 2)
 
 	resolved := ":white_check_mark: *RESOLVED* · the records check of `www.corp.test. A` has usable answers again"
 	dngCheck(t, dngEvent(t, alert.EventResolve, r),

@@ -1199,21 +1199,21 @@ func TestSTSSnapshotSkips(t *testing.T) {
 		answers []obs.Answer
 		want    string
 	}{
-		{"a fetch that timed out", []obs.Answer{failed("", obs.ReasonTimeout)}, "- " + stpPolicyHost + " gave no answer: timeout"},
-		{"a fetch that gave a bad answer", []obs.Answer{failed(stpAddr1, obs.ReasonBadAnswer)}, stpSrv1 + " gave no answer: bad-answer"},
-		{"a fetch that was not permitted", []obs.Answer{failed(stpAddr1, obs.ReasonNotPermitted)}, stpSrv1 + " gave no answer: not-permitted"},
-		{"a fetch that failed on the network", []obs.Answer{failed("", obs.ReasonNetwork)}, "- " + stpPolicyHost + " gave no answer: network"},
-		{"a good answer followed by a failed one", []obs.Answer{good(stpAddr1), failed(stpAddr2, obs.ReasonTimeout)}, stpSrv2 + " gave no answer: timeout"},
-		{"a failed answer followed by a good one", []obs.Answer{failed(stpAddr2, obs.ReasonTimeout), good(stpAddr1)}, stpSrv2 + " gave no answer: timeout"},
-		{"two failed answers: the first", []obs.Answer{failed(stpAddr1, obs.ReasonTimeout), failed(stpAddr2, obs.ReasonBadAnswer)}, stpSrv1 + " gave no answer: timeout"},
-		{"a failure without an answer", []obs.Answer{{}}, "- - gave no answer: none"},
+		{"a fetch that timed out", []obs.Answer{failed("", obs.ReasonTimeout)}, "no server gave an answer (timeout)"},
+		{"a fetch that gave a bad answer", []obs.Answer{failed(stpAddr1, obs.ReasonBadAnswer)}, stpSrv1 + " gave no answer (bad-answer)"},
+		{"a fetch that was not permitted", []obs.Answer{failed(stpAddr1, obs.ReasonNotPermitted)}, stpSrv1 + " gave no answer (not-permitted)"},
+		{"a fetch that failed on the network", []obs.Answer{failed("", obs.ReasonNetwork)}, "no server gave an answer (network)"},
+		{"a good answer followed by a failed one", []obs.Answer{good(stpAddr1), failed(stpAddr2, obs.ReasonTimeout)}, stpSrv2 + " gave no answer (timeout)"},
+		{"a failed answer followed by a good one", []obs.Answer{failed(stpAddr2, obs.ReasonTimeout), good(stpAddr1)}, stpSrv2 + " gave no answer (timeout)"},
+		{"two failed answers: the first", []obs.Answer{failed(stpAddr1, obs.ReasonTimeout), failed(stpAddr2, obs.ReasonBadAnswer)}, stpSrv1 + " gave no answer (timeout)"},
+		{"a failure without an answer", []obs.Answer{{}}, "no server gave an answer (none)"},
 		{"no data", []obs.Answer{expAnswer(t, stpPolicyHost, stpAddr1, expNoData(t, "corp.test."))}, read(stpNoVersion)},
 		{"no such name", []obs.Answer{expAnswer(t, stpPolicyHost, stpAddr1, expNoName(t, "corp.test."))}, read(stpNoVersion)},
 		{"an empty body", []obs.Answer{stpPolicyAnswer(t, stpAddr1, "")}, read(stpNoVersion)},
 		{"a good answer followed by an unreadable one", []obs.Answer{good(stpAddr1), stpPolicyAnswer(t, stpAddr2, "version: STSv2\n")}, read(stpBadVersion)},
 		{"an unreadable answer followed by a good one", []obs.Answer{stpPolicyAnswer(t, stpAddr2, "version: STSv2\n"), good(stpAddr1)}, read(stpBadVersion)},
 		{"an unreadable answer followed by a failed one", []obs.Answer{stpPolicyAnswer(t, stpAddr1, "garbage"), failed(stpAddr2, obs.ReasonTimeout)}, read(stpNoColon)},
-		{"a failed answer followed by an unreadable one", []obs.Answer{failed(stpAddr2, obs.ReasonTimeout), stpPolicyAnswer(t, stpAddr1, "garbage")}, stpSrv2 + " gave no answer: timeout"},
+		{"a failed answer followed by an unreadable one", []obs.Answer{failed(stpAddr2, obs.ReasonTimeout), stpPolicyAnswer(t, stpAddr1, "garbage")}, stpSrv2 + " gave no answer (timeout)"},
 		{"no mode", []obs.Answer{stpPolicyAnswer(t, stpAddr1, "version: STSv1\nmax_age: 1\nmx: a.test\n")}, read(stpNoMode)},
 		{"a bad mode", []obs.Answer{stpPolicyAnswer(t, stpAddr1, "version: STSv1\nmode: x\nmax_age: 1\nmx: a.test\n")}, read(stpBadMode)},
 		{"no max_age", []obs.Answer{stpPolicyAnswer(t, stpAddr1, "version: STSv1\nmode: testing\nmx: a.test\n")}, read(stpNoAge)},
@@ -1255,7 +1255,7 @@ func TestSTSSnapshotTwoChecks(t *testing.T) {
 	good := stpPolicyAnswer(t, stpAddr1, stpWasBody)
 	bad := expAnswer(t, stpPolicyHost, stpAddr2, expFailure(obs.ReasonTimeout))
 	f, skips := expSnapshot(t, stpRecordObs(t, stpGoodRecord), stpPolicyObs(t, good), stpPolicyObs(t, bad))
-	if f.Policy != nil || !slices.Equal(stpPolicySkips(skips), []string{stpPolicyHost + " TXT: " + stpSrv2 + " gave no answer: timeout"}) {
+	if f.Policy != nil || !slices.Equal(stpPolicySkips(skips), []string{stpPolicyHost + " TXT: " + stpSrv2 + " gave no answer (timeout)"}) {
 		t.Errorf("policy %+v, skips %q", f.Policy, skips)
 	}
 	f, skips = expSnapshot(t, stpRecordObs(t, stpGoodRecord), stpPolicyObs(t, bad), stpPolicyObs(t, good))

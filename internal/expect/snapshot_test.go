@@ -195,16 +195,16 @@ func TestSnapshotSkips(t *testing.T) {
 		{"a server that timed out", []obs.Observation{expObs(t, www, "corp.test.",
 			at("ns1.corp.test.", expNS1Addr, "10.53.0.81"),
 			expAnswer(t, "NS2.Corp.Test.", expNS2Addr, expFailure(obs.ReasonTimeout)))},
-			"www.corp.test. A: 10.53.0.12:53 ns2.corp.test. gave no answer: timeout"},
+			"www.corp.test. A: 10.53.0.12:53 ns2.corp.test. gave no answer (timeout)"},
 		{"a query the deadline stopped", []obs.Observation{expObs(t, www, "corp.test.",
 			expAnswer(t, "ns1.corp.test.", expNS1Addr, expFailure(obs.ReasonDeadline)))},
-			"www.corp.test. A: 10.53.0.11:53 ns1.corp.test. gave no answer: deadline"},
+			"www.corp.test. A: 10.53.0.11:53 ns1.corp.test. gave no answer (deadline)"},
 		{"a host without an address", []obs.Observation{expObs(t, www, "corp.test.",
 			at("ns1.corp.test.", expNS1Addr, "10.53.0.81"),
 			expAnswer(t, "ns3.corp.test.", "", expFailure(obs.ReasonWalk)))},
-			"www.corp.test. A: - ns3.corp.test. gave no answer: walk"},
+			"www.corp.test. A: ns3.corp.test. gave no answer (walk)"},
 		{"a failed walk", []obs.Observation{expFailedWalk(www)},
-			"www.corp.test. A: - - gave no answer: walk"},
+			"www.corp.test. A: no server gave an answer (walk)"},
 		{"an answer of another type", []obs.Observation{expObs(t, www, "corp.test.",
 			expAnswer(t, "ns1.corp.test.", expNS1Addr, expRecords(t, dnswire.TypeCNAME, "www.corp.test.", "web.dnshost.test.")),
 			expAnswer(t, "ns2.corp.test.", expNS2Addr, expRecords(t, dnswire.TypeCNAME, "www.corp.test.", "web.dnshost.test.")))},
@@ -312,7 +312,7 @@ func TestSnapshotSkipsSortedByType(t *testing.T) {
 		expTimedOut(t, "corp.test.", dnswire.TypeTXT),
 		expTimedOut(t, "corp.test.", dnswire.TypeMX),
 		expTimedOut(t, "corp.test.", dnswire.TypeA))
-	const why = ": 10.53.0.11:53 ns1.corp.test. gave no answer: timeout"
+	const why = ": 10.53.0.11:53 ns1.corp.test. gave no answer (timeout)"
 	want := []string{"corp.test. A" + why, "corp.test. MX" + why, "corp.test. TXT" + why, "corp.test. AAAA" + why}
 	if !slices.Equal(skips, want) {
 		t.Errorf("skips %q; want %q", skips, want)
@@ -325,7 +325,7 @@ func TestSnapshotSkipsSortedByName(t *testing.T) {
 		expTimedOut(t, "www.corp.test.", dnswire.TypeA),
 		expTimedOut(t, "a.corp.test.", dnswire.TypeA),
 		expTimedOut(t, "corp.test.", dnswire.TypeA))
-	const why = " A: 10.53.0.11:53 ns1.corp.test. gave no answer: timeout"
+	const why = " A: 10.53.0.11:53 ns1.corp.test. gave no answer (timeout)"
 	want := []string{"corp.test." + why, "a.corp.test." + why, "www.corp.test." + why}
 	if !slices.Equal(skips, want) {
 		t.Errorf("skips %q; want %q", skips, want)
@@ -757,7 +757,7 @@ func TestSnapshotGivesTheOrdinaryReasonForAChallengeNameThatHasNoAgreedSet(t *te
 			`_acme-challenge.corp.test. TXT: servers disagree: 10.53.0.11:53 ns1.corp.test. gives "t0ken1"; 10.53.0.12:53 ns2.corp.test. gives none`},
 		{"a server that timed out", expObs(t, expRecordsKey(t, name, dnswire.TypeTXT), "corp.test.",
 			token("ns1.corp.test.", expNS1Addr), expAnswer(t, "ns2.corp.test.", expNS2Addr, expFailure(obs.ReasonTimeout))),
-			"_acme-challenge.corp.test. TXT: 10.53.0.12:53 ns2.corp.test. gave no answer: timeout"},
+			"_acme-challenge.corp.test. TXT: 10.53.0.12:53 ns2.corp.test. gave no answer (timeout)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, skips := expSnapshot(t, c.obs)
@@ -798,7 +798,7 @@ func TestSnapshotListsTheChallengeSkipAmongTheOthers(t *testing.T) {
 		t.Errorf("String() %q; want %q", f.String(), want)
 	}
 	want := []string{
-		"corp.test. TXT: 10.53.0.11:53 ns1.corp.test. gave no answer: timeout",
+		"corp.test. TXT: 10.53.0.11:53 ns1.corp.test. gave no answer (timeout)",
 		"_acme-challenge.www.corp.test. TXT: " + expChallengeWhy,
 	}
 	if !slices.Equal(skips, want) {

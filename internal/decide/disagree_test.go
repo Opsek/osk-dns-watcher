@@ -1099,7 +1099,7 @@ func dngOracle(in Input) dngWant {
 	}
 	found := slices.Clone(w.findings)
 	if records && len(dngUsable(o, nil)) == 0 && !in.FailingSince.IsZero() && in.FailLimit > 0 && in.Now.Sub(in.FailingSince) >= in.FailLimit {
-		found = append(found, Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: o.Key, Value: "no usable answer for " + in.FailLimit.String()})
+		found = append(found, Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: o.Key, Value: "no usable answer for " + ShortDuration(in.FailLimit)})
 	}
 	_, w.open = dngFirstOpen(in.Open, o.Key, RuleDisagree)
 	cov, line := dngCovLine(in.Expect, o.Key)

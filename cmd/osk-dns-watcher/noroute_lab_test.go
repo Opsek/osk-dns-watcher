@@ -37,7 +37,7 @@ func rtlChanged(n string) []string {
 		"",
 		slkClockOpen,
 		"",
-		":point_right: If you did not make this change, check your DNS provider account now.",
+		":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.",
 	}
 }
 

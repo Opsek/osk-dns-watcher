@@ -442,7 +442,7 @@ func TestSnapshotOutput(t *testing.T) {
 		"domain corp.test.",
 		"www.example. A 192.0.2.80",
 		"corp.test. DS none",
-		"# not written: www.shop.example. A: 192.0.2.1:53 ns.shop.example. gave no answer: not-permitted",
+		"# not written: www.shop.example. A: 192.0.2.1:53 ns.shop.example. gave no answer (not-permitted)",
 		"# not written: corp.test. NS: lies in zone .; add the pair . NS",
 	})
 }

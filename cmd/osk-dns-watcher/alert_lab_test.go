@@ -172,7 +172,7 @@ func slkNameServersOpen(n string) []string {
 		"",
 		slkClockOpen,
 		"",
-		":point_right: If you did not change the nameservers, contact your registrar now.",
+		":point_right: If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.",
 	}
 }
 
@@ -297,7 +297,7 @@ func TestAlertCarriesProof(t *testing.T) {
 		"",
 		slkClockOpen,
 		"",
-		":point_right: If you did not make this change, check your DNS provider account now.",
+		":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.",
 	}, r2, r1)
 }
 

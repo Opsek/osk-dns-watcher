@@ -37,7 +37,7 @@ func timFailedRun(t testing.TB, key obs.Key, zone string) obs.Observation {
 }
 
 func timFailing(key obs.Key, limit time.Duration) Finding {
-	return Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: key, Value: "no usable answer for " + limit.String()}
+	return Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: key, Value: "no usable answer for " + ShortDuration(limit)}
 }
 
 func timInput(f *expect.File, open []Finding, o obs.Observation, now, since time.Time, limit time.Duration) Input {
@@ -158,10 +158,10 @@ func TestCheckFailingValueNamesTheLimitAndNoTime(t *testing.T) {
 		limit time.Duration
 		want  string
 	}{
-		{25 * time.Second, "no usable answer for 25s"},
-		{3 * time.Minute, "no usable answer for 3m0s"},
-		{15 * time.Minute, "no usable answer for 15m0s"},
-		{time.Hour, "no usable answer for 1h0m0s"},
+		{25 * time.Second, "no usable answer for 25 s"},
+		{3 * time.Minute, "no usable answer for 3 min"},
+		{15 * time.Minute, "no usable answer for 15 min"},
+		{time.Hour, "no usable answer for 1 h"},
 	} {
 		got := Decide(timInput(f, nil, o, decT0.Add(c.limit), decT0, c.limit))
 		if len(got) != 1 || got[0].Op != OpOpen || got[0].Finding.Value != c.want || got[0].Finding.Expected != "" || len(got[0].Finding.Seen) != 0 {
@@ -169,7 +169,7 @@ func TestCheckFailingValueNamesTheLimitAndNoTime(t *testing.T) {
 		}
 	}
 
-	open := Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: key, Value: "no usable answer for 25s"}
+	open := Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: key, Value: "no usable answer for 25 s"}
 	otherReason := decObservation(key, decName(t, "corp.test."), nil,
 		decAnswer(t, "ns1.corp.test.", decNS1, decFailure(obs.ReasonNetwork)),
 		decAnswer(t, "ns2.corp.test.", decNS2, decFailure(obs.ReasonBudget)))
@@ -336,7 +336,7 @@ func TestCheckFailingResolvesExactlyWhenARunHasAUsableAnswer(t *testing.T) {
 	open, openNX := timFailing(www, timLimit), timFailing(nx, timLimit)
 	upper := timFailing(decRecordsKey(t, "CORP.TEST.", "WWW.Corp.Test.", dnswire.TypeA), timLimit)
 	other := open
-	other.Value = "no usable answer for 3m0s"
+	other.Value = "no usable answer for 3 min"
 
 	ok := decObservation(www, corp, nil,
 		decAnswer(t, "ns1.corp.test.", decNS1, decSet(t, "www.corp.test.", dnswire.TypeA, "10.53.0.81")),
@@ -647,7 +647,7 @@ func timWant(in Input) []Change {
 	failed := timNoUsable(in.Observation)
 	if failed && !in.FailingSince.IsZero() && in.FailLimit > 0 && in.Now.Sub(in.FailingSince) >= in.FailLimit {
 		f := Finding{Rule: RuleCheckFailing, Severity: SeverityMedium, Check: in.Observation.Key,
-			Value: "no usable answer for " + in.FailLimit.String()}
+			Value: "no usable answer for " + ShortDuration(in.FailLimit)}
 		i := slices.IndexFunc(in.Open, timIsFailing(key))
 		if i < 0 {
 			want = append(want, Change{Op: OpOpen, Finding: f, At: in.Now})
@@ -709,7 +709,7 @@ func timFailingCase(t testing.TB, seed uint64) Input {
 			check = g.recased(key)
 		}
 		was := Finding{Rule: RuleCheckFailing, Severity: decPick(g, SeverityMedium, SeverityMedium, SeverityMedium, SeverityLow), Check: check,
-			Value: "no usable answer for " + decPick(g, limits[2:]...).String()}
+			Value: "no usable answer for " + ShortDuration(decPick(g, limits[2:]...))}
 		open = slices.Insert(open, g.rng.IntN(len(open)+1), was)
 	}
 	limit := decPick(g, limits...)

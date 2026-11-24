@@ -219,7 +219,12 @@ func (g *setGroup) agreed() []dnswire.Record {
 func fetchedPolicy(a obs.Answer) (STSPolicy, string) {
 	set, failure, failed := readAnswer(a)
 	if failed {
-		return STSPolicy{}, fmt.Sprintf("%s gave no answer: %s", serverText(a.Server), failure.Reason)
+		server := a.Server
+		if !server.Addr.IsValid() {
+			// The fetch never reached an address: the host is the name of the line.
+			server = obs.Server{}
+		}
+		return STSPolicy{}, noAnswerText(server, failure.Reason)
 	}
 	p, problem := ParseSTSPolicy([]byte(strings.Join(texts(recordData(set)), "")))
 	if problem != "" {
@@ -252,7 +257,7 @@ func (g *setGroup) agreedLine() (Expectation, []obs.Server, string) {
 	for i, a := range answers {
 		set, failure, failed := readAnswer(a)
 		if failed {
-			return Expectation{}, nil, fmt.Sprintf("%s gave no answer: %s", serverText(a.Server), failure.Reason)
+			return Expectation{}, nil, noAnswerText(a.Server, failure.Reason)
 		}
 		sets[i] = set
 	}
@@ -429,6 +434,22 @@ func readAnswer(a obs.Answer) (set []dnswire.Record, failure obs.Failure, failed
 		func(obs.NoName) bool { return false },
 		func(f obs.Failure) bool { failure = f; return true })
 	return set, failure, failed
+}
+
+// noAnswerText says that a server gave no answer, and why. The parts of the
+// server that are not known stay out; with none known, it names no server.
+func noAnswerText(s obs.Server, reason fmt.Stringer) string {
+	var who []string
+	if s.Addr.IsValid() {
+		who = append(who, s.Addr.String())
+	}
+	if s.Name.LabelCount() > 0 {
+		who = append(who, s.Name.Lower().String())
+	}
+	if len(who) == 0 {
+		return "no server gave an answer (" + reason.String() + ")"
+	}
+	return strings.Join(who, " ") + " gave no answer (" + reason.String() + ")"
 }
 
 // serverText gives "<addr> <host>", each "-" when not known.

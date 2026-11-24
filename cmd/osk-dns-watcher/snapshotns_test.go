@@ -93,7 +93,7 @@ func TestSnnSnapshotNamesTheServersTheNSLineRestsWithout(t *testing.T) {
 	s := transportStart(t, snnWorld)
 	args := []string{"snapshot", "--root-server", s.addr, "--extra-range", "127.0.0.0/8", "corp.test."}
 	servers := []string{"192.0.2.11:53 ns1.corp.test. (not-permitted)", "192.0.2.12:53 ns2.corp.test. (not-permitted)"}
-	notPermitted := "192.0.2.11:53 ns1.corp.test. gave no answer: not-permitted"
+	notPermitted := "192.0.2.11:53 ns1.corp.test. gave no answer (not-permitted)"
 	file := "domain corp.test.\ncorp.test. NS ns1.corp.test. | ns2.corp.test.\ncorp.test. DS none\n"
 
 	code, out, errOut := transportRun(args...)

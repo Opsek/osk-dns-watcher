@@ -524,7 +524,7 @@ func TestWildcardAddedAlert(t *testing.T) {
 		"now        " + w.n + "66",
 		"seen at    ns1.corp.test. (" + w.n + "11)   TTL " + ttl,
 		"           ns2.corp.test. (" + w.n + "12)   TTL " + dngTTL(t, w.n+"12:53", "no-such-name.corp.test.", "A"),
-	}, regOpenTimes, ":point_right: If you did not add a wildcard under `corp.test.`, remove it at your DNS provider and find out who added it.")
+	}, regOpenTimes, ":point_right: If you did not add a wildcard under `corp.test.`, remove it at your DNS provider and find out who added it. If you did, write its lines by hand.")
 
 	// Each run asks another random name; the answer does not change, so
 	// nothing is sent again.
@@ -603,7 +603,7 @@ func TestWildcardOfAnotherTypeIsARecordSetAlert(t *testing.T) {
 		"now        10 mx.evil.test.",
 		"seen at    ns1.corp.test. (" + w.n + "11)   TTL " + dngTTL(t, w.n+"11:53", "*.corp.test.", "MX"),
 		"           ns2.corp.test. (" + w.n + "12)   TTL " + dngTTL(t, w.n+"12:53", "*.corp.test.", "MX"),
-	}, regOpenTimes, ":point_right: If you did not make this change, check your DNS provider account now.")
+	}, regOpenTimes, ":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.")
 
 	set = time.Now()
 	expCtl(t, "del", "both", "*.corp.test.", "MX")
@@ -681,7 +681,7 @@ func TestWildcardThroughADNAMEOpensOnce(t *testing.T) {
 		"now        CNAME *.other.test.",
 		"seen at    ns1.corp.test. (" + w.n + "11)   TTL " + cname[1],
 		"           ns2.corp.test. (" + w.n + "12)   TTL " + cname[1],
-	}, regOpenTimes, ":point_right: If you did not add a wildcard under `sub.corp.test.`, remove it at your DNS provider and find out who added it.")
+	}, regOpenTimes, ":point_right: If you did not add a wildcard under `sub.corp.test.`, remove it at your DNS provider and find out who added it. If you did, write its lines by hand.")
 
 	dngSteady(t, svc, runs, interval)
 	dngExpectAlerts(t, svc, open)

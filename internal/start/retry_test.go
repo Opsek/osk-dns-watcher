@@ -191,7 +191,7 @@ func TestInitUsesACheckThatFailedTwiceAsItIs(t *testing.T) {
 	s, r := stfNew(t, map[string][][]obs.Answer{key: {dead}}, "example.com", iniURL, "yes")
 	code, out := s.run()
 	lines := stfWithout(iniLines(d), "A")
-	skips := []string{d + " A: " + iniNS2Addr + " ns2.example.net. gave no answer: timeout", iniAliasSkip(d)}
+	skips := []string{d + " A: " + iniNS2Addr + " ns2.example.net. gave no answer (timeout)", iniAliasSkip(d)}
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
@@ -495,7 +495,9 @@ func TestInitRetriesAFailureAnswerExceptAnAddressWithNoRoute(t *testing.T) {
 func TestInitUsesTheSecondObservationOnlyWhenItIsNotWorse(t *testing.T) {
 	d := "example.com."
 	key := iniKey(d, d, dnswire.TypeA)
-	skip := func(why string) string { return d + " A: " + iniNS2Addr + " ns2.example.net. gave no answer: " + why }
+	skip := func(why string) string {
+		return d + " A: " + iniNS2Addr + " ns2.example.net. gave no answer (" + why + ")"
+	}
 	both := iniBoth(iniFail(obs.ReasonNetwork))
 	lines := stfWithout(iniLines(d), "A")
 	for _, c := range []struct {

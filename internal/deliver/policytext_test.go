@@ -21,7 +21,7 @@ const (
 
 	pctMore    = "MTA-STS at `mta-sts.corp.test.` protects less than the file"
 	pctNeutral = "MTA-STS at `mta-sts.corp.test.` changed"
-	pctAction  = "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours."
+	pctAction  = "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours. If you did, run osk-dns-watcher accept."
 )
 
 var pctWords = []string{
@@ -219,7 +219,7 @@ func pctFailing(t testing.TB, kind alert.EventKind, key obs.Key) alert.Event {
 		lines: func(testing.TB) []alert.Line { return nil },
 	}
 	e := dngEvent(t, kind, r)
-	e.Alert.Value = "no usable answer for 30m0s"
+	e.Alert.Value = "no usable answer for 30 min"
 	return e
 }
 
@@ -229,7 +229,7 @@ func TestPctSlackTextOfAFailingPolicyCheck(t *testing.T) {
 	const head = ":large_orange_circle: *MEDIUM* · the policy check of `mta-sts.corp.test. TXT` has had no usable answer for too long"
 	const action = ":point_right: Find out why osk-dns-watcher cannot fetch the policy file from `mta-sts.corp.test.`; the log of osk-dns-watcher names the reason. " +
 		"Until it can, a change of the policy is not seen. A sender that cannot fetch the file uses the policy it has cached, or acts as if there were no policy."
-	view := []string{"problem    no usable answer for 30m0s"}
+	view := []string{"problem    no usable answer for 30 min"}
 
 	open := pctFailing(t, alert.EventOpen, pctKey(t))
 	dngCheck(t, open, dlvFull(head, view, dngOpenClock, action), 2)
@@ -262,7 +262,7 @@ func TestPctSlackTextOfOtherFailingChecksKeepsTheirWords(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := pctFailing(t, alert.EventOpen, c.key)
-			dngCheck(t, e, dlvFull(c.head, []string{"problem    no usable answer for 30m0s"}, dngOpenClock, ":point_right: "+c.action), c.spans)
+			dngCheck(t, e, dlvFull(c.head, []string{"problem    no usable answer for 30 min"}, dngOpenClock, ":point_right: "+c.action), c.spans)
 		})
 	}
 }

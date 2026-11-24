@@ -398,7 +398,7 @@ func TestSerialMoveStartsZoneChecks(t *testing.T) {
 		"",
 		slkClockOpen,
 		"",
-		":point_right: If you did not make this change, check your DNS provider account now.",
+		":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.",
 	}, slkRun{start: set, end: alert.at}, slkRun{start: begin, end: set})
 
 	next, j := svc.wait(t, "the next serial run", i+1, moved.start.Add(15*time.Second+runSerialDeadline), runRunOf(runSerialKey))
@@ -583,7 +583,7 @@ func TestFailingCheckReported(t *testing.T) {
 		":large_orange_circle: *MEDIUM* · the records check of `corp.test. A` has had no usable answer for too long",
 		"",
 		"```",
-		"problem    no usable answer for 25s",
+		"problem    no usable answer for 25 s",
 		"```",
 		"",
 		slkClockOpen,

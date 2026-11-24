@@ -167,7 +167,7 @@ func TestGlueChangedAlert(t *testing.T) {
 		"",
 		"now        ns2.corp.test. A " + w.n + "11",
 		"seen at    ns.test. (" + w.n + "3)   TTL " + regReferralTTL(t, w),
-	}, regOpenTimes, ":point_right: If you did not change the addresses of your nameservers, contact your registrar now.")
+	}, regOpenTimes, ":point_right: If you did not change the addresses of your nameservers, contact your registrar now. If you did, edit the address line.")
 	if ttl := regReferralTTL(t, w); ttl != "300" {
 		t.Errorf("dig shows the TTL %s for the referral, the lab holds 300", ttl)
 	}
@@ -209,7 +209,7 @@ func TestDSChangedAlert(t *testing.T) {
 		"seen at    ns.test. (" + w.n + "3)   TTL " + regNegativeTTL(t, w, "corp.test.", "DS"),
 	}
 	const dsPhrase = " · DS of `corp.test.` changed at the parent zone"
-	const dsAction = ":point_right: If you did not change your DNSSEC keys, contact your registrar now."
+	const dsAction = ":point_right: If you did not change your DNSSEC keys, contact your registrar now. If you did, run osk-dns-watcher accept."
 	regExpect(t, regTextWith(t, texts, ":red_circle: *HIGH*"+dsPhrase), ":red_circle: *HIGH*"+dsPhrase, seenNone, regOpenTimes, dsAction)
 
 	expCtl(t, "delegate", "corp.test.", "ns1.dnshost.test.", "ns2.dnshost.test.")

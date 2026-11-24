@@ -460,7 +460,7 @@ func TestWebhookBodiesOfTheGateExample(t *testing.T) {
 		"now        ns1.dnshost.test.\\n           ns2.dnshost.test.\\n" +
 		"seen at    ns.test. (10.53.0.3)   TTL 300\\n```\\n\\n" +
 		":clock3: First seen 14:02:07 · last OK 14:01:07 · 11 Nov 2026 UTC\\n\\n" +
-		":point_right: If you did not change the nameservers, contact your registrar now.\"}"
+		":point_right: If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.\"}"
 	if got := deliver.WebhookMessage(e); string(got) != want {
 		t.Errorf("open body:\n%s\nwant:\n%s", got, want)
 	}

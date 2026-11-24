@@ -90,7 +90,7 @@ func TestSlackTextOfTheCAAAlert(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r := c.rule()
 			head := ":red_circle: *HIGH*" + dlvDot + "the CAA policy for `" + c.check + "` is weaker than expected"
-			action := ":point_right: If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for `" + c.check + "` that you did not ask for."
+			action := ":point_right: If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for `" + c.check + "` that you did not ask for. If you did, run osk-dns-watcher accept."
 			dngCheck(t, dngEvent(t, alert.EventOpen, r), dlvFull(head, c.view, dngOpenClock, action), 2)
 
 			update := dngEvent(t, alert.EventUpdate, r)

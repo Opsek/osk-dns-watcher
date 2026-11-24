@@ -1436,7 +1436,7 @@ func TestInitListsTheSetsItCannotWatchAndLeavesThemOut(t *testing.T) {
 	}}
 	code, out := s.run()
 	lines := slices.DeleteFunc(iniLines(d), func(l string) bool { return strings.Contains(l, " MX ") })
-	skips := []string{d + " MX: " + iniNS2Addr + " ns2.example.net. gave no answer: timeout", iniAliasSkip(d)}
+	skips := []string{d + " MX: " + iniNS2Addr + " ns2.example.net. gave no answer (timeout)", iniAliasSkip(d)}
 	if code != 0 {
 		t.Errorf("exit code %d; want 0", code)
 	}
@@ -1586,21 +1586,21 @@ func TestInitDoesNotWatchASetWithAnyOtherFailure(t *testing.T) {
 		{"an IPv4 address that cannot be reached", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10")),
 			iniAt("ns2.example.net.", iniNS2Addr, iniFail(obs.ReasonNetwork)),
-		}, iniNS2Addr + " ns2.example.net. gave no answer: network"},
+		}, iniNS2Addr + " ns2.example.net. gave no answer (network)"},
 		{"an IPv6 address that timed out", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10")),
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonTimeout)),
 			iniAt("ns2.example.net.", iniNS2Addr, a("192.0.2.10")),
-		}, iniNS1v6Addr + " ns1.example.net. gave no answer: timeout"},
+		}, iniNS1v6Addr + " ns1.example.net. gave no answer (timeout)"},
 		{"an IPv6 address with a network failure", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10")),
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNetwork)),
 			iniAt("ns2.example.net.", iniNS2Addr, a("192.0.2.10")),
-		}, iniNS1v6Addr + " ns1.example.net. gave no answer: network"},
+		}, iniNS1v6Addr + " ns1.example.net. gave no answer (network)"},
 		{"only IPv6 addresses, none with a route", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),
 			iniAt("ns2.example.net.", iniNS2v6Addr, iniFail(obs.ReasonNoRoute)),
-		}, iniNS1v6Addr + " ns1.example.net. gave no answer: no-route"},
+		}, iniNS1v6Addr + " ns1.example.net. gave no answer (no-route)"},
 		{"an IPv6 address with no route, and answers that differ", []obs.Answer{
 			iniAt("ns1.example.net.", iniNS1Addr, a("192.0.2.10")),
 			iniAt("ns1.example.net.", iniNS1v6Addr, iniFail(obs.ReasonNoRoute)),

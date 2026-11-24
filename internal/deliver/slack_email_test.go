@@ -42,7 +42,7 @@ func emlwCases() []emlwCase {
 			neutral:  "the SPF record at `corp.test.` changed",
 			more:     "the SPF record at `corp.test.` lets more senders pass than the file",
 			resolved: "the SPF record at `corp.test.` is as expected again",
-			action:   "If you did not make this change, restore the record at your DNS provider: every sender that it lets pass can send mail as `corp.test.`.",
+			action:   "If you did not make this change, restore the record at your DNS provider: every sender that it lets pass can send mail as `corp.test.`. If you did, run osk-dns-watcher accept.",
 			spans:    2,
 		},
 		{
@@ -52,7 +52,7 @@ func emlwCases() []emlwCase {
 			neutral:  "the DMARC record `_dmarc.corp.test.` changed",
 			more:     "the DMARC record `_dmarc.corp.test.` asks receivers to do less than the file",
 			resolved: "the DMARC record `_dmarc.corp.test.` is as expected again",
-			action:   "If you did not make this change, restore the record at your DNS provider: receivers follow it for mail that claims to come from your domain.",
+			action:   "If you did not make this change, restore the record at your DNS provider: receivers follow it for mail that claims to come from your domain. If you did, run osk-dns-watcher accept.",
 			spans:    1,
 		},
 		{
@@ -62,7 +62,7 @@ func emlwCases() []emlwCase {
 			neutral:  "the DKIM key `s1._domainkey.corp.test.` changed",
 			more:     "the DKIM key `s1._domainkey.corp.test.` lets another key sign mail",
 			resolved: "the DKIM key `s1._domainkey.corp.test.` is as expected again",
-			action:   "If you did not change this key, remove the key that is not yours at your DNS provider: whoever holds its private key can sign mail that receivers trust.",
+			action:   "If you did not change this key, remove the key that is not yours at your DNS provider: whoever holds its private key can sign mail that receivers trust. If you did, run osk-dns-watcher accept.",
 			spans:    1,
 		},
 		{
@@ -72,7 +72,7 @@ func emlwCases() []emlwCase {
 			neutral:  "MTA-STS at `_mta-sts.corp.test.` changed",
 			more:     "MTA-STS at `_mta-sts.corp.test.` protects less than the file",
 			resolved: "MTA-STS at `_mta-sts.corp.test.` is as expected again",
-			action:   "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours.",
+			action:   "If you did not make this change, restore it: senders use MTA-STS to refuse mail servers that are not yours. If you did, run osk-dns-watcher accept.",
 			spans:    1,
 		},
 	}

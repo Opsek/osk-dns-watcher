@@ -114,7 +114,7 @@ func TestCAAWeakenedAlert(t *testing.T) {
 		caaSettled(t, svc, opened, name, interval)
 		text, changed := dngLatest(t, svc, w, "alert open high caa records "+name+" CAA")
 		regExpect(t, text, dngHead(":red_circle: *HIGH*", changed, " · the CAA policy for `"+name+"` is weaker than expected"), view, regOpenTimes,
-			fmt.Sprintf(":point_right: If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for `%s` that you did not ask for.", name))
+			fmt.Sprintf(":point_right: If you did not change the CAA records, restore them at your DNS provider now, then look for certificates for `%s` that you did not ask for. If you did, run osk-dns-watcher accept.", name))
 	}
 	expectResolve := func(name string) {
 		t.Helper()
@@ -185,7 +185,7 @@ func TestCAAWeakenedAlert(t *testing.T) {
 	text, changed := dngLatest(t, svc, w, openRecord)
 	regExpect(t, text, dngHead(":large_orange_circle: *MEDIUM*", changed, " · `corp.test. CAA` changed"), caaView(w,
 		[]string{"expected   " + strict}, []string{`now        0 issue ";"`}, ttl("corp.test.")),
-		regOpenTimes, ":point_right: If you did not make this change, check your DNS provider account now.")
+		regOpenTimes, ":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.")
 	settled := caaRuns(svc, "corp.test.", opened.at.Add(interval/2))
 	cliLabUntil(t, "two more runs of the CAA check", time.Now().Add(3*dngWindow(interval)), 100*time.Millisecond,
 		func() bool { return caaRuns(svc, "corp.test.", opened.at.Add(interval/2)) >= settled+2 })

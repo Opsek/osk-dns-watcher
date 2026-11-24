@@ -245,15 +245,15 @@ func dlvSlackText(e alert.Event) string {
 	type words struct{ phrase, resolved, action, now string }
 	w := map[decide.Rule]words{
 		decide.RuleNameServers: {"nameservers of " + d + " changed at the parent zone", "nameservers of " + d + " are as expected again",
-			"If you did not change the nameservers, contact your registrar now.", ""},
+			"If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.", ""},
 		decide.RuleRecordSet: {nt + " changed", nt + " is as expected again",
-			"If you did not make this change, check your DNS provider account now.", ""},
+			"If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.", ""},
 		decide.RuleZone: {n + " is answered from an unexpected zone", n + " is answered from the expected zone again",
-			"If you did not create this zone, check the delegations under " + d + " at your DNS provider.", "the expected zone"},
+			"If you did not create this zone, check the delegations under " + d + " at your DNS provider. If you did, add its NS line by hand.", "the expected zone"},
 		decide.RuleNotCovered: {nt + " has no expectation and is not checked", nt + " has an expectation now",
-			"Add a line for " + nt + " to the expectations file of " + d + ".", "covered by the expectations"},
+			"Run osk-dns-watcher accept to add the line for " + nt + ". If it refuses, add the line to the expectations file of " + d + " by hand.", "covered by the expectations"},
 		decide.RuleInvalidFile: {"the expectations file of " + d + " is not valid", "the expectations file of " + d + " is valid again",
-			"Fix the file. Until then the last valid file is used.", "the file is valid"},
+			"Fix the file. osk-dns-watcher validate names each fault. Until then the last valid file is used.", "the file is valid"},
 	}[a.Rule]
 	resolve := e.Kind == alert.EventResolve
 	phrase, action := w.phrase, w.action
@@ -455,31 +455,31 @@ func TestSlackTextForEachKindAndRule(t *testing.T) {
 		{decide.RuleNameServers, obs.DelegationKey(dlvName(t, "Corp.TEST.")), "ns1.corp.test. | ns2.corp.test.",
 			"nameservers of `corp.test.` changed at the parent zone",
 			"nameservers of `corp.test.` are as expected again",
-			"If you did not change the nameservers, contact your registrar now.",
+			"If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.",
 			append([]string{"expected   ns1.corp.test.", "           ns2.corp.test."}, servers...),
 			[]string{"now        ns1.corp.test.", "           ns2.corp.test."}},
 		{decide.RuleRecordSet, obs.RecordsKey(dlvName(t, "Corp.TEST."), dlvName(t, "WWW.corp.test."), dnswire.TypeA), "10.53.0.81",
 			"`www.corp.test. A` changed",
 			"`www.corp.test. A` is as expected again",
-			"If you did not make this change, check your DNS provider account now.",
+			"If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept.",
 			append([]string{"expected   10.53.0.81"}, servers...),
 			[]string{"now        10.53.0.81"}},
 		{decide.RuleZone, obs.RecordsKey(dlvName(t, "Corp.Test."), dlvName(t, "Shop.Corp.Test."), dnswire.TypeA), "corp.test.",
 			"`shop.corp.test.` is answered from an unexpected zone",
 			"`shop.corp.test.` is answered from the expected zone again",
-			"If you did not create this zone, check the delegations under `corp.test.` at your DNS provider.",
+			"If you did not create this zone, check the delegations under `corp.test.` at your DNS provider. If you did, add its NS line by hand.",
 			append([]string{"expected   corp.test."}, servers...),
 			[]string{"now        the expected zone"}},
 		{decide.RuleNotCovered, obs.RecordsKey(dlvName(t, "corp.test."), dlvName(t, "MAIL.corp.test."), dnswire.TypeTXT), "",
 			"`mail.corp.test. TXT` has no expectation and is not checked",
 			"`mail.corp.test. TXT` has an expectation now",
-			"Add a line for `mail.corp.test. TXT` to the expectations file of `corp.test.`.",
+			"Run osk-dns-watcher accept to add the line for `mail.corp.test. TXT`. If it refuses, add the line to the expectations file of `corp.test.` by hand.",
 			append([]string{"expected   -"}, servers...),
 			[]string{"now        covered by the expectations"}},
 		{decide.RuleInvalidFile, obs.Key{Domain: dlvName(t, "Corp.Test."), Name: dlvName(t, "Corp.Test.")}, "",
 			"the expectations file of `corp.test.` is not valid",
 			"the expectations file of `corp.test.` is valid again",
-			"Fix the file. Until then the last valid file is used.",
+			"Fix the file. osk-dns-watcher validate names each fault. Until then the last valid file is used.",
 			[]string{"problem    line 3: want a type after the name"},
 			[]string{"now        the file is valid"}},
 	}
@@ -561,7 +561,7 @@ func TestSlackTextSeverityWords(t *testing.T) {
 const (
 	dlvRSHead   = ":red_circle: *HIGH* · `www.corp.test. A` changed"
 	dlvRSClock  = ":clock3: First seen 14:02:07 · last OK 14:01:07 · 11 Nov 2026 UTC"
-	dlvRSAction = ":point_right: If you did not make this change, check your DNS provider account now."
+	dlvRSAction = ":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept."
 )
 
 // dlvRS is the text of the open event of the record-set alert of the tests
@@ -877,7 +877,7 @@ func TestSlackTextCleansHostileData(t *testing.T) {
 		"seen at    &lt;!channel&gt;.\\096x\\096.corp.test. (10.53.0.11)   TTL 1\n" +
 		"```\n\n" +
 		":clock3: First seen 14:02:07 · last OK 14:01:07 · 11 Nov 2026 UTC\n\n" +
-		":point_right: If you did not make this change, check your DNS provider account now."
+		":point_right: If you did not make this change, check your DNS provider account now. If you did, run osk-dns-watcher accept."
 	dlvSame(t, e, want)
 }
 
@@ -900,7 +900,7 @@ func TestSlackMessageOfTheGateExample(t *testing.T) {
 		"now        ns1.dnshost.test.\\n           ns2.dnshost.test.\\n" +
 		"seen at    ns.test. (10.53.0.3)   TTL 300\\n```\\n\\n" +
 		":clock3: First seen 14:02:07 · last OK 14:01:07 · 11 Nov 2026 UTC\\n\\n" +
-		":point_right: If you did not change the nameservers, contact your registrar now.\"}"
+		":point_right: If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.\"}"
 	if got := deliver.SlackMessage(e); string(got) != want {
 		t.Errorf("message:\n%s\nwant:\n%s", got, want)
 	}
@@ -943,7 +943,7 @@ func TestSlackTextOfTheRuleExamples(t *testing.T) {
 		"",
 		":clock3: First seen 15:17:12 · last OK 15:17:10 · 16 Nov 2026 UTC",
 		"",
-		":point_right: If you did not change the nameservers, contact your registrar now.",
+		":point_right: If you did not change the nameservers, contact your registrar now. If you did, run osk-dns-watcher accept.",
 	}, "\n")
 	dlvSame(t, e, want)
 

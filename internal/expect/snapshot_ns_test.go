@@ -127,11 +127,11 @@ func TestSnapshotNSLineAcceptsEachSetTheServersGave(t *testing.T) {
 		{"the parent failed, the apex agrees: no line",
 			[]obs.Observation{nslDelegation(t, expAnswer(t, "ns.test.", expParentAddr, expFailure(obs.ReasonTimeout))),
 				nslApex(t, nslGives(t, 1, 1, 2), nslGives(t, 2, 1, 2))},
-			"", []string{"corp.test. NS: " + nslP + " gave no answer: timeout"}, nil},
+			"", []string{"corp.test. NS: " + nslP + " gave no answer (timeout)"}, nil},
 		{"the parent failed, the apex servers differ: no line",
 			[]obs.Observation{nslDelegation(t, expAnswer(t, "ns.test.", expParentAddr, expFailure(obs.ReasonServFail))),
 				nslApex(t, nslGives(t, 1, 1, 2), nslGives(t, 2, 1, 3))},
-			"", []string{"corp.test. NS: " + nslP + " gave no answer: servfail"}, nil},
+			"", []string{"corp.test. NS: " + nslP + " gave no answer (servfail)"}, nil},
 		{"the parent gave no data: no line",
 			[]obs.Observation{nslDelegation(t, expAnswer(t, "ns.test.", expParentAddr, expNoData(t, "test."))),
 				nslApex(t, nslGives(t, 1, 1, 2), nslGives(t, 2, 1, 2))},
@@ -679,7 +679,7 @@ func TestSnapshotDropsTheOtherAddressLineOfAHostWhoseAnswerFailed(t *testing.T) 
 	}{
 		{"an A answer that failed", 0, failed("ns1.corp.test.", dnswire.TypeA), glueA,
 			[]string{"ns2.corp.test. A 10.53.0.12", "ns2.corp.test. AAAA fd53::12"},
-			[]string{"ns1.corp.test. A: " + nslC1 + " gave no answer: timeout", unread("ns1.corp.test.", "A")}},
+			[]string{"ns1.corp.test. A: " + nslC1 + " gave no answer (timeout)", unread("ns1.corp.test.", "A")}},
 		{"A answers that differ", 0, expObs(t, expRecordsKey(t, "ns1.corp.test.", dnswire.TypeA), "corp.test.",
 			nslAt(t, 1, expRecords(t, dnswire.TypeA, "ns1.corp.test.", "10.53.0.11")),
 			nslAt(t, 2, expRecords(t, dnswire.TypeA, "ns1.corp.test.", "10.53.0.66"))), glueA,
@@ -688,11 +688,11 @@ func TestSnapshotDropsTheOtherAddressLineOfAHostWhoseAnswerFailed(t *testing.T) 
 				unread("ns1.corp.test.", "A")}},
 		{"an AAAA answer that failed, no IPv6 glue", 3, failed("ns2.corp.test.", dnswire.TypeAAAA), glueA,
 			[]string{"ns1.corp.test. A 10.53.0.11", "ns1.corp.test. AAAA none", "ns2.corp.test. A 10.53.0.12"},
-			[]string{"ns2.corp.test. AAAA: " + nslC1 + " gave no answer: timeout"}},
+			[]string{"ns2.corp.test. AAAA: " + nslC1 + " gave no answer (timeout)"}},
 		{"an AAAA answer that failed, IPv6 glue", 3, failed("ns2.corp.test.", dnswire.TypeAAAA),
 			append(slices.Clone(glueA), "ns2.corp.test. AAAA fd53::12"),
 			[]string{"ns1.corp.test. A 10.53.0.11", "ns1.corp.test. AAAA none"},
-			[]string{unread("ns2.corp.test.", "AAAA"), "ns2.corp.test. AAAA: " + nslC1 + " gave no answer: timeout"}},
+			[]string{unread("ns2.corp.test.", "AAAA"), "ns2.corp.test. AAAA: " + nslC1 + " gave no answer (timeout)"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			hosts := nslHostChecks(t)

@@ -25,8 +25,8 @@ const (
 	regDSHead   = "DS of `corp.test.` changed at the parent zone"
 	regGoneHead = "`corp.test.` does not exist at the parent zone"
 
-	regGlueAction = ":point_right: If you did not change the addresses of your nameservers, contact your registrar now."
-	regDSAction   = ":point_right: If you did not change your DNSSEC keys, contact your registrar now."
+	regGlueAction = ":point_right: If you did not change the addresses of your nameservers, contact your registrar now. If you did, edit the address line."
+	regDSAction   = ":point_right: If you did not change your DNSSEC keys, contact your registrar now. If you did, run osk-dns-watcher accept."
 	regGoneAction = ":point_right: Contact your registrar now: the registration may have expired, been deleted or been transferred."
 	regResolved   = ":point_right: " + dlvResolveAction
 )

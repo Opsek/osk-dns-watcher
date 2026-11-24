@@ -27,6 +27,9 @@ const (
 	timClockResolved = ":clock3: Open for 7 min 36 s · first seen 10:00:05 · resolved 10:07:41 · 13 Nov 2026 UTC"
 )
 
+// The delegation and ds checks ask the servers of the parent zone.
+const timParentFailingAction = ":point_right: Find out why no server of the parent zone of `corp.test.` answers this machine; until one does, a change there is not seen."
+
 func timName(t *testing.T, s string) dnswire.Name {
 	t.Helper()
 	n, err := dnswire.ParseName(s)
@@ -74,11 +77,11 @@ func TestSlackTextOfCheckFailingForOpenUpdateAndResolve(t *testing.T) {
 		e    alert.Event
 		want string
 	}{
-		{"open", timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 25s", true),
-			timText(":large_orange_circle: *MEDIUM* · "+head, []string{"problem    no usable answer for 25s"}, timClockOpen, timFailingAction)},
-		{"update", timEvent(alert.EventUpdate, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 5m0s", false),
-			timText(":large_orange_circle: *MEDIUM*, changed again · "+head, []string{"problem    no usable answer for 5m0s"}, timClockNoClean, timFailingAction)},
-		{"resolve", timEvent(alert.EventResolve, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 25s", true),
+		{"open", timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 25 s", true),
+			timText(":large_orange_circle: *MEDIUM* · "+head, []string{"problem    no usable answer for 25 s"}, timClockOpen, timFailingAction)},
+		{"update", timEvent(alert.EventUpdate, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 5 min", false),
+			timText(":large_orange_circle: *MEDIUM*, changed again · "+head, []string{"problem    no usable answer for 5 min"}, timClockNoClean, timFailingAction)},
+		{"resolve", timEvent(alert.EventResolve, decide.RuleCheckFailing, decide.SeverityMedium, www, "no usable answer for 25 s", true),
 			timText(":white_check_mark: *RESOLVED* · the records check of `www.corp.test. A` has usable answers again",
 				[]string{"now        a server answers"}, timClockResolved, timResolveAction)},
 	} {
@@ -93,16 +96,17 @@ func TestSlackTextOfCheckFailingNamesTheKindOfCheck(t *testing.T) {
 	for _, c := range []struct {
 		key     obs.Key
 		subject string
+		action  string
 	}{
-		{obs.DelegationKey(corp), "the delegation check of `corp.test. NS`"},
-		{obs.DSKey(corp), "the ds check of `corp.test. DS`"},
-		{obs.SerialKey(corp), "the serial check of `corp.test. SOA`"},
+		{obs.DelegationKey(corp), "the delegation check of `corp.test. NS`", timParentFailingAction},
+		{obs.DSKey(corp), "the ds check of `corp.test. DS`", timParentFailingAction},
+		{obs.SerialKey(corp), "the serial check of `corp.test. SOA`", timFailingAction},
 	} {
 		t.Run(c.key.Kind.String(), func(t *testing.T) {
-			open := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15m0s", true)
+			open := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15 min", true)
 			timSameText(t, SlackText(open), timText(":large_orange_circle: *MEDIUM* · "+c.subject+" has had no usable answer for too long",
-				[]string{"problem    no usable answer for 15m0s"}, timClockOpen, timFailingAction))
-			resolve := timEvent(alert.EventResolve, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15m0s", true)
+				[]string{"problem    no usable answer for 15 min"}, timClockOpen, c.action))
+			resolve := timEvent(alert.EventResolve, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15 min", true)
 			timSameText(t, SlackText(resolve), timText(":white_check_mark: *RESOLVED* · "+c.subject+" has usable answers again",
 				[]string{"now        a server answers"}, timClockResolved, timResolveAction))
 		})

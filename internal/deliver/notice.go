@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Opsek/osk-dns-watcher/internal/decide"
 	"github.com/Opsek/osk-dns-watcher/internal/store"
 )
 
@@ -99,7 +100,7 @@ func downTime(lines []string) string {
 	if !ok || !ok2 {
 		return "an unknown time"
 	}
-	return openFor(started.Sub(last).Round(time.Second))
+	return decide.ShortDuration(started.Sub(last).Round(time.Second))
 }
 
 func lineTime(lines []string, label string) (time.Time, bool) {

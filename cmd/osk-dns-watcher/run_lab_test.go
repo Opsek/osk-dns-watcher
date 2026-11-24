@@ -494,7 +494,7 @@ func TestZoneChangedNotice(t *testing.T) {
 	opened, j := svc.wait(t, "the zone-changed alert", i, setEnd.Add(within+2*time.Second), runIs("alert open "+label))
 	svc.wait(t, "its Slack message", j, opened.at.Add(3*time.Second), runIs("delivery slack sent open "+label))
 	hooks := runHookCount(t, "after the change of an unwatched record", 1)
-	times := runZoneText(t, hooks[0].text, n, ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no watched record differs",
+	times := runZoneText(t, hooks[0].text, n, ":large_yellow_circle: *LOW* · the zone `corp.test.` changed, and no watched record changed",
 		"1", "2", set, setEnd)
 	if clock, _ := slkClock(t, times); len(clock) != 2 || !strings.HasPrefix(times, ":clock3: First seen ") || !strings.Contains(times, " · last OK ") {
 		t.Errorf("the times %q do not start with the first seen time and then the last OK time", times)
@@ -514,7 +514,7 @@ func TestZoneChangedNotice(t *testing.T) {
 	updated, u := svc.wait(t, "the update of the notice", k, putEnd.Add(within+2*time.Second), runIs("alert update "+label))
 	svc.wait(t, "its Slack message", u, updated.at.Add(3*time.Second), runIs("delivery slack sent update "+label))
 	hooks = runHookCount(t, "after the change put back", 2)
-	runZoneText(t, hooks[1].text, n, ":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no watched record differs",
+	runZoneText(t, hooks[1].text, n, ":large_yellow_circle: *LOW*, changed again · the zone `corp.test.` changed, and no watched record changed",
 		"2", "4", put, putEnd)
 
 	resolved, r := svc.wait(t, "the resolve of the notice", u, updated.at.Add(20*time.Second), runIs("alert resolve "+label))

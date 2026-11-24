@@ -10,12 +10,13 @@ import (
 )
 
 // The rows below state when a round reports its moves as a zone change that
-// no watched record explains. Two rules keep that report true: a run whose
-// check still has an alert open that says a watched record differs counts
-// like a run with a notice of its own; and a move to a serial that is known,
-// because it was there at the first sight or the operator was told of it, is
-// no change to tell. Machines behind one address that lag a change make both
-// common: they serve the old records and the old serial for a while.
+// no watched record explains. Machines behind one address that lag a change
+// serve the old records and the old serial for a while, and two rules keep
+// the report true. When the run of a zone check in the round left an alert of
+// its own standing, the moves wait for the next run of that check: the alert
+// may end there, and that end is the notice of the move. And a move to a
+// serial that is known, because it was there at the first sight or the
+// operator was told of it, is no change to tell.
 
 // zcRound ends the three zone checks with usable runs that started at start,
 // the first with the open findings given. Only the last run ends the round;
@@ -67,21 +68,134 @@ func zcOpen(rule decide.Rule, k obs.Key) []decide.Finding {
 
 // ---- A difference that stands ----
 
-// A round's run of a zone check whose difference stands gives no change, but
-// its open alert, of each rule that tells of the zone, explains the round.
-func TestOpenDifferenceExplainsTheRound(t *testing.T) {
-	zone := schZoneKeys(t)
+// zcWaiting gives the schedule of schMoved whose round ended at T0+9 with no
+// notice, while the run of the apex A set had an alert of rule open: the
+// round waits for the next run of that check.
+func zcWaiting(t testing.TB, rule decide.Rule) *Schedule {
+	t.Helper()
+	s := schMoved(t)
+	zcRound(t, s, "the round with a difference that stands", schSec(8), zcOpen(rule, schZoneKeys(t)[0]), nil)
+	return s
+}
+
+// The case of a change put back while a machine that lags still gives the
+// changed record: the alert of the check stands in its run of the round, and
+// its next run sees the record put back and ends the alert. That end is the
+// notice of the move: nothing is reported, then or later.
+func TestStandingDifferenceThatEndsAtTheNextRunExplainsTheMoves(t *testing.T) {
+	apex := schZoneKeys(t)[0]
 	for _, rule := range rndRules {
 		t.Run(rule.String(), func(t *testing.T) {
-			s := schMoved(t)
-			zcRound(t, s, "the round with a difference that stands", schSec(8), zcOpen(rule, zone[0]), nil)
+			s := zcWaiting(t, rule)
+			_, moves, ok := schEndOpen(t, s, schUsable(t, apex, schSec(51)), zcOpen(rule, apex), schSec(52),
+				rndChange(rule, decide.OpResolve, apex))
+			schWantJudged(t, "the next run, which ends the alert", moves, ok, false, nil)
+			_, moves, ok = schEnd(t, s, schSerialObs(t, schSec(56), 2, 2), schSec(57))
+			schWantJudged(t, "a quiet serial run after it", moves, ok, true, nil)
+			if got := s.Flush(schSec(58)); len(got) != 0 {
+				t.Errorf("Flush gave %q, want nothing", schMoveTexts(got))
+			}
 		})
 	}
 }
 
+// When the next usable run of the check shows the difference again with no
+// notice, the moves are told then. Until that run, nothing ends the wait: a
+// run of another check, a run of the check that started before the round
+// ended, a failed run, or a quiet serial run, which also ends no notice.
+func TestStandingDifferenceThatStaysIsToldAfterTheNextRun(t *testing.T) {
+	zone := schZoneKeys(t)
+	apex, ns := zone[0], zone[1]
+	open := zcOpen(decide.RuleRecordSet, apex)
+	s := zcWaiting(t, decide.RuleRecordSet)
+	_, moves, ok := schEnd(t, s, schUsable(t, ns, schSec(20)), schSec(21))
+	schWantJudged(t, "a run of another check", moves, ok, false, nil)
+	_, moves, ok = schEndOpen(t, s, schUsable(t, apex, schSec(8).Add(time.Second/2)), open, schSec(22))
+	schWantJudged(t, "a run that started before the round ended", moves, ok, false, nil)
+	_, moves, ok = schEndOpen(t, s, schFailed(t, apex, schSec(30)), open, schSec(31))
+	schWantJudged(t, "a failed run", moves, ok, false, nil)
+	_, moves, ok = schEnd(t, s, schSerialObs(t, schSec(35), 2, 2), schSec(36))
+	schWantJudged(t, "a quiet serial run while the moves wait", moves, ok, false, nil)
+	_, moves, ok = schEndOpen(t, s, schUsable(t, apex, schSec(51)), open, schSec(52))
+	schWantJudged(t, "the next usable run, with the difference still there", moves, ok, true, schBothMoved)
+}
+
+// A check that fails past its limit has its own alert and may never answer
+// again: the wait for it stops at the run that passes the limit.
+func TestStandingDifferenceOfACheckThatFailsPastItsLimitIsTold(t *testing.T) {
+	apex := schZoneKeys(t)[0]
+	open := zcOpen(decide.RuleRecordSet, apex)
+	s := zcWaiting(t, decide.RuleRecordSet)
+	first := schSec(51)
+	_, moves, ok := schEndOpen(t, s, schFailed(t, apex, first), open, first.Add(time.Second))
+	schWantJudged(t, "the first failed run", moves, ok, false, nil)
+	limit := first.Add(schIv.FailLimit(TierFast))
+	_, moves, ok = schEndOpen(t, s, schFailed(t, apex, limit), open, limit)
+	schWantJudged(t, "the failed run at the limit", moves, ok, true, schBothMoved)
+}
+
+// Moves that wait live only in memory: a stop tells them.
+func TestWaitingMovesAreToldAtAStop(t *testing.T) {
+	s := zcWaiting(t, decide.RuleRecordSet)
+	if got := schMoveTexts(s.Flush(schSec(20))); !schSameMoves(got, schBothMoved) {
+		t.Errorf("Flush gave %q, want %q", got, schBothMoved)
+	}
+	if again := s.Flush(schSec(21)); len(again) != 0 {
+		t.Errorf("a second Flush gave %q, want nothing", schMoveTexts(again))
+	}
+}
+
+// A move while moves wait joins them in one round, which keeps the window of
+// the first move: a notice that started in that window, even before a later
+// quiet serial run, explains them all.
+func TestMoveWhileMovesWaitJoinsThemWithTheFirstWindow(t *testing.T) {
+	zone := schZoneKeys(t)
+	t.Run("told as one", func(t *testing.T) {
+		s := zcWaiting(t, decide.RuleRecordSet)
+		zcSerialRun(t, s, schSec(21), 3, 3, 2, false, nil)
+		zcRound(t, s, "the round of both moves", schSec(22), nil, rndBoth(schT0, 1, schSec(21), 3))
+	})
+	t.Run("explained in the first window", func(t *testing.T) {
+		s := zcWaiting(t, decide.RuleRecordSet)
+		zcSerialRun(t, s, schSec(14), 2, 2, 0, false, nil)
+		zcSerialRun(t, s, schSec(21), 3, 3, 2, false, nil)
+		_, moves, ok := schEnd(t, s, schUsable(t, zone[2], schSec(12)), schSec(22), rndOwn(zone[2]))
+		schWantJudged(t, "a notice that started before the quiet serial run", moves, ok, false, nil)
+		zcRound(t, s, "the round of both moves", schSec(22), nil, nil)
+	})
+}
+
+// A check that leaves the zone with Replace can hold no wait: the moves are
+// told at the next judgement.
+func TestReplaceEndsTheWaitForACheckThatLeftTheZone(t *testing.T) {
+	zone := schZoneKeys(t)
+	s := schMoved(t)
+	for _, k := range zone[:2] {
+		_, moves, ok := schEnd(t, s, schUsable(t, k, schSec(8)), schSec(9))
+		schWantJudged(t, k.String(), moves, ok, false, nil)
+	}
+	_, moves, ok := schEndOpen(t, s, schUsable(t, zone[2], schSec(8)), zcOpen(decide.RuleRecordSet, zone[2]), schSec(9))
+	schWantJudged(t, "www with a difference that stands", moves, ok, false, nil)
+	s.Replace(schFile(t, "corp.test. NS ns1.corp.test. | ns2.corp.test.", "corp.test. A 10.53.0.80",
+		"www.corp.test. A 10.53.0.81", "www.corp.test. NS ns1.www.corp.test."))
+	_, moves, ok = schEnd(t, s, schUsable(t, zone[0], schSec(20)), schSec(21))
+	schWantJudged(t, "the next judgement", moves, ok, true, schBothMoved)
+}
+
+// An open alert alone explains nothing: a run outside the round with an
+// alert that stands, and no notice, leaves the next move to be told.
+func TestOpenAlertAloneExplainsNothing(t *testing.T) {
+	zone := schZoneKeys(t)
+	s := rndNew(t)
+	_, moves, ok := schEndOpen(t, s, schUsable(t, zone[0], schSec(5)), zcOpen(decide.RuleRecordSet, zone[0]), schSec(6))
+	schWantJudged(t, "a run with an alert that stands", moves, ok, false, nil)
+	rndMoveRun(t, s, schSec(14), 2, 2, 2)
+	zcRound(t, s, "the round", schSec(15), nil, rndBoth(schT0, 1, schSec(14), 2))
+}
+
 // An open alert that says nothing of a record of the zone, such as one of a
-// check that fails or is not covered, explains nothing.
-func TestOpenAlertOfAnotherRuleExplainsNothing(t *testing.T) {
+// check that fails or is not covered, holds nothing back.
+func TestOpenAlertOfAnotherRuleHoldsNothing(t *testing.T) {
 	zone := schZoneKeys(t)
 	for _, rule := range rndOtherRules() {
 		t.Run(rule.String(), func(t *testing.T) {
@@ -92,53 +206,20 @@ func TestOpenAlertOfAnotherRuleExplainsNothing(t *testing.T) {
 }
 
 // Only the alerts of the check that ran count, as in decide.
-func TestOpenDifferenceOfAnotherCheckExplainsNothing(t *testing.T) {
+func TestOpenDifferenceOfAnotherCheckHoldsNothing(t *testing.T) {
 	zone := schZoneKeys(t)
 	s := schMoved(t)
 	zcRound(t, s, "the round", schSec(8), zcOpen(decide.RuleRecordSet, zone[1]), schBothMoved)
 }
 
 // A run with no usable answer saw nothing: it neither counts for the round
-// nor tells of the open difference.
-func TestOpenDifferenceOfAFailedRunExplainsNothing(t *testing.T) {
+// nor shows that a difference stands.
+func TestOpenDifferenceOfAFailedRunHoldsNothing(t *testing.T) {
 	zone := schZoneKeys(t)
 	s := schMoved(t)
 	_, moves, ok := schEndOpen(t, s, schFailed(t, zone[0], schSec(8)), zcOpen(decide.RuleRecordSet, zone[0]), schSec(9))
 	schWantJudged(t, "the failed run", moves, ok, false, nil)
 	zcRound(t, s, "the round", schSec(9), nil, schBothMoved)
-}
-
-// An open difference counts as a notice does: from before the last quiet
-// serial run it explains nothing; after it, it explains the next move too.
-func TestOpenDifferenceCountsAsANoticeOfItsWindow(t *testing.T) {
-	zone := schZoneKeys(t)
-	for _, quietBetween := range []bool{true, false} {
-		name := map[bool]string{true: "a quiet serial run between", false: "no quiet serial run between"}[quietBetween]
-		t.Run(name, func(t *testing.T) {
-			s := rndNew(t)
-			_, moves, ok := schEndOpen(t, s, schUsable(t, zone[0], schSec(5)), zcOpen(decide.RuleRecordSet, zone[0]), schSec(6))
-			schWantJudged(t, "the run with an open difference", moves, ok, false, nil)
-			var want []string
-			if quietBetween {
-				rndQuiet(t, s, schSec(7), 1)
-				want = rndBoth(schSec(7), 1, schSec(14), 2)
-			}
-			rndMoveRun(t, s, schSec(14), 2, 2, 2)
-			zcRound(t, s, "the round", schSec(15), nil, want)
-		})
-	}
-}
-
-// The first run of a check after New tells of the state, also by an open
-// alert that an earlier run of the service left.
-func TestOpenDifferenceOfTheFirstRunSinceNewExplainsNothing(t *testing.T) {
-	zone := schZoneKeys(t)
-	s := New(schBase(t), nil, schIv)
-	rndQuiet(t, s, schT0, 1)
-	_, moves, ok := schEndOpen(t, s, schUsable(t, zone[0], schSec(5)), zcOpen(decide.RuleRecordSet, zone[0]), schSec(6))
-	schWantJudged(t, "the first run", moves, ok, false, nil)
-	rndMoveRun(t, s, schSec(14), 2, 2, 2)
-	zcRound(t, s, "the round", schSec(15), nil, rndBoth(schT0, 1, schSec(14), 2))
 }
 
 // ---- A serial that is known ----
@@ -160,14 +241,30 @@ func TestLateMoveToAToldSerialIsNoNews(t *testing.T) {
 }
 
 // A move back to the serial from before a change that a notice told, as a
-// machine that lags gives, is no news.
+// machine that lags gives, is no news: also when the alerts of that change
+// still stand, the round waits for the next run, and the difference stays.
 func TestBackwardMoveToAToldSerialIsNoNews(t *testing.T) {
-	s := rndNew(t)
-	zcSerialRun(t, s, schSec(7), 2, 2, 2, false, nil)
-	zcNoticeRound(t, s, schSec(8))
-	zcSerialRun(t, s, schSec(14), 2, 2, 0, true, nil)
-	zcSerialRun(t, s, schSec(21), 2, 1, 1, false, nil)
-	zcRound(t, s, "the round of the move back", schSec(22), nil, nil)
+	apex := schZoneKeys(t)[0]
+	for _, standing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no alert open", true: "beside an alert that stands"}[standing], func(t *testing.T) {
+			s := rndNew(t)
+			zcSerialRun(t, s, schSec(7), 2, 2, 2, false, nil)
+			zcNoticeRound(t, s, schSec(8))
+			zcSerialRun(t, s, schSec(14), 2, 2, 0, true, nil)
+			zcSerialRun(t, s, schSec(21), 2, 1, 1, false, nil)
+			if !standing {
+				zcRound(t, s, "the round of the move back", schSec(22), nil, nil)
+				return
+			}
+			open := zcOpen(decide.RuleRecordSet, apex)
+			zcRound(t, s, "the round of the move back", schSec(22), open, nil)
+			_, moves, ok := schEndOpen(t, s, schUsable(t, apex, schSec(65)), open, schSec(66))
+			schWantJudged(t, "the next run, with the difference still there", moves, ok, false, nil)
+			if got := s.Flush(schSec(67)); len(got) != 0 {
+				t.Errorf("Flush gave %q, want nothing", schMoveTexts(got))
+			}
+		})
+	}
 }
 
 // An address that goes to a new serial and back shows no change once its

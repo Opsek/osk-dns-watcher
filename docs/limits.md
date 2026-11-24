@@ -12,7 +12,7 @@ osk-dns-watcher compares what the servers of your domains answer with your expec
 
 **An audit.** The service compares answers with your file. It does not judge whether the file is safe. It does not say that a domain lacks a registry lock, DNSSEC, a CAA record bound to your account, or a strict DMARC policy. Nor does it say that your SPF record has `+all` or that your MTA-STS mode is `testing`.
 
-**Zone transfers.** The service asks for the sets that your file lists. It does not copy the zone. A change that is made and undone between two checks can be missed. When the change moves the zone serial, a low alert says that the zone changed, but not which record. That alert does not come while an alert of a watched record of the zone is open. It does not come when the new serial equals one that was reported before, for example when a zone is restored with its old serial.
+**Zone transfers.** The service asks for the sets that your file lists. It does not copy the zone. A change that is made and undone between two checks can be missed. When the change moves the zone serial, a low alert says that the zone changed, but not which record. While an alert of a watched record of the zone is open, the low alert waits for the next check of that record. That can take one interval of the check. It does not come when the new serial equals one that was reported before, for example when a zone is restored with its old serial.
 
 **Routes.** The routes to your nameservers and hosts are not watched. A route hijack is not seen.
 

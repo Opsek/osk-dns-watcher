@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"maps"
 	"net/netip"
 	"slices"
 	"time"
@@ -30,7 +31,7 @@ type Schedule struct {
 	known       []uint32   // serials that tell nothing new, the one seen last at the end; see know
 	serialMoved bool       // the last serial run saw a move
 	quiet       time.Time  // when the last serial run with a usable answer and no move was judged
-	noticed     time.Time  // latest start of a run of a zone check that told of a difference; see told
+	noticed     time.Time  // latest start of a run of a zone check that gave a notice of its own
 	moved       time.Time  // when the last move was seen
 	round       *round     // nil when no round is pending
 
@@ -72,6 +73,16 @@ type round struct {
 	// quiet before the first move of the round, and a quiet serial run while
 	// a slow check holds the round must not hide a notice of that move.
 	since time.Time
+	// standing holds the zone checks whose run since the last move had an
+	// alert of a notice rule open. A difference that stands gives no change,
+	// and a machine that lags can still give the old record of a change that
+	// was put back, so such a run cannot show that the alert is about to end.
+	standing map[string]bool
+	// ended is zero while the zone checks run. When they ended with no notice
+	// and a check in standing, the round waits: ended is that instant, and
+	// pending holds those checks until each has a usable run that started at
+	// or after it.
+	ended time.Time
 }
 
 // Report is what the schedule adds to an observation for decide.
@@ -140,11 +151,10 @@ func (s *Schedule) Replace(f *expect.File) {
 		return
 	}
 	zone := s.zoneChecks()
-	for k := range s.round.pending {
-		if !zone[k] {
-			delete(s.round.pending, k)
-		}
-	}
+	notZone := func(k string, _ bool) bool { return !zone[k] }
+	maps.DeleteFunc(s.round.pending, notZone)
+	// A check that left would hold a wait for good.
+	maps.DeleteFunc(s.round.standing, notZone)
 	// A round left with no pending check ends at the next Judged.
 }
 
@@ -406,7 +416,9 @@ func soaSerial(r obs.Result) (uint32, bool) {
 // startRound makes every zone check pending again, also those that a running
 // round had already seen, because each move may have changed any record. A
 // move that is no news starts a round too: to run the checks again costs
-// little, and a machine that lags can still show a record that differs.
+// little, and a machine that lags can still show a record that differs. A
+// move while a round waits joins that round, with its window, so that one
+// verdict judges all its moves.
 func (s *Schedule) startRound(moves []move, now time.Time) {
 	s.moved = now
 	if s.round == nil {
@@ -416,6 +428,8 @@ func (s *Schedule) startRound(moves []move, now time.Time) {
 		s.round.moves = merge(s.round.moves, m)
 	}
 	s.round.pending = s.zoneChecks()
+	s.round.standing = map[string]bool{}
+	s.round.ended = time.Time{}
 }
 
 // merge keeps one move per address, from the first serial to the last; it is
@@ -441,10 +455,11 @@ func (s *Schedule) zoneChecks() map[string]bool {
 }
 
 // Judged takes what decide made of o: open is the Open that decide was given,
-// changes what it gave. ok with moves: rounds ended and no run told of a
-// difference since the serial was last seen quiet, so the caller reports the
-// moves. ok without moves: the serial has been quiet for a while, so the
-// caller ends the notice of earlier moves.
+// changes what it gave. ok with moves: rounds ended, no run gave a notice of
+// its own since the serial was last seen quiet, and no difference that stood
+// in a round can end any more, so the caller reports the moves. ok without
+// moves: the serial has been quiet for a while, so the caller ends the notice
+// of earlier moves.
 func (s *Schedule) Judged(o obs.Observation, open []decide.Finding, changes []decide.Change, now time.Time) (moves []decide.Move, ok bool) {
 	k := o.Key.String()
 	i := slices.Index(s.keys, k)
@@ -455,12 +470,12 @@ func (s *Schedule) Judged(o obs.Observation, open []decide.Finding, changes []de
 	// before it to differ from, so its notice tells of the state, not of a
 	// change. Runs end out of the order of their starts; the latest start
 	// counts.
-	if s.judged[k] && s.plan[i].Zone && !decide.Failed(o) && o.Start.After(s.noticed) && told(k, open, changes) {
+	if s.judged[k] && s.plan[i].Zone && !decide.Failed(o) && o.Start.After(s.noticed) && slices.ContainsFunc(changes, ownNotice) {
 		s.noticed = o.Start
 	}
 	s.judged[k] = s.judged[k] || !decide.Failed(o)
 	if s.round != nil {
-		return s.judgeRound(k, s.plan[i].Tier, o, now)
+		return s.judgeRound(k, s.plan[i].Tier, o, stands(k, open), now)
 	}
 	// A run with no usable answer is no evidence that the serial stayed.
 	if o.Key.Kind != obs.KindSerial || decide.Failed(o) || s.serialMoved {
@@ -473,41 +488,64 @@ func (s *Schedule) Judged(o obs.Observation, open []decide.Finding, changes []de
 	return nil, s.lastReport.IsZero() || now.Sub(s.lastReport) >= s.iv.Other
 }
 
-// judgeRound counts o for the round when it started after the last move and
-// gave a usable answer: a failed run is no evidence that nothing differs.
-func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, now time.Time) ([]decide.Move, bool) {
+// judgeRound counts o for the round when it gave a usable answer and started
+// after the last move, or, while the round waits, at or after the end of its
+// zone checks: a failed run is no evidence that nothing differs. stands tells
+// that the check of o had an alert of a notice rule open.
+func (s *Schedule) judgeRound(k string, tier Tier, o obs.Observation, stands bool, now time.Time) ([]decide.Move, bool) {
 	r := s.round
-	if r.pending[k] && !o.Start.Before(s.moved) && !decide.Failed(o) {
+	waiting := !r.ended.IsZero()
+	if r.pending[k] && !o.Start.Before(s.moved) && !o.Start.Before(r.ended) && !decide.Failed(o) {
 		delete(r.pending, k)
+		if stands && !waiting {
+			r.standing[k] = true
+		}
 	}
 	// A zone check that has failed past its limit has its check-failing
 	// alert; waiting for its usable answer would mute every later move.
 	if since, failing := s.failing[k]; r.pending[k] && failing && now.Sub(since) >= s.iv.FailLimit(tier) {
 		delete(r.pending, k)
 	}
-	if len(r.pending) > 0 {
+	// A notice from a run that started after the serial was last seen quiet
+	// told the operator of a change in the window in which the serial moved:
+	// the move is that change, or comes with it. Such a notice ends a wait at
+	// once.
+	explained := s.noticed.After(r.since)
+	if len(r.pending) > 0 && !(waiting && explained) {
 		return nil, false
 	}
-	s.round = nil
-	// A run that started after the serial was last seen quiet and told of a
-	// difference told the operator of a change in the window in which the
-	// serial moved: the move is that change, or comes with it.
-	if s.noticed.After(r.since) {
+	if explained {
+		s.round = nil
 		for _, m := range r.moves {
 			s.know(m.To)
 		}
 		return nil, false
 	}
-	for _, m := range r.moves {
-		s.held = merge(s.held, m)
+	// A difference that stood in the round can still end at the next run of
+	// its check: a machine that lags gave the old record of a change that was
+	// put back, and that end is the notice of the move. Reported now, the
+	// moves would come beside an alert that is about to end; dropped, a
+	// change that is put back between two runs would leave no trace at all.
+	if !waiting && len(r.standing) > 0 {
+		r.pending, r.standing, r.ended = r.standing, map[string]bool{}, now
+		return nil, false
 	}
-	// A move to a known serial tells nothing new, and an address that is
-	// back at the serial it started from shows no change.
-	s.held = slices.DeleteFunc(s.held, func(m move) bool { return !m.news || m.From == m.To })
+	s.round = nil
+	s.hold(r.moves)
 	if len(s.held) == 0 {
 		return nil, false
 	}
 	return s.report(now)
+}
+
+// hold adds moves to the held ones. A move to a known serial tells nothing
+// new, and an address that is back at the serial it started from shows no
+// change, so neither is held.
+func (s *Schedule) hold(moves []move) {
+	for _, m := range moves {
+		s.held = merge(s.held, m)
+	}
+	s.held = slices.DeleteFunc(s.held, func(m move) bool { return !m.news || m.From == m.To })
 }
 
 // report gives the held moves at most once for each other-interval: a serial
@@ -520,10 +558,14 @@ func (s *Schedule) report(now time.Time) ([]decide.Move, bool) {
 	return s.tell(), true
 }
 
-// Flush gives the moves that report holds back and forgets them, for a
-// stop: they live only in memory, so a stop that kept them would never tell
-// them.
+// Flush gives the moves that report holds back, and those of a round that
+// waits, and forgets them, for a stop: they live only in memory, so a stop
+// that kept them would never tell them.
 func (s *Schedule) Flush(now time.Time) []decide.Move {
+	if r := s.round; r != nil && !r.ended.IsZero() {
+		s.round = nil
+		s.hold(r.moves)
+	}
 	moves := s.tell()
 	if len(moves) > 0 {
 		s.lastReport = now
@@ -554,13 +596,9 @@ func noticeRule(r decide.Rule) bool {
 // also when it ends an alert because a change was put back.
 func ownNotice(c decide.Change) bool { return noticeRule(c.Finding.Rule) }
 
-// told reports whether a run of check k told the operator of a difference
-// of the zone: it gave a notice of its own, or an alert of a notice rule of
-// k was open before it. Such an alert stands, or the run ended it, which is a
-// notice. A difference that stands gives no change, but its open alert
-// already says that a watched record differs; a zone-changed notice beside
-// it would say that none does. Only the alerts of k count, as in decide.
-func told(k string, open []decide.Finding, changes []decide.Change) bool {
-	return slices.ContainsFunc(changes, ownNotice) ||
-		slices.ContainsFunc(open, func(f decide.Finding) bool { return f.Check.String() == k && noticeRule(f.Rule) })
+// stands reports whether an alert of a notice rule of check k was open
+// before its run: the run left that difference standing, or ended it with a
+// notice. Only the alerts of k count, as in decide.
+func stands(k string, open []decide.Finding) bool {
+	return slices.ContainsFunc(open, func(f decide.Finding) bool { return f.Check.String() == k && noticeRule(f.Rule) })
 }

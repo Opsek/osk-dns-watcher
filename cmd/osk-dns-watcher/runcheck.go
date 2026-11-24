@@ -330,7 +330,7 @@ func (m *monitor) judge(r result) error {
 		return err
 	}
 	// The schedule reads the open alerts too: a difference that stands gives
-	// no change, and its alert still tells of the zone.
+	// no change, and a move waits for the next run of its check.
 	var open []decide.Finding
 	changes, err := m.apply(d, o.Key, failed, now, func(found []decide.Finding) []decide.Change {
 		open = found

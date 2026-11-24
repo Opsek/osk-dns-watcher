@@ -2857,7 +2857,7 @@ func TestRunTakesAnInvalidFileOnlyAfterItStaysInvalid(t *testing.T) {
 // and not lost. After a restart, a quiet serial ends the notice only one
 // other-interval after the start. runFile has no zone check: in the fake
 // world a zone check shows a zone finding that stands, and its open alert
-// would explain every move.
+// would hold every move until the next run of that check.
 func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 	var serial atomic.Uint32
 	serial.Store(1)
@@ -2910,7 +2910,7 @@ func TestRunHeldZoneMovesAreToldAtACleanStop(t *testing.T) {
 // never gets an answer holds its round only until the limit of its
 // failures. Neither file has a zone check that gives an answer: in the fake
 // world such a check shows a zone finding that stands, and its open alert
-// would explain every move.
+// would hold every move until the next run of that check.
 func TestRunZoneChangedOfEachDomainAndABlindZoneCheck(t *testing.T) {
 	var corp, other atomic.Uint32
 	corp.Store(1)
@@ -2948,27 +2948,28 @@ func TestRunZoneChangedOfEachDomainAndABlindZoneCheck(t *testing.T) {
 }
 
 // A move of the serial while a zone check shows a difference that stands
-// opens no zone-changed alert: the run of that check in the round gives no
-// change, but its open alert already says that a watched record differs. In
-// the fake world the NS line of svcNSFile shows a zone finding that stands.
-func TestRunOpenDifferenceExplainsTheMove(t *testing.T) {
+// waits for the next run of that check, where the difference could end.
+// When it stands there again, the zone-changed alert opens: an alert left
+// open must not hide a change of the zone. In the fake world the NS line of
+// svcNSFile shows a zone finding that stands.
+func TestRunMoveBesideAStandingDifferenceIsToldAfterTheNextRun(t *testing.T) {
 	var serial atomic.Uint32
 	serial.Store(1)
 	s := transportStart(t, svcWorld(&serial, nil))
 	t.Setenv("OSK_SLACK_URL", runDeadURL)
 	state := filepath.Join(t.TempDir(), "state")
-	svc := runStart(t, runLocal(t, s, expFile(t, svcNSFile), state, runIntervals("5s", "1h", "1h", "1h"))...)
+	svc := runStart(t, runLocal(t, s, expFile(t, svcNSFile), state, runIntervals("5s", "1h", "1h", "5s"))...)
 	const ns = "records corp.test. corp.test. NS"
 	_, i := svc.wait(t, "the zone alert", 0, time.Now().Add(runPatience), runIs("alert open high zone records corp.test. NS"))
 	_, i = svc.wait(t, "a serial run", i, time.Now().Add(runPatience), runRunOf(runSerialKey))
 	serial.Store(2)
-	_, i = svc.wait(t, "the move", i, time.Now().Add(runPatience), runIs("moved corp.test. "+s.addr+" - serial 1 to 2"))
-	_, i = svc.wait(t, "the run of the NS set in the round", i, time.Now().Add(runPatience), runRunOf(ns))
-	svc.wait(t, "the next serial run", i, time.Now().Add(runPatience), runRunOf(runSerialKey))
-	for _, l := range svc.stop(t) {
-		if l.event == "alert" && strings.Contains(l.text, " zone-changed ") {
-			t.Errorf("a move while a difference stands gave %q", l.text)
-		}
+	moved, i := svc.wait(t, "the move", i, time.Now().Add(runPatience), runIs("moved corp.test. "+s.addr+" - serial 1 to 2"))
+	_, j := svc.wait(t, "the run of the NS set in the round", i, time.Now().Add(runPatience), runStartedAfter(ns, moved.at))
+	_, j = svc.wait(t, "the next run of the NS set", j+1, time.Now().Add(runPatience), runStartedAfter(ns, moved.at))
+	_, k := svc.wait(t, "the zone-changed alert", i, time.Now().Add(runPatience), runIs("alert open low zone-changed corp.test."))
+	svc.stop(t)
+	if k < j {
+		t.Errorf("the zone-changed alert opened before the second run of the NS set after the move:\n%s", runDump(svc.out.all()[i:]))
 	}
 	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
 }

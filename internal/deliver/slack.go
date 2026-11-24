@@ -207,7 +207,7 @@ var wordings = map[decide.Rule]wording{
 		now:      "a server answers",
 	},
 	decide.RuleZoneChanged: {
-		phrase:   "the zone {D} changed, and no watched record differs",
+		phrase:   "the zone {D} changed, and no watched record changed",
 		resolved: "the zone {D} has not changed again for a while",
 		action:   "If you did not change the zone, find out who did; only a zone transfer shows which record changed.",
 		now:      "no new change of the serial",

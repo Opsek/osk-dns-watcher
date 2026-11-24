@@ -182,6 +182,21 @@ func TestReplaceEndsTheWaitForACheckThatLeftTheZone(t *testing.T) {
 	schWantJudged(t, "the next judgement", moves, ok, true, schBothMoved)
 }
 
+// The same Replace before the round ends: the check that stood and left the
+// zone starts no wait, and the round reports at its last zone check.
+func TestReplaceBeforeTheRoundEndsDropsACheckThatStood(t *testing.T) {
+	zone := schZoneKeys(t)
+	s := schMoved(t)
+	_, moves, ok := schEndOpen(t, s, schUsable(t, zone[2], schSec(8)), zcOpen(decide.RuleRecordSet, zone[2]), schSec(9))
+	schWantJudged(t, "www with a difference that stands", moves, ok, false, nil)
+	s.Replace(schFile(t, "corp.test. NS ns1.corp.test. | ns2.corp.test.", "corp.test. A 10.53.0.80",
+		"www.corp.test. A 10.53.0.81", "www.corp.test. NS ns1.www.corp.test."))
+	_, moves, ok = schEnd(t, s, schUsable(t, zone[0], schSec(8)), schSec(10))
+	schWantJudged(t, zone[0].String(), moves, ok, false, nil)
+	_, moves, ok = schEnd(t, s, schUsable(t, zone[1], schSec(8)), schSec(10))
+	schWantJudged(t, "the last zone check", moves, ok, true, schBothMoved)
+}
+
 // An open alert alone explains nothing: a run outside the round with an
 // alert that stands, and no notice, leaves the next move to be told.
 func TestOpenAlertAloneExplainsNothing(t *testing.T) {
@@ -348,6 +363,59 @@ func TestKnownSerialsAreBoundedAndTheServedOnesStay(t *testing.T) {
 	zcSerialRun(t, s, start.Add(21*time.Second), first, 1, 1, false, nil)
 	zcRound(t, s, "the round of a move to the oldest serial told", start.Add(22*time.Second), nil,
 		[]string{rndMove(1, quiet, 1, start.Add(21*time.Second), first)})
+}
+
+// The bound is exact. Beside serial 1, which ns2 keeps giving, 63 serials
+// told fill known to its 64 places and all stay; a 64th told pushes the
+// oldest out and keeps the next one.
+func TestKnownSerialsHoldExactlyTheBound(t *testing.T) {
+	const first = 1000
+	tell := func(t *testing.T, n uint32) (*Schedule, time.Time) {
+		t.Helper()
+		s := rndNew(t)
+		start := schSec(7)
+		for i := range n {
+			zcSerialRun(t, s, start, first+i, 1, 1, false, nil)
+			zcNoticeRound(t, s, start.Add(time.Second))
+			start = start.Add(7 * time.Second)
+		}
+		zcSerialRun(t, s, start, first+n-1, 1, 0, true, nil)
+		return s, start.Add(7 * time.Second)
+	}
+	t.Run("the 64th place", func(t *testing.T) {
+		s, start := tell(t, knownSerials-1)
+		zcSerialRun(t, s, start, first, 1, 1, false, nil)
+		zcRound(t, s, "the round of a move to the oldest serial told", start.Add(time.Second), nil, nil)
+	})
+	t.Run("one past the bound", func(t *testing.T) {
+		s, start := tell(t, knownSerials)
+		zcSerialRun(t, s, start, first+1, 1, 1, false, nil)
+		zcRound(t, s, "the round of a move to the second serial told", start.Add(time.Second), nil, nil)
+		quiet := start.Add(7 * time.Second)
+		zcSerialRun(t, s, quiet, first+1, 1, 0, true, nil)
+		zcSerialRun(t, s, start.Add(14*time.Second), first, 1, 1, false, nil)
+		zcRound(t, s, "the round of a move to the oldest serial told", start.Add(15*time.Second), nil,
+			[]string{rndMove(1, quiet, first+1, start.Add(14*time.Second), first)})
+	})
+}
+
+// An address whose merged moves hold one move to a new serial and one to a
+// known serial has news, whichever came first.
+func TestMergedMoveIsNewsWhenOneOfItsMovesIs(t *testing.T) {
+	for _, newsFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "news first", false: "news last"}[newsFirst], func(t *testing.T) {
+			s := New(schBase(t), nil, schIv)
+			schSettle(t, s, schSerialKey(t))
+			zcSerialRun(t, s, schT0, 1, 5, 0, true, nil) // known: 1 and 5
+			mid, last := uint32(2), uint32(5)
+			if !newsFirst {
+				mid, last = 5, 2
+			}
+			zcSerialRun(t, s, schSec(7), mid, 5, 1, false, nil)
+			zcSerialRun(t, s, schSec(14), last, 5, 1, false, nil)
+			zcRound(t, s, "the round of both moves", schSec(15), nil, []string{rndMove(1, schT0, 1, schSec(14), last)})
+		})
+	}
 }
 
 // A serial that one address shows for the first time does not make the move

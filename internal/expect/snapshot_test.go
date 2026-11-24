@@ -462,8 +462,12 @@ func expAnswerSet(a obs.Answer) (set []dnswire.Record, ok bool) {
 	return r.set, r.ok
 }
 
-func expWalkFailed(o obs.Observation) bool {
-	return len(o.Answers) == 1 && o.Answers[0].Server.Name.LabelCount() == 0 && !o.Answers[0].Server.Addr.IsValid()
+// expNoUsableAnswer reports a run that found no zone: every answer failed.
+func expNoUsableAnswer(o obs.Observation) bool {
+	return !slices.ContainsFunc(o.Answers, func(a obs.Answer) bool {
+		_, ok := expAnswerSet(a)
+		return ok
+	})
 }
 
 // expDeepestZone is the zone a name under domain must lie in: the deepest of
@@ -575,7 +579,7 @@ func expLineSets(domain dnswire.Name, groups []*expGroup) (lines, loose map[*exp
 	}
 	for _, g := range groups {
 		for _, o := range g.obs {
-			if o.Key.Kind == obs.KindRecords && o.Key.Name.IsSubdomainOf(domain) && !expWalkFailed(o) &&
+			if o.Key.Kind == obs.KindRecords && o.Key.Name.IsSubdomainOf(domain) && !expNoUsableAnswer(o) &&
 				!o.Zone.Equal(expDeepestZone(domain, cuts, o.Key.Name)) {
 				lines[g] = false
 			}
@@ -637,8 +641,9 @@ func TestSnapshotInvariant(t *testing.T) {
 						fail("%s does not match %q from %v", e.String(), expRecordTexts(set), a.Server.Addr)
 					}
 				}
-				// A failed walk found no zone, so it says nothing about a cut.
-				if o.Key.Kind == obs.KindRecords && o.Key.Name.IsSubdomainOf(domain) && !expWalkFailed(o) &&
+				// A run with no usable answer found no zone, so it says nothing
+				// about a cut.
+				if o.Key.Kind == obs.KindRecords && o.Key.Name.IsSubdomainOf(domain) && !expNoUsableAnswer(o) &&
 					!o.Zone.Equal(expDeepestZone(domain, cuts, o.Key.Name)) {
 					fail("%s got a line, but its check lies in zone %v", e.String(), o.Zone)
 				}

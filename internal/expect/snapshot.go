@@ -470,9 +470,11 @@ func serverText(s obs.Server) string {
 // report a changed zone. A removed NS line moves the expected zone of the
 // names under it, so this repeats until nothing changes; each round judges
 // every check against the same file, so that the order of the observations
-// does not change which lines go. A failed walk found no zone, so it says
-// nothing about a cut, and the zone rule skips it too; the line of its set
-// may rest on other answers, such as the parent's.
+// does not change which lines go. A run with no usable answer found no
+// zone: when every server fails, the walk stops where it stands, at a cut
+// learned earlier or at the root. It says nothing about a cut, and the zone
+// rule skips it too; the line of its set may rest on other answers, such as
+// the parent's.
 func dropForeignZones(file *File, observations []obs.Observation) []Skip {
 	var skips []Skip
 	for {
@@ -480,7 +482,7 @@ func dropForeignZones(file *File, observations []obs.Observation) []Skip {
 		for _, o := range observations {
 			k := o.Key
 			if k.Kind != obs.KindRecords || !k.Domain.Equal(file.Domain) || !k.Name.IsSubdomainOf(file.Domain) ||
-				walkFailed(o) || o.Zone.Equal(file.Zone(k.Name)) {
+				noUsableAnswer(o) || o.Zone.Equal(file.Zone(k.Name)) {
 				continue
 			}
 			if _, ok := file.Find(k.Name, k.Type); !ok || slices.ContainsFunc(foreign, sameSet(k.Name, k.Type)) {
@@ -503,14 +505,13 @@ func sameSet(name dnswire.Name, t dnswire.Type) func(Skip) bool {
 	return func(s Skip) bool { return s.Type == t && s.Name.Equal(name) }
 }
 
-// walkFailed reports the one answer that observe gives when the walk from
-// the root failed: it comes from no server at all.
-func walkFailed(o obs.Observation) bool {
-	if len(o.Answers) != 1 {
-		return false
-	}
-	s := o.Answers[0].Server
-	return s.Name.LabelCount() == 0 && !s.Addr.IsValid()
+// noUsableAnswer reports a run in which every server failed, or that has no
+// answer at all.
+func noUsableAnswer(o obs.Observation) bool {
+	return !slices.ContainsFunc(o.Answers, func(a obs.Answer) bool {
+		_, _, failed := readAnswer(a)
+		return !failed
+	})
 }
 
 // dropDifferentGlue removes the address lines of each nameserver host whose

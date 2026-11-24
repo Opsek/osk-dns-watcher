@@ -190,15 +190,24 @@ func TestSnapshotNSLineAcceptsEachSetTheServersGave(t *testing.T) {
 
 // A walk that failed on its way to the servers of the domain is a failed
 // answer: it is left out as any other, and the parent's set makes the line.
-// Its observation carries no zone, which says nothing about a cut.
+// A run with no usable answer says nothing about a cut, whatever zone it
+// ended in: when every query fails, the walk stops at a cut learned earlier
+// or at the root, and asks the servers there.
 func TestSnapshotKeepsTheParentSetWhenTheWalkToTheDomainFailed(t *testing.T) {
 	apex := expRecordsKey(t, "corp.test.", dnswire.TypeNS)
+	fail := func(host, addr string, why obs.Reason) obs.Answer { return expAnswer(t, host, addr, expFailure(why)) }
 	for _, c := range []struct {
 		name string
 		obs  []obs.Observation
 		line string
 	}{
 		{"the walk alone", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)), expFailedWalk(apex)},
+			"corp.test. NS " + nslText(1, 2)},
+		{"every root server failed", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
+			expObs(t, apex, ".", fail("", "10.53.0.2:53", obs.ReasonNetwork), fail("", "[fd53::2]:53", obs.ReasonNoRoute))},
+			"corp.test. NS " + nslText(1, 2)},
+		{"every server of the parent failed", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
+			expObs(t, apex, "test.", fail("ns2.test.", nslParent2Addr, obs.ReasonTimeout))},
 			"corp.test. NS " + nslText(1, 2)},
 		{"beside a run that answered with another set", []obs.Observation{nslDelegation(t, nslParent(t, 1, 2)),
 			expFailedWalk(apex), nslApex(t, nslGives(t, 1, 1, 2, 3))},

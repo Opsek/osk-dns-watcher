@@ -322,9 +322,12 @@ func notCovered(o obs.Observation) Finding {
 // than the deepest cut that the file declares above it. One child server can
 // refer the walk to a cut that it invents, and the servers it names can then
 // answer with matching data, so this needs no record difference. Outside the
-// domain nothing tells which zone is right.
+// domain nothing tells which zone is right. A run with no usable answer saw
+// no zone answer: when every server fails, the walk stops where it stands, at
+// a cut learned earlier or at the root, so its Zone is unknown, not another
+// zone.
 func zone(f *expect.File, o obs.Observation) []Finding {
-	if f == nil || !o.Key.Domain.Equal(f.Domain) || !o.Key.Name.IsSubdomainOf(f.Domain) || walkFailed(o) {
+	if f == nil || !o.Key.Domain.Equal(f.Domain) || !o.Key.Name.IsSubdomainOf(f.Domain) || Failed(o) {
 		return nil
 	}
 	want := f.Zone(o.Key.Name)
@@ -337,16 +340,6 @@ func zone(f *expect.File, o obs.Observation) []Finding {
 		seen = seenIf(o.Answers, anySet, text)
 	}
 	return []Finding{newFinding(RuleZone, o, want.Lower().String(), seen)}
-}
-
-// walkFailed reports the one answer that observe gives when the walk from
-// the root failed: it comes from no server at all.
-func walkFailed(o obs.Observation) bool {
-	if len(o.Answers) != 1 {
-		return false
-	}
-	s := o.Answers[0].Server
-	return s.Name.LabelCount() == 0 && !s.Addr.IsValid()
 }
 
 // ownsNS accepts a referral into zone.
@@ -534,9 +527,12 @@ func openOrUpdate(found, open []Finding, now time.Time) []Change {
 
 // changed reports whether f tells more than was. A line that is gone is no
 // news: a server that fails now and then drops out of Seen and comes back.
-// The same holds for a part of the Expected of a glue or issuer finding: a
-// parent server that fails for one run drops its part, and its return must not
-// send "changed again"; a certificate that expires drops its part.
+// One more server with a value that was already shows is no news either: the
+// addresses of a provider take up a change one after another, and each would
+// send "changed again" with the same value. The same holds for a part of the
+// Expected of a glue or issuer finding: a parent server that fails for one
+// run drops its part, and its return must not send "changed again"; a
+// certificate that expires drops its part.
 func changed(was, f Finding) bool {
 	if was.Severity != f.Severity {
 		return true
@@ -559,8 +555,25 @@ func changed(was, f Finding) bool {
 		// almost every fetch, and the same policy from another address is no
 		// news. Value keeps the address for the view.
 		old, now = withoutFirstField(old), withoutFirstField(now)
+	} else {
+		old, now = withoutServers(old, was.Seen), withoutServers(now, f.Seen)
 	}
 	return slices.ContainsFunc(now, func(l string) bool { return !slices.Contains(old, l) })
+}
+
+// withoutServers cuts from each line of a Value the server of seen that
+// starts it, so that the rest is the value alone. Value keeps the server for
+// the view. A line of no server, such as a word line, stays as it is.
+func withoutServers(ls []string, seen []Seen) []string {
+	for i, l := range ls {
+		for _, s := range seen {
+			if v, ok := strings.CutPrefix(l, serverText(s.Answer.Server)+" "); ok {
+				ls[i] = v
+				break
+			}
+		}
+	}
+	return ls
 }
 
 // withoutFirstField cuts the first field from each line: the address of a

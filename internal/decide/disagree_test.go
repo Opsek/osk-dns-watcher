@@ -1061,22 +1061,13 @@ func dngBlocked(f Finding, o obs.Observation) bool {
 }
 
 // dngNews: another expected text, another severity, or, for every rule but
-// disagree, a line that the open finding did not have. A new distinct set
-// does not change a disagree alert.
+// disagree, a value that no line of the open finding showed. A new distinct
+// set does not change a disagree alert.
 func dngNews(was, f Finding) bool {
 	if was.Expected != f.Expected || was.Severity != f.Severity {
 		return true
 	}
-	if f.Rule == RuleDisagree {
-		return false
-	}
-	old := strings.Split(was.Value, "\n")
-	for _, l := range strings.Split(f.Value, "\n") {
-		if l != "" && !slices.Contains(old, l) {
-			return true
-		}
-	}
-	return false
+	return f.Rule != RuleDisagree && decNewValue(was, f)
 }
 
 // dngWant is what the oracle says about one input.

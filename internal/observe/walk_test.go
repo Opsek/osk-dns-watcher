@@ -1102,6 +1102,36 @@ func TestWalkCacheInterval(t *testing.T) {
 	})
 }
 
+// TestWalkEveryQueryFails: when this machine sends no query out, as in an
+// outage of its network, the walk does not fail. It ends where it started:
+// at a cut learned less than one interval ago, and after that at the root.
+// The fan-out then asks that zone, so the run holds one failure for each of
+// its addresses, and its Zone is not the zone of the name.
+func TestWalkEveryQueryFails(t *testing.T) {
+	www := walkRecordsKey(t, "corp.test.", "www.corp.test.", dnswire.TypeA)
+	w, clock := walkBase(t), &walkClock{}
+	o := walkObserver(t, w, clock, time.Second)
+	walkRun(t, o, www, time.Minute)
+	o.exchange = func(context.Context, netip.AddrPort, dnswire.Query, bool) (*dnswire.Response, error) {
+		return nil, fmt.Errorf("write: operation not permitted")
+	}
+
+	clock.set(45 * time.Second)
+	ob := walkRun(t, o, www, time.Minute)
+	if !ob.Zone.Equal(walkName(t, "corp.test.")) {
+		t.Errorf("from the cut: Zone = %v, want corp.test.", ob.Zone)
+	}
+	walkWant(t, "answers from the cut", walkAnswers(ob.Answers),
+		[]string{"ns1.corp.test. 10.0.1.1:53 failure network", "ns2.corp.test. 10.0.1.2:53 failure network"})
+
+	clock.set(105 * time.Second)
+	ob = walkRun(t, o, www, time.Minute)
+	if ob.Zone.LabelCount() != 0 {
+		t.Errorf("from the root: Zone = %v, want the root", ob.Zone)
+	}
+	walkWant(t, "answers from the root", walkAnswers(ob.Answers), []string{". 10.0.0.1:53 failure network"})
+}
+
 // TestWalkCacheTTL: a cut expires with the smallest TTL of its NS records and
 // of the addresses used, from the glue or from a sub-walk.
 func TestWalkCacheTTL(t *testing.T) {

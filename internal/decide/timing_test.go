@@ -239,15 +239,12 @@ func TestCheckFailingComesAfterFindingsAndBeforeResolves(t *testing.T) {
 	now := decT0.Add(time.Hour)
 	failing := Change{Op: OpOpen, Finding: timFailing(key, timLimit), At: now}
 
-	t.Run("after a zone finding of the same run", func(t *testing.T) {
+	t.Run("alone when the run ended in another zone", func(t *testing.T) {
+		// A run with no usable answer did not see which zone answers.
 		walk, _ := decCut(t)
 		o := decObservation(key, decName(t, "www.corp.test."), walk,
 			decAnswer(t, "ns.evil.test.", "10.53.0.66:53", decFailure(obs.ReasonTimeout)))
-		found := Findings(f, o)
-		if len(found) != 1 || found[0].Rule != RuleZone {
-			t.Fatalf("want one zone finding:%s", decShow(found))
-		}
-		timSame(t, Decide(timInput(f, nil, o, now, decT0, timLimit)), []Change{{Op: OpOpen, Finding: found[0], At: now}, failing})
+		timSame(t, Decide(timInput(f, nil, o, now, decT0, timLimit)), []Change{failing})
 	})
 
 	// A record-set alert that only ns2 showed.
@@ -576,16 +573,9 @@ func timFirstOfEach(open []Finding, key string) []Finding {
 }
 
 // timNews reports whether f tells more than the open finding was: another
-// Expected or Severity, or a line of Value that was not there.
+// Expected or Severity, or a value that no line of Value showed.
 func timNews(was, f Finding) bool {
-	if was.Expected != f.Expected || was.Severity != f.Severity {
-		return true
-	}
-	var old []string
-	if was.Value != "" {
-		old = strings.Split(was.Value, "\n")
-	}
-	return f.Value != "" && slices.ContainsFunc(strings.Split(f.Value, "\n"), func(l string) bool { return !slices.Contains(old, l) })
+	return was.Expected != f.Expected || was.Severity != f.Severity || decNewValue(was, f)
 }
 
 // timBlocks reports whether a failure now could hide what was shows: a

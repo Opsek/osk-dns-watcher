@@ -430,7 +430,7 @@ func TestEmlFailureTakesNoPartInTheWords(t *testing.T) {
 
 // ---- changed ----
 
-func TestEmlChangedIsNewServerLineOrNewWord(t *testing.T) {
+func TestEmlChangedIsNewValueOrNewWord(t *testing.T) {
 	const line = `corp.test. TXT "v=spf1 mx -all"`
 	f := emlFile(t, line)
 	run := func(specs ...string) obs.Observation { return emlObserve(t, "corp.test.", dnswire.TypeTXT, specs...) }
@@ -448,8 +448,8 @@ func TestEmlChangedIsNewServerLineOrNewWord(t *testing.T) {
 		want []Change
 	}{
 		{"the same run", run(soft, "fail"), nil},
-		{"the same set at another server is a new server line", run(soft, soft), update(run(soft, soft))},
-		{"another set at the same server is a new server line and a new word", run(wide, "fail"), update(run(wide, "fail"))},
+		{"the same set at one more server is no news", run(soft, soft), nil},
+		{"another set at the same server is a new value and a new word", run(wide, "fail"), update(run(wide, "fail"))},
 		{"the server that matched now differs", run(soft, wide), update(run(soft, wide))},
 	} {
 		t.Run(c.name, func(t *testing.T) { decSameChanges(t, decide(open, c.o), c.want) })
@@ -487,7 +487,8 @@ func TestEmlChangedIsNewServerLineOrNewWord(t *testing.T) {
 	})
 }
 
-// Every mail rule opens, stays quiet on a repeat, and updates on a new set.
+// Every mail rule opens, stays quiet on a repeat and on the same set at one
+// more server, and updates on a new set.
 func TestEmlEachRuleOpensAndUpdates(t *testing.T) {
 	for _, k := range emlKinds {
 		t.Run(k.word, func(t *testing.T) {
@@ -498,8 +499,10 @@ func TestEmlEachRuleOpensAndUpdates(t *testing.T) {
 			decSameChanges(t, Decide(in), []Change{{Op: OpOpen, Finding: found, At: in.Now}})
 			in.Open = []Finding{found}
 			decSameChanges(t, Decide(in), nil)
-
 			in.Observation = emlObserve(t, k.owner, dnswire.TypeTXT, k.now, k.now, k.now)
+			decSameChanges(t, Decide(in), nil)
+
+			in.Observation = emlObserve(t, k.owner, dnswire.TypeTXT, k.now, k.now, "nodata")
 			again := emlOne(t, f, in.Observation)
 			decSameChanges(t, Decide(in), []Change{{Op: OpUpdate, Finding: again, At: in.Now}})
 		})

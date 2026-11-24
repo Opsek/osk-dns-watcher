@@ -590,25 +590,62 @@ func TestZoneRuleOnlyForRecordsInTheDomain(t *testing.T) {
 	})
 }
 
-func TestZoneRuleSkipsOnlyFailedWalk(t *testing.T) {
+// decOutage is a run of the check of www.corp.test. A in which no query got
+// an answer: the walk could not leave the root, so the fan-out asked the
+// root servers, and each address gave its own failure.
+func decOutage(t *testing.T, key obs.Key) obs.Observation {
+	v4 := decAnswer(t, ".", "10.53.0.2:53", decFailure(obs.ReasonNetwork))
+	v6 := decAnswer(t, ".", "[fd53::2]:53", decFailure(obs.ReasonNoRoute))
+	return decObservation(key, dnswire.Name{}, []obs.Answer{v4, v6}, v4, v6)
+}
+
+// A run with no usable answer did not see which zone answers the name: the
+// walk stops where every server fails, at a cut that it learned earlier or
+// at the root, and Zone is then unknown, not another zone. A referral into
+// an invented cut is reported once a server of that cut answers.
+func TestZoneRuleNeedsAnAnswerFromTheZone(t *testing.T) {
 	f := decFile(t, "domain corp.test.", "www.corp.test. A 10.53.0.81")
 	key := decRecordsKey(t, "corp.test.", "www.corp.test.", dnswire.TypeA)
 	walk, cut := decCut(t)
 	www := decName(t, "www.corp.test.")
 
-	t.Run("failed walk", func(t *testing.T) {
-		decCheck(t, Findings(f, decObservation(key, dnswire.Name{}, walk[:1], decFailedWalk())), key)
-	})
-	t.Run("every server of the zone fails", func(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		o    obs.Observation
+	}{
+		{"failed walk", decObservation(key, dnswire.Name{}, walk[:1], decFailedWalk())},
+		{"every root server fails", decOutage(t, key)},
+		{"every server of the parent fails", decObservation(key, decName(t, "test."), walk[:1],
+			decAnswer(t, "ns.test.", "10.53.0.3:53", decFailure(obs.ReasonTimeout)))},
+		{"every server of an invented zone fails", decObservation(key, www, walk,
+			decAnswer(t, "ns.evil.test.", "10.53.0.66:53", decFailure(obs.ReasonTimeout)),
+			decAnswer(t, "ns.evil.test.", "10.53.0.67:53", decFailure(obs.ReasonNetwork)))},
+		{"one host with no address", decObservation(key, www, walk, decAnswer(t, "ns.evil.test.", "", decFailure(obs.ReasonWalk)))},
+	} {
+		t.Run(c.name, func(t *testing.T) { decCheck(t, Findings(f, c.o), key) })
+	}
+	t.Run("one server of an invented zone answers", func(t *testing.T) {
 		o := decObservation(key, www, walk,
 			decAnswer(t, "ns.evil.test.", "10.53.0.66:53", decFailure(obs.ReasonTimeout)),
-			decAnswer(t, "ns.evil.test.", "10.53.0.67:53", decFailure(obs.ReasonNetwork)))
+			decAnswer(t, "ns.evil.test.", "10.53.0.67:53", decSet(t, "www.corp.test.", dnswire.TypeA, "10.53.0.81")))
 		decCheck(t, Findings(f, o), key, decWant{RuleZone, SeverityHigh, "corp.test.", []Seen{{cut, "www.corp.test."}}})
 	})
-	t.Run("one host with no address", func(t *testing.T) {
-		o := decObservation(key, www, walk, decAnswer(t, "ns.evil.test.", "", decFailure(obs.ReasonWalk)))
-		decCheck(t, Findings(f, o), key, decWant{RuleZone, SeverityHigh, "corp.test.", []Seen{{cut, "www.corp.test."}}})
-	})
+}
+
+// An outage neither opens a zone alert nor ends one: the alert ends when a
+// server of the expected zone answers again.
+func TestDecideOutageKeepsTheZoneAlertAsItIs(t *testing.T) {
+	d := decNewDecide(t)
+	walk, _ := decCut(t)
+	open := d.one(d.f, decObservation(d.key, decName(t, "www.corp.test."), walk, d.at("ns.evil.test.", "10.53.0.66:53", "10.53.0.81")))
+	if open.Rule != RuleZone {
+		t.Fatalf("want a zone finding:%s", decShow([]Finding{open}))
+	}
+	outage := decOutage(t, d.key)
+	decSameChanges(t, d.decide(nil, outage), nil)
+	decSameChanges(t, d.decide([]Finding{open}, outage), nil)
+	back := d.observe(d.at("ns1.corp.test.", decNS1, "10.53.0.81"), d.at("ns2.corp.test.", decNS2, "10.53.0.81"))
+	decSameChanges(t, d.decide([]Finding{open}, back), []Change{d.change(OpResolve, open)})
 }
 
 func TestZoneDomainDirectlyUnderRoot(t *testing.T) {
@@ -721,7 +758,7 @@ func TestDecideUpdatesOnlyOnNewText(t *testing.T) {
 	}{
 		{"nothing open", nil, both, []Change{d.change(OpOpen, now)}},
 		{"same text at other times", []Finding{same}, both, nil},
-		{"a server that differs now", []Finding{onlyNS1}, both, []Change{d.change(OpUpdate, now)}},
+		{"one more server with the same value", []Finding{onlyNS1}, both, nil},
 		{"other expected", []Finding{otherExpected}, both, []Change{d.change(OpUpdate, now)}},
 		{"other severity", []Finding{otherSeverity}, both, []Change{d.change(OpUpdate, now)}},
 		{"same lines in another order", []Finding{reordered}, both, nil},
@@ -736,6 +773,56 @@ func TestDecideUpdatesOnlyOnNewText(t *testing.T) {
 			decSameChanges(t, d.decide(c.open, c.o), c.want)
 		})
 	}
+}
+
+// The addresses of a provider take up a change one after another. One more
+// server with a value that the alert shows is no news; a value that the alert
+// does not show is.
+func TestDecideUpdatesOnlyOnANewValue(t *testing.T) {
+	d := decNewDecide(t)
+	ns1, ns2 := "ns1.corp.test.", "ns2.corp.test."
+	open := d.one(d.f, d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.81")))
+	t.Run("the same value at one more server", func(t *testing.T) {
+		both := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.99"))
+		decSameChanges(t, d.decide([]Finding{open}, both), nil)
+	})
+	t.Run("another value at that server", func(t *testing.T) {
+		other := d.observe(d.at(ns1, decNS1, "10.53.0.99"), d.at(ns2, decNS2, "10.53.0.98"))
+		decSameChanges(t, d.decide([]Finding{open}, other), []Change{d.change(OpUpdate, d.one(d.f, other))})
+	})
+}
+
+// decValueLine gives a line of a Value without the server of seen that
+// starts it: what the line says, whichever server said it.
+func decValueLine(line string, seen []Seen) string {
+	for _, s := range seen {
+		addr, host := "-", "-"
+		if s.Answer.Server.Addr.IsValid() {
+			addr = s.Answer.Server.Addr.String()
+		}
+		if s.Answer.Server.Name.LabelCount() > 0 {
+			host = s.Answer.Server.Name.Lower().String()
+		}
+		if rest, ok := strings.CutPrefix(line, addr+" "+host+" "); ok {
+			return rest
+		}
+	}
+	return line
+}
+
+// decNewValue reports whether a line of the Value of f says what no line of
+// the Value of was says, the servers left out.
+func decNewValue(was, f Finding) bool {
+	old := map[string]bool{}
+	for _, l := range strings.Split(was.Value, "\n") {
+		old[decValueLine(l, was.Seen)] = true
+	}
+	for _, l := range strings.Split(f.Value, "\n") {
+		if l != "" && !old[decValueLine(l, f.Seen)] {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDecideResolvesUnlessBlocked(t *testing.T) {

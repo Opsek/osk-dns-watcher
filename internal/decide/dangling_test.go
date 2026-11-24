@@ -859,7 +859,7 @@ func TestProbeAlertOpensUpdatesAndResolves(t *testing.T) {
 	}{
 		{"opens", ofRule(run(f, nil, "noname", "noname")), []Change{{Op: OpOpen, Finding: both[0], At: now}}},
 		{"quiet while it lasts", ofRule(run(f, both, "noname", "noname")), nil},
-		{"a new server is news", ofRule(run(f, one, "noname", "noname")), []Change{{Op: OpUpdate, Finding: both[0], At: now}}},
+		{"one more server that says it is no news", ofRule(run(f, one, "noname", "noname")), nil},
 		{"a line that is gone is no news", ofRule(run(f, both, "noname", "fail")), nil},
 		{"records resolve", ofRule(run(f, both, "10.53.0.83", "10.53.0.83")), []Change{{Op: OpResolve, Finding: both[0], At: now}}},
 		{"no data resolves", ofRule(run(f, both, "nodata", "nodata")), []Change{{Op: OpResolve, Finding: both[0], At: now}}},

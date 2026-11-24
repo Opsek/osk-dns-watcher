@@ -322,12 +322,15 @@ func notCovered(o obs.Observation) Finding {
 // than the deepest cut that the file declares above it. One child server can
 // refer the walk to a cut that it invents, and the servers it names can then
 // answer with matching data, so this needs no record difference. Outside the
-// domain nothing tells which zone is right. A run with no usable answer saw
-// no zone answer: when every server fails, the walk stops where it stands, at
-// a cut learned earlier or at the root, so its Zone is unknown, not another
-// zone.
+// domain nothing tells which zone is right.
+//
+// In a run with no usable answer, the walk stops where every server failed:
+// at a cut learned earlier, above the expected zone, or at the root, as in an
+// outage of this machine. Such a Zone tells nothing. Only a referral into a
+// zone below the expected one shows a cut that the file does not declare,
+// and servers that answered gave it, so that run still gives the finding.
 func zone(f *expect.File, o obs.Observation) []Finding {
-	if f == nil || !o.Key.Domain.Equal(f.Domain) || !o.Key.Name.IsSubdomainOf(f.Domain) || Failed(o) {
+	if f == nil || !o.Key.Domain.Equal(f.Domain) || !o.Key.Name.IsSubdomainOf(f.Domain) {
 		return nil
 	}
 	want := f.Zone(o.Key.Name)
@@ -336,7 +339,11 @@ func zone(f *expect.File, o obs.Observation) []Finding {
 	}
 	text := func([]dnswire.Record) string { return o.Zone.Lower().String() }
 	seen := seenIf(o.Walk, ownsNS(o.Zone), text)
-	if len(seen) == 0 {
+	if Failed(o) {
+		if len(seen) == 0 || !o.Zone.IsSubdomainOf(want) {
+			return nil
+		}
+	} else if len(seen) == 0 {
 		seen = seenIf(o.Answers, anySet, text)
 	}
 	return []Finding{newFinding(RuleZone, o, want.Lower().String(), seen)}

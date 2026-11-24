@@ -10,8 +10,8 @@ import (
 )
 
 // Every server of the lab refuses every query, from the root down, as when
-// this machine has lost its DNS. A run with no usable answer did not see
-// which zone answers, so it gives no zone alert, also once the walk no
+// this machine has lost its DNS. Such a run holds no referral into a zone
+// below that of the domain, so it gives no zone alert, also once the walk no
 // longer starts from a cut learned before and ends at the root. The check
 // is reported as failing after five fast intervals, as any check with no
 // usable answer is, and that report ends when the servers answer again.
@@ -48,6 +48,34 @@ func TestOutageGivesNoZoneAlert(t *testing.T) {
 	}
 	if want := []string{"alert open " + label, "alert resolve " + label}; !slices.Equal(alerts, want) {
 		t.Errorf("the alerts were %q, want only %q", alerts, want)
+	}
+	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
+}
+
+// The servers of corp.test. delegate a subzone that the file does not
+// declare to a nameserver that never answers. No run gets a usable answer,
+// but the referral shows the new cut, so the first run opens the zone alert
+// and names the server of corp.test. that gave the referral.
+func TestSubzoneThatDoesNotAnswerGivesZoneAlert(t *testing.T) {
+	n, state := runLab(t)
+	expCtl(t, "set", "both", "dead.corp.test.", "300", "A", n+"99")
+	expCtl(t, "set", "both", "sub.corp.test.", "300", "NS", "dead.corp.test.")
+	file := slkLabFile(t, "www.sub.corp.test. A "+n+"81")
+	begin := time.Now()
+	svc := runStart(t, runLabArgs(t, n, file, state, runIntervals("1h", "1h", "1h", "5s"))...)
+	www := runRecords("www.sub.corp.test.", "A")
+	first, i := svc.wait(t, "the first run of "+www, 0, begin.Add(10*time.Second), runRunOf(www))
+	if c, _, _ := runParse(first.text); c.result == "ok" {
+		t.Errorf("the first run gave %q, want a failure", first.text)
+	}
+	const label = "high zone records www.sub.corp.test. A"
+	opened, j := svc.wait(t, "the zone alert", i, first.at.Add(time.Second), runIs("alert open "+label))
+	svc.wait(t, "its Slack message", j, opened.at.Add(3*time.Second), runIs("delivery slack sent open "+label))
+	svc.stop(t)
+	text := runHookCount(t, "after the first run", 1)[0].text
+	referred := strings.Contains(text, "ns1.corp.test. ("+n+"11)") || strings.Contains(text, "ns2.corp.test. ("+n+"12)")
+	if !strings.Contains(text, "is answered from an unexpected zone") || !referred {
+		t.Errorf("the message:\n%s\nwant the zone headline and a server of corp.test. under seen at", text)
 	}
 	runNoSecret(t, state, svc.out.String(), svc.errOut.String())
 }

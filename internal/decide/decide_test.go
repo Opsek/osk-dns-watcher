@@ -599,37 +599,70 @@ func decOutage(t *testing.T, key obs.Key) obs.Observation {
 	return decObservation(key, dnswire.Name{}, []obs.Answer{v4, v6}, v4, v6)
 }
 
-// A run with no usable answer did not see which zone answers the name: the
-// walk stops where every server fails, at a cut that it learned earlier or
-// at the root, and Zone is then unknown, not another zone. A referral into
-// an invented cut is reported once a server of that cut answers.
-func TestZoneRuleNeedsAnAnswerFromTheZone(t *testing.T) {
-	f := decFile(t, "domain corp.test.", "www.corp.test. A 10.53.0.81")
+// A run with no usable answer gives a zone finding only on a referral, from
+// servers that answered, into a zone below the expected one: a cut that the
+// file does not declare. In an outage of this machine the walk stops at a
+// cut learned earlier, above the expected zone or at the root, with no such
+// referral, and its Zone tells nothing.
+func TestZoneRuleOfARunWithNoUsableAnswer(t *testing.T) {
+	f := decFile(t, "domain corp.test.", "lab.corp.test. NS ns.lab.corp.test.",
+		"www.corp.test. A 10.53.0.81", "www.lab.corp.test. A 10.53.0.82")
 	key := decRecordsKey(t, "corp.test.", "www.corp.test.", dnswire.TypeA)
-	walk, cut := decCut(t)
-	www := decName(t, "www.corp.test.")
+	labKey := decRecordsKey(t, "corp.test.", "www.lab.corp.test.", dnswire.TypeA)
+	corp, www := decName(t, "corp.test."), decName(t, "www.corp.test.")
+	// walk ends with a referral that a server of corp.test. gave in an
+	// earlier run: the walk of this run started from the cut it learned.
+	walk, cached := decCut(t)
+	live := decAnswer(t, "ns1.corp.test.", decNS1, decSet(t, "www.corp.test.", dnswire.TypeNS, "ns.evil.test."))
+	liveWalk := append(slices.Clone(walk[:2]), live)
+	evil := func(addr string, r obs.Result) obs.Answer { return decAnswer(t, "ns.evil.test.", addr, r) }
+	corpFails := []obs.Answer{decAnswer(t, "ns1.corp.test.", decNS1, decFailure(obs.ReasonNetwork)),
+		decAnswer(t, "ns2.corp.test.", decNS2, decFailure(obs.ReasonNetwork))}
+	labReferral := decAnswer(t, "ns1.corp.test.", decNS1, decSet(t, "lab.corp.test.", dnswire.TypeNS, "ns.lab.corp.test."))
+	zoneOf := func(seen ...obs.Answer) []decWant {
+		var s []Seen
+		for _, a := range seen {
+			s = append(s, Seen{a, "www.corp.test."})
+		}
+		return []decWant{{RuleZone, SeverityHigh, "corp.test.", s}}
+	}
 
 	for _, c := range []struct {
 		name string
+		key  obs.Key
 		o    obs.Observation
+		want []decWant
 	}{
-		{"failed walk", decObservation(key, dnswire.Name{}, walk[:1], decFailedWalk())},
-		{"every root server fails", decOutage(t, key)},
-		{"every server of the parent fails", decObservation(key, decName(t, "test."), walk[:1],
-			decAnswer(t, "ns.test.", "10.53.0.3:53", decFailure(obs.ReasonTimeout)))},
-		{"every server of an invented zone fails", decObservation(key, www, walk,
-			decAnswer(t, "ns.evil.test.", "10.53.0.66:53", decFailure(obs.ReasonTimeout)),
-			decAnswer(t, "ns.evil.test.", "10.53.0.67:53", decFailure(obs.ReasonNetwork)))},
-		{"one host with no address", decObservation(key, www, walk, decAnswer(t, "ns.evil.test.", "", decFailure(obs.ReasonWalk)))},
+		{"failed walk", key, decObservation(key, dnswire.Name{}, walk[:1], decFailedWalk()), nil},
+		{"outage: the walk ends at the root", key, decOutage(t, key), nil},
+		{"outage: the walk ends at the cut of the domain, learned earlier", key,
+			decObservation(key, corp, walk[1:2], corpFails...), nil},
+		{"the root answers and the servers of the parent zone fail", key,
+			decObservation(key, decName(t, "test."), walk[:1], decAnswer(t, "ns.test.", "10.53.0.3:53", decFailure(obs.ReasonTimeout))), nil},
+		{"the servers of the domain fail above a declared subzone", labKey,
+			decObservation(labKey, corp, walk[:2], corpFails...), nil},
+		{"a zone below the expected one, but no referral into it", key,
+			decObservation(key, www, walk[:2], evil("10.53.0.66:53", decFailure(obs.ReasonTimeout))), nil},
+		{"a referral of this run, its server times out", key,
+			decObservation(key, www, liveWalk, evil("10.53.0.66:53", decFailure(obs.ReasonTimeout))), zoneOf(live)},
+		{"a referral of this run, its server refuses", key,
+			decObservation(key, www, liveWalk, evil("10.53.0.66:53", decFailure(obs.ReasonRefused))), zoneOf(live)},
+		{"a referral of this run, its address may not be asked", key,
+			decObservation(key, www, liveWalk, evil("192.0.2.66:53", decFailure(obs.ReasonNotPermitted))), zoneOf(live)},
+		{"a referral of this run, its host has no address", key,
+			decObservation(key, www, liveWalk, evil("", decFailure(obs.ReasonWalk))), zoneOf(live)},
+		{"a referral learned in an earlier run, its servers fail", key,
+			decObservation(key, www, walk, evil("10.53.0.66:53", decFailure(obs.ReasonTimeout)),
+				evil("10.53.0.67:53", decFailure(obs.ReasonNetwork))), zoneOf(cached)},
+		{"a server of the zone answers", key,
+			decObservation(key, www, walk, evil("10.53.0.66:53", decFailure(obs.ReasonTimeout)),
+				evil("10.53.0.67:53", decSet(t, "www.corp.test.", dnswire.TypeA, "10.53.0.81"))), zoneOf(cached)},
+		{"the servers of a declared subzone fail", labKey,
+			decObservation(labKey, decName(t, "lab.corp.test."), append(slices.Clone(walk[:2]), labReferral),
+				decAnswer(t, "ns.lab.corp.test.", "10.53.0.70:53", decFailure(obs.ReasonTimeout))), nil},
 	} {
-		t.Run(c.name, func(t *testing.T) { decCheck(t, Findings(f, c.o), key) })
+		t.Run(c.name, func(t *testing.T) { decCheck(t, Findings(f, c.o), c.key, c.want...) })
 	}
-	t.Run("one server of an invented zone answers", func(t *testing.T) {
-		o := decObservation(key, www, walk,
-			decAnswer(t, "ns.evil.test.", "10.53.0.66:53", decFailure(obs.ReasonTimeout)),
-			decAnswer(t, "ns.evil.test.", "10.53.0.67:53", decSet(t, "www.corp.test.", dnswire.TypeA, "10.53.0.81")))
-		decCheck(t, Findings(f, o), key, decWant{RuleZone, SeverityHigh, "corp.test.", []Seen{{cut, "www.corp.test."}}})
-	})
 }
 
 // An outage neither opens a zone alert nor ends one: the alert ends when a
@@ -646,6 +679,26 @@ func TestDecideOutageKeepsTheZoneAlertAsItIs(t *testing.T) {
 	decSameChanges(t, d.decide([]Finding{open}, outage), nil)
 	back := d.observe(d.at("ns1.corp.test.", decNS1, "10.53.0.81"), d.at("ns2.corp.test.", decNS2, "10.53.0.81"))
 	decSameChanges(t, d.decide([]Finding{open}, back), []Change{d.change(OpResolve, open)})
+}
+
+// A subzone that the file does not declare, whose servers fail: the first run
+// that holds the referral opens the alert, a run that starts from the cut it
+// learned keeps the alert as it is, and an outage neither adds to it nor ends
+// it.
+func TestDecideZoneAlertOfASubzoneThatFails(t *testing.T) {
+	d := decNewDecide(t)
+	www := decName(t, "www.corp.test.")
+	walk, _ := decCut(t)
+	live := decAnswer(t, "ns1.corp.test.", decNS1, decSet(t, "www.corp.test.", dnswire.TypeNS, "ns.evil.test."))
+	first := decObservation(d.key, www, append(slices.Clone(walk[:2]), live), d.failed("ns.evil.test.", "10.53.0.66:53", obs.ReasonTimeout))
+	opened := d.one(d.f, first)
+	if opened.Rule != RuleZone {
+		t.Fatalf("want a zone finding:%s", decShow([]Finding{opened}))
+	}
+	decSameChanges(t, d.decide(nil, first), []Change{d.change(OpOpen, opened)})
+	fromCut := decObservation(d.key, www, walk, d.failed("ns.evil.test.", "10.53.0.66:53", obs.ReasonTimeout))
+	decSameChanges(t, d.decide([]Finding{opened}, fromCut), nil)
+	decSameChanges(t, d.decide([]Finding{opened}, decOutage(t, d.key)), nil)
 }
 
 func TestZoneDomainDirectlyUnderRoot(t *testing.T) {

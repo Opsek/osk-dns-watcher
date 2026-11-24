@@ -1132,6 +1132,48 @@ func TestWalkEveryQueryFails(t *testing.T) {
 	walkWant(t, "answers from the root", walkAnswers(ob.Answers), []string{". 10.0.0.1:53 failure network"})
 }
 
+// TestWalkDeadSubzone: a server of corp.test. refers the name to a subzone
+// whose only server fails. The walk ends at the subzone, and Walk holds the
+// referral: the one of this run, or, when the walk starts from the cut that
+// an earlier run learned, the referral of that run. A cut whose server may
+// not be asked is not cached, so each run gets the referral anew.
+func TestWalkDeadSubzone(t *testing.T) {
+	key := walkRecordsKey(t, "corp.test.", "www.sub.corp.test.", dnswire.TypeA)
+	for _, tt := range []struct {
+		name, addr, failure string
+		cached              bool
+	}{
+		{"closed port", "10.0.3.1", "failure network", true},
+		{"refused", "10.0.3.2", "failure refused", true},
+		{"not permitted", "192.0.2.1", "failure not-permitted", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w, clock := walkBase(t), &walkClock{}
+			w.serve("10.0.1.1 10.0.1.2", "corp.test.", append(slices.Clone(walkCorpZone),
+				"sub.corp.test. 300 NS ns.sub.corp.test.", "ns.sub.corp.test. 300 A "+tt.addr)...)
+			w.serve("10.0.3.2", "other.test.")
+			o := walkObserver(t, w, clock, time.Second)
+			for _, at := range []time.Duration{0, 30 * time.Second} {
+				clock.set(at)
+				ob := walkRun(t, o, key, time.Minute)
+				if !ob.Zone.Equal(walkName(t, "sub.corp.test.")) {
+					t.Errorf("at %v: Zone = %v, want sub.corp.test.", at, ob.Zone)
+				}
+				walkWant(t, fmt.Sprintf("answers at %v", at), walkAnswers(ob.Answers), []string{"ns.sub.corp.test. " + tt.addr + ":53 " + tt.failure})
+				sent := walkT0.Add(at)
+				if tt.cached {
+					sent = walkT0
+				}
+				if !slices.ContainsFunc(ob.Walk, func(e obs.Answer) bool {
+					return strings.HasPrefix(walkCase(e.Result), "records sub.corp.test. 300 IN NS ns.sub.corp.test.") && e.Sent.Equal(sent)
+				}) {
+					t.Errorf("at %v: Walk holds no referral into sub.corp.test. sent at %v: %q", at, sent, walkAnswers(ob.Walk))
+				}
+			}
+		})
+	}
+}
+
 // TestWalkCacheTTL: a cut expires with the smallest TTL of its NS records and
 // of the addresses used, from the glue or from a sub-walk.
 func TestWalkCacheTTL(t *testing.T) {

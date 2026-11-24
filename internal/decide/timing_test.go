@@ -239,11 +239,24 @@ func TestCheckFailingComesAfterFindingsAndBeforeResolves(t *testing.T) {
 	now := decT0.Add(time.Hour)
 	failing := Change{Op: OpOpen, Finding: timFailing(key, timLimit), At: now}
 
-	t.Run("alone when the run ended in another zone", func(t *testing.T) {
-		// A run with no usable answer did not see which zone answers.
+	t.Run("after a zone finding of the same run", func(t *testing.T) {
+		// The referral into a cut that the file does not declare is shown
+		// although the servers of that cut fail.
 		walk, _ := decCut(t)
 		o := decObservation(key, decName(t, "www.corp.test."), walk,
 			decAnswer(t, "ns.evil.test.", "10.53.0.66:53", decFailure(obs.ReasonTimeout)))
+		found := Findings(f, o)
+		if len(found) != 1 || found[0].Rule != RuleZone {
+			t.Fatalf("want one zone finding:%s", decShow(found))
+		}
+		timSame(t, Decide(timInput(f, nil, o, now, decT0, timLimit)), []Change{{Op: OpOpen, Finding: found[0], At: now}, failing})
+	})
+	t.Run("alone when the run ended above the expected zone", func(t *testing.T) {
+		// A run with no usable answer whose walk stopped above the zone of
+		// the domain did not see which zone answers.
+		walk, _ := decCut(t)
+		o := decObservation(key, decName(t, "test."), walk[:1],
+			decAnswer(t, "ns.test.", "10.53.0.3:53", decFailure(obs.ReasonTimeout)))
 		timSame(t, Decide(timInput(f, nil, o, now, decT0, timLimit)), []Change{failing})
 	})
 

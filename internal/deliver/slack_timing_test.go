@@ -19,7 +19,7 @@ var (
 )
 
 const (
-	timFailingAction = ":point_right: Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen."
+	timFailingAction = ":point_right: Find out why no server answers this machine for `www.corp.test. A`; until one does, a change there is not seen."
 	timChangedAction = ":point_right: If you did not change the zone, find out who did; only a zone transfer shows which record changed."
 	timResolveAction = ":point_right: If you did not make or undo this change yourself, find out who did."
 	timClockOpen     = ":clock3: First seen 10:00:05 · last OK 09:59:05 · 13 Nov 2026 UTC"
@@ -100,7 +100,8 @@ func TestSlackTextOfCheckFailingNamesTheKindOfCheck(t *testing.T) {
 	}{
 		{obs.DelegationKey(corp), "the delegation check of `corp.test. NS`", timParentFailingAction},
 		{obs.DSKey(corp), "the ds check of `corp.test. DS`", timParentFailingAction},
-		{obs.SerialKey(corp), "the serial check of `corp.test. SOA`", timFailingAction},
+		{obs.SerialKey(corp), "the serial check of `corp.test. SOA`",
+			":point_right: Find out why no server answers this machine for `corp.test. SOA`; until one does, a change there is not seen."},
 	} {
 		t.Run(c.key.Kind.String(), func(t *testing.T) {
 			open := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 15 min", true)
@@ -174,6 +175,8 @@ func TestSlackTextOfCheckFailingOfAnotherZoneNamesTheName(t *testing.T) {
 	}{
 		{"mail host", obs.RecordsKey(corp, timName(t, "mx.other.test."), dnswire.TypeA), ":point_right: Find out why no server answers this machine for `mx.other.test. A`; until one does, a change there is not seen."},
 		{"inside", obs.RecordsKey(corp, timName(t, "www.corp.test."), dnswire.TypeA), timFailingAction},
+		{"subzone", obs.RecordsKey(corp, timName(t, "lab.corp.test."), dnswire.TypeNS), ":point_right: Find out why no server answers this machine for `lab.corp.test. NS`; until one does, a change there is not seen."},
+		{"wildcard", obs.WildcardKey(corp, corp), ":point_right: Find out why no server answers this machine for `corp.test. A`; until one does, a change there is not seen."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := timEvent(alert.EventOpen, decide.RuleCheckFailing, decide.SeverityMedium, c.key, "no usable answer for 25 s", true)

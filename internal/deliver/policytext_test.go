@@ -254,7 +254,7 @@ func TestPctSlackTextOfOtherFailingChecksKeepsTheirWords(t *testing.T) {
 		spans              int
 	}{
 		{"records", ":large_orange_circle: *MEDIUM* · the records check of `_mta-sts.corp.test. TXT` has had no usable answer for too long",
-			"Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen.",
+			"Find out why no server answers this machine for `_mta-sts.corp.test. TXT`; until one does, a change there is not seen.",
 			obs.RecordsKey(dlvName(t, "corp.test."), dlvName(t, "_mta-sts.corp.test."), dnswire.TypeTXT), 2},
 		{"certificates", ":large_orange_circle: *MEDIUM* · the certificates check of `corp.test.` has had no usable answer for too long",
 			"Find out why osk-dns-watcher gets no usable answer from the certificate source; the log of osk-dns-watcher names the reason. Until it does, a new certificate is not seen.",

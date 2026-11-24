@@ -588,7 +588,7 @@ func TestFailingCheckReported(t *testing.T) {
 		"",
 		slkClockOpen,
 		"",
-		":point_right: Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen.",
+		":point_right: Find out why no server answers this machine for `corp.test. A`; until one does, a change there is not seen.",
 	}, slkRun{start: fc.start.Add(25 * time.Second), end: opened.at}, slkRun{start: begin, end: dropped})
 
 	reset := time.Now()

@@ -306,7 +306,7 @@ func TestSlackTextOfADNSCheckFailingKeepsItsWords(t *testing.T) {
 	open := dngEvent(t, alert.EventOpen, r)
 	open.Alert.Value = "no usable answer for 30 min"
 	head := ":large_orange_circle: *MEDIUM* · the records check of `www.corp.test. A` has had no usable answer for too long"
-	action := ":point_right: Find out why no server of `corp.test.` answers this machine; until one does, a change there is not seen."
+	action := ":point_right: Find out why no server answers this machine for `www.corp.test. A`; until one does, a change there is not seen."
 	dngCheck(t, open, dlvFull(head, []string{"problem    no usable answer for 30 min"}, dngOpenClock, action), 2)
 
 	resolved := ":white_check_mark: *RESOLVED* · the records check of `www.corp.test. A` has usable answers again"

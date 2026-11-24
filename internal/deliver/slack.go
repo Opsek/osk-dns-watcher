@@ -203,8 +203,10 @@ var wordings = map[decide.Rule]wording{
 	decide.RuleCheckFailing: {
 		phrase:   "the {K} check of {NT} has had no usable answer for too long",
 		resolved: "the {K} check of {NT} has usable answers again",
-		action:   "Find out why no server of {D} answers this machine; until one does, a change there is not seen.",
-		now:      "a server answers",
+		// The name may lie in the zone, in a subzone or outside the domain; the
+		// servers that fail are those of its own zone, so the text names it.
+		action: "Find out why no server answers this machine for {NT}; until one does, a change there is not seen.",
+		now:    "a server answers",
 	},
 	decide.RuleZoneChanged: {
 		phrase:   "the zone {D} changed, and no watched record changed",
@@ -309,11 +311,6 @@ func SlackText(e alert.Event) string {
 	if e.Alert.Rule == decide.RuleCheckFailing && (e.Alert.Check.Kind == obs.KindDelegation || e.Alert.Check.Kind == obs.KindDS) {
 		// These checks ask the servers of the parent zone, not those of {D}.
 		w.action = "Find out why no server of the parent zone of {D} answers this machine; until one does, a change there is not seen."
-	}
-	if e.Alert.Rule == decide.RuleCheckFailing && e.Alert.Check.Kind == obs.KindRecords && !e.Alert.Check.Name.IsSubdomainOf(e.Alert.Check.Domain) {
-		// A name outside the domain, such as a mail host or an alias target,
-		// is answered by the servers of its own zone, not by those of {D}.
-		w.action = "Find out why no server answers this machine for {NT}; until one does, a change there is not seen."
 	}
 	phrase, action, pointing := w.phrase, w.action, ""
 	if e.Kind == alert.EventResolve {

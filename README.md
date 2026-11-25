@@ -47,7 +47,7 @@ To run the ready-made image without a build, or to check the release key first, 
 | Mail policy: SPF, DMARC, DKIM, MTA-STS | medium | 5 min |
 | Names your records point at that no longer exist | up to critical | 5 min |
 | Wildcards, and names served from an unexpected zone | up to high | 5 min |
-| Certificates in the public logs (off by default) | up to high | 1 h |
+| Certificates in the public logs (off by default) | up to high | 1 h 10 min |
 | The watch itself: servers that disagree, a failing check, an unexplained zone change | up to medium | 50 min |
 
 [docs/alerts.md](docs/alerts.md) lists every alert, with its severity and time.

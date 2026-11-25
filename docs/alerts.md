@@ -153,7 +153,7 @@ At the default intervals, the service sees a change within these times, plus the
 | A change inside the domain's own zone that moves the zone serial | about 15 s |
 | Nameservers that give different answers | 10 to 50 min |
 | A check with no usable answer | 5 to 15 min, and 30 min for the certificate source |
-| Certificates in the public logs | about 1 h after the source has them |
+| Certificates in the public logs | up to 1 h 10 min after the source has them, without a key |
 
 These times were tested in a lab. They were also measured on one real domain at one DNS provider:
 
@@ -161,5 +161,7 @@ These times were tested in a lab. They were also measured on one real domain at 
 - An edit of an expectations file took effect in 6 to 10 seconds.
 - An alert ended 5 to 18 seconds after the record was put back. In some cases it ended only at the next run of its check, because a machine of the provider still gave the old answer.
 - A change that was put back after 5 seconds gave the record alert in 2 of 6 trials and the low zone-changed alert in the other 4.
+- The source had each of three certificates 5 to 7 minutes after its issue.
+- Without a key, the alert for a certificate with a host that the file does not list came 55 minutes after the issue.
 
 A long run on real domains is not done yet.

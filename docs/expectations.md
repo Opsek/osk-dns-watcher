@@ -119,7 +119,7 @@ It prints the change and the command that writes it:
 To write this change: osk-dns-watcher accept --config /data/config.json --write <code> 42
 ```
 
-Run that command with `./` in front: `./osk-dns-watcher accept --config /data/config.json --write <code> 42`. The code covers this exact change. If the alert or the file changes in between, `accept` refuses, and you must look at the change again. `accept` also refuses when the servers give different sets. It refuses too for each alert whose "What to do" in [alerts.md](alerts.md) does not name `accept`.
+Run that command with `./` in front: `./osk-dns-watcher accept --config /data/config.json --write <code> 42`. The code covers the alert, the path of the file, the line that `accept` removes, and the line that it writes. A change of the other lines of the file does not change the code. When the alert has ended, or when one of these two lines is no longer the same, `accept` refuses, and you must look at the change again. `accept` also refuses when the servers give different sets. It refuses too for each alert whose "What to do" in [alerts.md](alerts.md) does not name `accept`.
 
 ### `snapshot`
 

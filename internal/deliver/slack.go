@@ -139,13 +139,13 @@ var wordings = map[decide.Rule]wording{
 		phrase:   "a certificate for a name of {D} comes from an authority that the expectations do not permit",
 		resolved: "no valid certificate for a name of {D} comes from an authority that the expectations do not permit",
 		action:   "If you did not ask for this certificate, ask its authority to revoke it, and check your CAA records and your DNS provider account. If you did, allow the authority where the file restricts it: in your CAA records and their lines, and in the issuer lines.",
-		now:      "no such certificate is valid now",
+		now:      "no valid certificate from an authority that is not permitted",
 	},
 	decide.RuleCertName: {
 		phrase:   "a wildcard certificate for {D} holds a name that the expectations do not list",
 		resolved: "no valid certificate for {D} holds an unlisted wildcard",
 		action:   "If you did not ask for it, ask its authority to revoke it: it is valid for every name at its level. If it is yours, run osk-dns-watcher accept to list it.",
-		now:      "no such certificate is valid now",
+		now:      "no unlisted wildcard on a valid certificate",
 	},
 	decide.RuleHostnames: {
 		phrase:   "certificates name hosts under {D} that the expectations do not list",

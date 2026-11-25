@@ -87,7 +87,7 @@ func crtCases() []crtCase {
 			texts:    []string{"www.corp.test. from evil.test"},
 			headline: crtIssuerHead,
 			view:     []string{`expected   corp.test. CAA 0 issue "ca.test"`, "", "now        www.corp.test. from evil.test"},
-			action:   crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no such certificate is valid now",
+			action:   crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no valid certificate from an authority that is not permitted",
 		},
 		{
 			name: "issuer, two names and an issuer line", rule: decide.RuleIssuer, sev: decide.SeverityHigh,
@@ -101,7 +101,7 @@ func crtCases() []crtCase {
 				"now        api.corp.test. from evil.test,other.test",
 				"           www.corp.test. from an authority with no CAA name (Evil CA)",
 			},
-			action: crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no such certificate is valid now",
+			action: crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no valid certificate from an authority that is not permitted",
 		},
 		{
 			// The part of a CAA line holds "; " inside its quoted value, and a
@@ -116,7 +116,7 @@ func crtCases() []crtCase {
 				"",
 				"now        www.corp.test. from evil.test",
 			},
-			action: crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no such certificate is valid now",
+			action: crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no valid certificate from an authority that is not permitted",
 		},
 		{
 			name: "issuer, seven parts and seven names", rule: decide.RuleIssuer, sev: decide.SeverityHigh,
@@ -132,35 +132,35 @@ func crtCases() []crtCase {
 				`           f.corp.test. CAA 0 issue "ca.test"`,
 				`           and 1 more records`,
 			}, crtNames(7)...),
-			action: crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no such certificate is valid now",
+			action: crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no valid certificate from an authority that is not permitted",
 		},
 		{
 			name: "issuer, a name twice shows once", rule: decide.RuleIssuer, sev: decide.SeverityHigh, expected: crtApexCAA,
 			texts:    []string{"www.corp.test. from evil.test", "www.corp.test. from evil.test"},
 			headline: crtIssuerHead,
 			view:     []string{`expected   corp.test. CAA 0 issue "ca.test"`, "", "now        www.corp.test. from evil.test"},
-			action:   crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no such certificate is valid now",
+			action:   crtIssuerAction, resolveHead: crtIssuerResolved, resolveNow: "no valid certificate from an authority that is not permitted",
 		},
 		{
 			name: "certname, one name", rule: decide.RuleCertName, sev: decide.SeverityHigh,
 			texts:    []string{"*.corp.test."},
 			headline: crtCertNameHead,
 			view:     []string{"now        *.corp.test."},
-			action:   crtCertNameAction, resolveHead: crtCertNameResolve, resolveNow: "no such certificate is valid now",
+			action:   crtCertNameAction, resolveHead: crtCertNameResolve, resolveNow: "no unlisted wildcard on a valid certificate",
 		},
 		{
 			name: "certname, three names", rule: decide.RuleCertName, sev: decide.SeverityHigh,
 			texts:    []string{"*.corp.test.", "*.eu.corp.test.", "*.us.corp.test."},
 			headline: crtCertNameHead,
 			view:     []string{"now        *.corp.test.", "           *.eu.corp.test.", "           *.us.corp.test."},
-			action:   crtCertNameAction, resolveHead: crtCertNameResolve, resolveNow: "no such certificate is valid now",
+			action:   crtCertNameAction, resolveHead: crtCertNameResolve, resolveNow: "no unlisted wildcard on a valid certificate",
 		},
 		{
 			name: "certname, seven names", rule: decide.RuleCertName, sev: decide.SeverityHigh,
 			texts:    crtNames(7),
 			headline: crtCertNameHead,
 			view:     crtRows(crtNames(7)...),
-			action:   crtCertNameAction, resolveHead: crtCertNameResolve, resolveNow: "no such certificate is valid now",
+			action:   crtCertNameAction, resolveHead: crtCertNameResolve, resolveNow: "no unlisted wildcard on a valid certificate",
 		},
 		{
 			name: "hostnames, one name", rule: decide.RuleHostnames, sev: decide.SeverityLow,

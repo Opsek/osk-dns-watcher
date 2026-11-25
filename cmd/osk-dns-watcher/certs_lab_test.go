@@ -38,7 +38,8 @@ const (
 		" If it is yours, run osk-dns-watcher accept to list it."
 	crtLabActionHostnames = ":point_right: Check that each host is yours. Run osk-dns-watcher accept to list them, or add a line for each host that osk-dns-watcher should watch."
 
-	crtLabNoSuchCertificate = "now        no such certificate is valid now"
+	crtLabNowNoIssuer   = "now        no valid certificate from an authority that is not permitted"
+	crtLabNowNoWildcard = "now        no unlisted wildcard on a valid certificate"
 )
 
 // crtLabIssuance is one issuance in the form of the source.
@@ -273,13 +274,13 @@ func TestCertificateAlerts(t *testing.T) {
 	expWrite(t, w.dir, "corp.test.expect", string(file)+"certname *.corp.test.\ncertname dev.corp.test.\n")
 	svc.wait(t, "the resolve of the certname alert", set.Add(10*time.Second+window), regIs(crtLabResolveCertnam))
 	svc.wait(t, "the resolve of the hostnames alert", set.Add(10*time.Second+window), regIs(crtLabResolveHosts))
-	regExpect(t, crtLabText(t, w, crtLabResolvedCertname), crtLabResolvedCertname, []string{crtLabNoSuchCertificate}, regResolveTimes, regResolveAction)
+	regExpect(t, crtLabText(t, w, crtLabResolvedCertname), crtLabResolvedCertname, []string{crtLabNowNoWildcard}, regResolveTimes, regResolveAction)
 	regExpect(t, crtLabText(t, w, crtLabResolvedHostname), crtLabResolvedHostname,
 		[]string{"now        no unlisted host on a valid certificate"}, regResolveTimes, regResolveAction)
 
 	// The two issuances expire: the alert of the authority ends.
 	svc.wait(t, "the resolve of the issuer alert", expiry.Add(window+60*time.Second), regIs(crtLabResolveIssuer))
-	regExpect(t, crtLabText(t, w, crtLabResolvedIssuer), crtLabResolvedIssuer, []string{crtLabNoSuchCertificate}, regResolveTimes, regResolveAction)
+	regExpect(t, crtLabText(t, w, crtLabResolvedIssuer), crtLabResolvedIssuer, []string{crtLabNowNoIssuer}, regResolveTimes, regResolveAction)
 
 	// Two failures of the source are no news: only a source that fails for
 	// longer than the fail limit raises an alert.
